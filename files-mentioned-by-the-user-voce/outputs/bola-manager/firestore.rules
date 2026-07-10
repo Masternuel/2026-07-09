@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /brasfootClubs/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brasfootPlayers/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brasfootLeagues/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brasfootCups/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Salas e partidas são acessadas apenas pelo backend Firebase Admin.
+    match /rooms/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /matches/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
