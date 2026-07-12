@@ -1,5 +1,11 @@
 import { randomInt, randomUUID } from "node:crypto";
-import { nextFixtureId } from "../game/fixtures.mjs";
+import {
+  createFixtureSchedule,
+  ensureFixtureSchedule,
+  FIXTURE_SCHEDULE_VERSION,
+  fixtureIdsEqual,
+  nextFixtureId,
+} from "../game/fixtures.mjs";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -50,7 +56,9 @@ export class RoomStore {
         startedAt: null,
         revision: 1,
         version: 1,
-        currentFixtureId: "abertura",
+        currentFixtureId: null,
+        fixtureSchedule: [],
+        matchReadiness: { fixtureId: null, managerIds: [] },
         completedFixtureIds: [],
         completedMatches: [],
         lastCompletedMatch: null,
@@ -89,6 +97,27 @@ export class RoomStore {
     if (!room.managerIds.includes(managerId)) {
       throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
     }
+    return this.#snapshot(room);
+  }
+
+  async requireOwnership(code, managerId) {
+    const room = await this.requireMembership(code, managerId);
+    if (room.ownerId !== managerId) {
+      throw new RoomError("Somente o criador pode excluir a temporada", "OWNER_REQUIRED", 403);
+    }
+    return room;
+  }
+
+  async deleteRoom(code, managerId) {
+    const normalizedCode = this.#normalizeCode(code);
+    const room = await this.#persistence.remove(normalizedCode, (current) => {
+      if (!current || !current.managerIds.includes(managerId)) {
+        throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+      }
+      if (current.ownerId !== managerId) {
+        throw new RoomError("Somente o criador pode excluir a temporada", "OWNER_REQUIRED", 403);
+      }
+    });
     return this.#snapshot(room);
   }
 
@@ -140,6 +169,52 @@ export class RoomStore {
     });
   }
 
+  async setMatchReady(code, managerId, ready = true, fixtureId) {
+    let migratedDuringTransaction = false;
+    return this.#mutate(code, (room) => {
+      if (room.status !== "active") {
+        throw new RoomError("Inicie a temporada antes de confirmar a partida", "ROOM_NOT_ACTIVE", 409);
+      }
+      const manager = room.managers.find((candidate) => candidate.id === managerId);
+      if (!manager) throw new RoomError("Manager nao pertence a sala", "MANAGER_NOT_FOUND", 404);
+      const migrated = ensureFixtureSchedule(room);
+      migratedDuringTransaction = migratedDuringTransaction || migrated;
+      if (!room.currentFixtureId) {
+        throw new RoomError("A temporada nao possui partidas pendentes", "NO_PENDING_FIXTURE", 409);
+      }
+      const targetFixtureId = migratedDuringTransaction ? room.currentFixtureId : fixtureId || room.currentFixtureId;
+      if (!fixtureIdsEqual(targetFixtureId, room.currentFixtureId)) {
+        throw new RoomError("Esta fixture nao e a atual", "FIXTURE_NOT_CURRENT", 409);
+      }
+      const canonicalFixtureId = room.currentFixtureId;
+      if (!fixtureIdsEqual(room.matchReadiness?.fixtureId, canonicalFixtureId)) {
+        room.matchReadiness = { fixtureId: canonicalFixtureId, managerIds: [] };
+      }
+      const readyIds = new Set(room.matchReadiness.managerIds);
+      if (ready) readyIds.add(managerId);
+      else readyIds.delete(managerId);
+      room.matchReadiness.managerIds = [...readyIds];
+      return room;
+    });
+  }
+
+  async prepareMatch(code, managerId, requestedFixtureId) {
+    let migrated = false;
+    const room = await this.#mutate(code, (current) => {
+      if (!current.managerIds.includes(managerId)) {
+        throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+      }
+      const changed = ensureFixtureSchedule(current);
+      migrated ||= changed;
+      return changed ? current : undefined;
+    });
+    return {
+      room,
+      migrated,
+      fixtureId: migrated ? room.currentFixtureId : requestedFixtureId,
+    };
+  }
+
   async startRoom(code, managerId) {
     return this.#mutate(code, (room) => {
       if (room.ownerId !== managerId) {
@@ -153,6 +228,10 @@ export class RoomStore {
       }
       room.status = "active";
       room.startedAt = this.#now().toISOString();
+      room.fixtureSchedule = createFixtureSchedule(room);
+      room.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
+      room.currentFixtureId = room.fixtureSchedule[0]?.fixtureId ?? null;
+      room.matchReadiness = { fixtureId: room.currentFixtureId, managerIds: [] };
       return room;
     });
   }
@@ -169,16 +248,20 @@ export class RoomStore {
       }
       current.completedFixtureIds ??= [];
       current.completedMatches ??= [];
-      if (current.completedFixtureIds.includes(fixtureId)) {
+      if (current.completedFixtureIds.some((completedId) => fixtureIdsEqual(completedId, fixtureId))) {
         throw new RoomError("Esta fixture ja foi concluida", "FIXTURE_ALREADY_COMPLETED", 409);
       }
-      if (current.currentFixtureId !== fixtureId) {
+      if (!fixtureIdsEqual(current.currentFixtureId, fixtureId)) {
         throw new RoomError("Esta fixture nao e a atual", "FIXTURE_NOT_CURRENT", 409);
       }
-      const upcomingFixtureId = nextFixtureId(fixtureId);
+      const canonicalFixtureId = current.fixtureSchedule?.find(
+        (fixture) => fixtureIdsEqual(fixture.fixtureId, fixtureId),
+      )?.fixtureId ?? current.currentFixtureId;
+      const upcomingFixtureId = nextFixtureId(current, canonicalFixtureId);
       const summary = {
+        code: current.code,
         id: result.id,
-        fixtureId,
+        fixtureId: canonicalFixtureId,
         homeTeam: result.homeTeam,
         awayTeam: result.awayTeam,
         score: structuredClone(result.score),
@@ -188,19 +271,21 @@ export class RoomStore {
         roomRevision: (current.revision || current.version || 0) + 1,
         nextFixtureId: upcomingFixtureId,
       };
-      current.completedFixtureIds.push(fixtureId);
+      current.completedFixtureIds.push(canonicalFixtureId);
       current.completedMatches.push(summary);
       current.lastCompletedMatch = summary;
       current.currentFixtureId = upcomingFixtureId;
+      current.matchReadiness = { fixtureId: upcomingFixtureId, managerIds: [] };
       return current;
     });
     return { room, summary: this.#snapshot(room.lastCompletedMatch) };
   }
 
   #assertClubAvailable(room, clubId, managerId) {
-    const normalized = clubId.toUpperCase();
+    const comparisonId = clubId.toLocaleUpperCase("pt-BR");
     const holder = room.managers.find(
-      (manager) => manager.id !== managerId && manager.clubId?.toUpperCase() === normalized,
+      (manager) => manager.id !== managerId
+        && manager.clubId?.toLocaleUpperCase("pt-BR") === comparisonId,
     );
     if (holder) throw new RoomError("Este clube ja foi escolhido", "CLUB_UNAVAILABLE", 409);
   }

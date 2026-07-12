@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowRightLeft, BarChart3, ChevronRight, CircleGauge, FastForward, Flag, Goal, Pause, Play, Shield, SlidersHorizontal, Sparkles, SquareDashedBottom } from 'lucide-react';
 import { MatchFeed } from '../components/match/MatchFeed';
 import { MatchScore } from '../components/match/MatchScore';
@@ -8,14 +8,34 @@ import { Modal } from '../components/shared/Modal';
 import { ProgressBar } from '../components/shared/ProgressBar';
 import { matchEvents, players } from '../data/demoData';
 import type { ServerMatchController } from '../hooks/useServerMatch';
-import type { MatchEvent } from '../types';
+import type { ClubChoice, MatchEvent, Room, RouteKey } from '../types';
 
 interface MatchViewProps {
   onToast: (message: string) => void;
+  onNavigate: (route: RouteKey) => void;
   onlineMatch: ServerMatchController | null;
+  room: Room | null;
+  club: ClubChoice;
 }
 
-export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
+function shortTeamCode(teamName: string, fallback: string): string {
+  const normalized = teamName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]/g, '');
+  return normalized.slice(0, 3).toLocaleUpperCase('pt-BR') || fallback;
+}
+
+function sameFixtureId(left: string | null | undefined, right: string | null | undefined) {
+  return Boolean(left && right && left.toLocaleLowerCase('pt-BR') === right.toLocaleLowerCase('pt-BR'));
+}
+
+function roundLabel(fixtureId: string | null, round?: number): string {
+  if (round) return `Rodada ${round}`;
+  if (fixtureId === 'abertura') return 'Rodada 1';
+  if (fixtureId === 'copa-ida') return 'Jogo de ida';
+  const numberedRound = fixtureId?.match(/^rodada-(\d+)$/)?.[1];
+  return numberedRound ? `Rodada ${numberedRound}` : 'Rodada 14';
+}
+
+export function MatchView({ onToast, onNavigate, onlineMatch, room, club }: MatchViewProps) {
   const [eventCount, setEventCount] = useState(2);
   const [running, setRunning] = useState(true);
   const [subOpen, setSubOpen] = useState(false);
@@ -25,7 +45,26 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
   const [mentality, setMentality] = useState('Positiva');
   const [extraEvents, setExtraEvents] = useState<MatchEvent[]>([]);
   const [substitutionCount, setSubstitutionCount] = useState(0);
-  const onlineStartRequested = useRef(false);
+
+  const fixtureId = onlineMatch
+    ? onlineMatch.result?.fixtureId ?? onlineMatch.match?.fixtureId ?? null
+    : room?.currentFixtureId ?? null;
+  const fixture = fixtureId
+    ? room?.fixtureSchedule?.find((candidate) => sameFixtureId(candidate.fixtureId, fixtureId))
+    : undefined;
+  const matchDescriptor = onlineMatch?.result ?? onlineMatch?.match;
+  const homeTeam = matchDescriptor?.homeTeam ?? fixture?.homeTeam ?? 'Aurora FC';
+  const awayTeam = matchDescriptor?.awayTeam ?? fixture?.awayTeam ?? 'Santos';
+  const clubIds = [club.id, club.code].map((identifier) => identifier.toLocaleUpperCase('pt-BR'));
+  const homeIsManagedClub = clubIds.includes(fixture?.homeClubId?.toLocaleUpperCase('pt-BR') ?? '') || homeTeam === club.name;
+  const awayIsManagedClub = clubIds.includes(fixture?.awayClubId?.toLocaleUpperCase('pt-BR') ?? '') || awayTeam === club.name;
+  const managedClubInFixture = homeIsManagedClub || awayIsManagedClub;
+  const homeCode = homeIsManagedClub ? club.code : shortTeamCode(homeTeam, 'AUR');
+  const awayCode = awayIsManagedClub ? club.code : shortTeamCode(awayTeam, 'SAN');
+  const homeColor = homeIsManagedClub ? club.color : '#9ba3ad';
+  const awayColor = awayIsManagedClub ? club.color : '#dedede';
+  const competition = fixture?.competition ?? (fixtureId === 'copa-ida' ? 'Copa' : 'Brasileirão');
+  const matchRoundLabel = roundLabel(fixtureId, fixture?.round);
 
   const localFinished = eventCount >= matchEvents.length;
   const localRevealed = useMemo(() => [...matchEvents.slice(0, eventCount), ...extraEvents].sort((a, b) => a.minute - b.minute), [eventCount, extraEvents]);
@@ -41,15 +80,6 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
     return () => window.clearInterval(timer);
   }, [finished, running, onlineMatch]);
 
-  useEffect(() => {
-    if (!onlineMatch || !onlineMatch.connected || onlineMatch.phase !== 'idle' || onlineStartRequested.current) return;
-    onlineStartRequested.current = true;
-    void onlineMatch.start().catch((nextError: unknown) => {
-      onlineStartRequested.current = false;
-      onToast(nextError instanceof Error ? nextError.message : 'Não foi possível iniciar a partida online.');
-    });
-  }, [onlineMatch, onlineMatch?.connected, onlineMatch?.phase, onToast]);
-
   function confirmSubstitution() {
     if (substitutionCount >= 5) {
       onToast('O limite de cinco substituições já foi utilizado.');
@@ -58,7 +88,7 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
     }
     const outgoing = players.find((player) => player.id === outPlayer)?.shortName ?? 'jogador';
     const incoming = players.find((player) => player.id === inPlayer)?.shortName ?? 'reserva';
-    setExtraEvents((events) => [...events, { minute: Math.max(1, currentMinute), kind: 'sub', text: `SUBSTITUIÇÃO DO AURORA: sai ${outgoing}, entra ${incoming}.` }]);
+    setExtraEvents((events) => [...events, { minute: Math.max(1, currentMinute), kind: 'sub', text: `SUBSTITUIÇÃO DO ${club.name.toLocaleUpperCase('pt-BR')}: sai ${outgoing}, entra ${incoming}.` }]);
     setSubstitutionCount((count) => count + 1);
     setSubOpen(false);
     onToast('Substituição enviada à beira do campo.');
@@ -76,11 +106,12 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
     }
     setEventCount(matchEvents.length);
     setRunning(false);
-    onToast('Simulação concluída. Vitória do Aurora por 2 a 1.');
+    onToast(`Simulação concluída. Vitória do ${club.name} por 2 a 1.`);
   }
 
   const homePossession = onlineMatch?.statistics?.home.possession ?? Math.round(52 + eventCount * 0.32);
   const awayPossession = onlineMatch?.statistics?.away.possession ?? 100 - homePossession;
+  const momentumLeader = homePossession >= awayPossession ? homeTeam : awayTeam;
   const statRows = onlineMatch?.statistics ? [
     ['Posse', `${homePossession}%`, `${awayPossession}%`, homePossession],
     ['Finalizações', String(onlineMatch.statistics.home.shots), String(onlineMatch.statistics.away.shots), 55],
@@ -95,28 +126,56 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
     ['Faltas', String(Math.min(12, Math.floor(eventCount * 0.7))), String(Math.min(14, Math.floor(eventCount * 0.75))), 46],
   ];
 
+  if (onlineMatch && onlineMatch.phase !== 'running' && onlineMatch.phase !== 'finished') {
+    return (
+      <main className="match-view view-enter">
+        <section className="match-waiting" aria-live="polite">
+          <Shield size={34} />
+          <p className="eyebrow">PRÉ-JOGO MULTIPLAYER</p>
+          <h1>{onlineMatch.phase === 'syncing' ? 'Sincronizando a rodada…' : 'Aguardando os managers.'}</h1>
+          <p>Confirme “Estou pronto” na Central. Transmissão começa somente quando todos confirmarem.</p>
+          {onlineMatch.error && <div className="match-online-error" role="alert"><span>{onlineMatch.error}</span><button onClick={onlineMatch.reset}>Limpar erro</button></div>}
+          <Button variant="primary" onClick={() => onNavigate('home')}>Voltar à Central</Button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="match-view view-enter">
-      <MatchScore minute={currentMinute} score={score} finished={finished} events={revealed} />
+      <MatchScore
+        minute={currentMinute}
+        score={score}
+        finished={finished}
+        events={revealed}
+        homeTeam={homeTeam}
+        awayTeam={awayTeam}
+        homeCode={homeCode}
+        awayCode={awayCode}
+        homeColor={homeColor}
+        awayColor={awayColor}
+        competition={competition}
+        roundLabel={matchRoundLabel}
+      />
       <div className="match-progress"><span style={{ width: `${progress}%` }} /><i style={{ left: `${progress}%` }} /></div>
 
       <div className="match-layout">
         <section className="commentary-panel">
           <header><div><p className="eyebrow">TRANSMISSÃO EM TEXTO</p><h2>Narração ao vivo</h2></div><button className="icon-button" onClick={() => setRunning((value) => !value)} disabled={finished || Boolean(onlineMatch)} aria-label={running ? 'Pausar narração' : 'Continuar narração'}>{running ? <Pause size={16} /> : <Play size={16} />}</button></header>
           <MatchFeed events={revealed} finished={finished} />
-          {onlineMatch?.error && <div className="match-online-error" role="alert"><span>{onlineMatch.error}</span><button onClick={() => { onlineStartRequested.current = false; onlineMatch.reset(); }}>Tentar novamente</button></div>}
+          {onlineMatch?.error && <div className="match-online-error" role="alert"><span>{onlineMatch.error}</span><button onClick={onlineMatch.reset}>Limpar erro</button></div>}
           <footer className="commentary-status"><span><i className={!finished ? 'pulse' : ''} /> {finished ? 'Partida encerrada' : onlineMatch ? 'Eventos autoritativos recebidos do servidor' : running ? 'Demonstração determinística em andamento' : 'Narração pausada'}</span><small>cadência: 800 ms</small></footer>
         </section>
 
         <aside className="match-analysis">
           <section className="live-stats">
             <header><div><p className="eyebrow">DADOS AO VIVO</p><h2>Estatísticas</h2></div><BarChart3 size={17} /></header>
-            <div className="stats-clubs"><span><i className="aur" /> AUR</span><span>SAN <i className="san" /></span></div>
+            <div className="stats-clubs"><span><i style={{ background: homeColor }} /> {homeCode}</span><span>{awayCode} <i style={{ background: awayColor }} /></span></div>
             {statRows.map(([label, home, away, width]) => <div className="stat-row" key={String(label)}><div><strong>{home}</strong><span>{label}</span><strong>{away}</strong></div><div className="split-bar"><span style={{ width: `${width}%` }} /><i style={{ width: `${100 - Number(width)}%` }} /></div></div>)}
           </section>
 
           <section className="momentum-panel">
-            <header><p className="eyebrow">MOMENTO DA PARTIDA</p><Badge tone="positive">Aurora melhor</Badge></header>
+            <header><p className="eyebrow">MOMENTO DA PARTIDA</p><Badge tone="positive">{momentumLeader} melhor</Badge></header>
             <div className="momentum-bars" aria-label="Gráfico de momento da partida">
               {[18, 32, 45, 62, 38, 74, 68, -22, -42, 55, 78, 86, 64, 92].map((value, index) => <span key={index} className={value < 0 ? 'away' : ''} style={{ height: `${Math.abs(value)}%` }} />)}
             </div>
@@ -132,9 +191,9 @@ export function MatchView({ onToast, onlineMatch }: MatchViewProps) {
         <div><Button icon={<ArrowRightLeft size={15} />} onClick={() => setSubOpen(true)} disabled={finished || substitutionCount >= 5 || Boolean(onlineMatch)}>Substituição</Button><Button icon={<SlidersHorizontal size={15} />} onClick={() => setTacticOpen(true)} disabled={finished}>Ajuste tático</Button><Button variant="danger" icon={<FastForward size={15} />} onClick={() => void skipToResult()} disabled={finished || onlineMatch?.phase === 'starting'}>Pular resultado</Button></div>
       </section>
 
-      {finished && <section className="final-whistle"><span className="final-whistle__icon"><Goal size={22} /></span><div><p className="eyebrow">APITO FINAL</p><h2>{onlineMatch?.result ? `${onlineMatch.result.homeTeam} ${score[0]}–${score[1]} ${onlineMatch.result.awayTeam}.` : 'Vitória de clássico. Aurora 2–1 Santos.'}</h2><p>A imprensa já prepara a coletiva pós-jogo.</p></div><div className="final-whistle__actions"><Button icon={<Flag size={15} />} onClick={() => onToast('Coletiva pós-jogo preparada com 4 perguntas.')}>Ir para a coletiva</Button>{onlineMatch?.result?.nextFixtureId && <Button variant="primary" icon={<Play size={15} />} onClick={() => { onlineStartRequested.current = false; onlineMatch.reset(); }}>Próxima partida</Button>}</div></section>}
+      {finished && <section className="final-whistle"><span className="final-whistle__icon"><Goal size={22} /></span><div><p className="eyebrow">APITO FINAL</p><h2>{homeTeam} {score[0]}–{score[1]} {awayTeam}.</h2><p>{managedClubInFixture ? 'A imprensa já prepara a coletiva pós-jogo.' : 'Partida dos outros managers encerrada.'}</p></div><div className="final-whistle__actions"><Button variant="primary" icon={<Flag size={15} />} onClick={() => { if (onlineMatch && !managedClubInFixture) onlineMatch.reset(); onNavigate(managedClubInFixture ? 'press-conference' : 'home'); }}>{managedClubInFixture ? 'Ir para a coletiva' : 'Voltar à central'}</Button></div></section>}
 
-      <Modal open={subOpen} onClose={() => setSubOpen(false)} title="Fazer substituição" eyebrow={`AURORA FC · ${currentMinute} MIN · ${substitutionCount}/5`} footer={<><Button variant="ghost" onClick={() => setSubOpen(false)}>Cancelar</Button><Button variant="primary" onClick={confirmSubstitution} disabled={substitutionCount >= 5}>Confirmar troca</Button></>}>
+      <Modal open={subOpen} onClose={() => setSubOpen(false)} title="Fazer substituição" eyebrow={`${club.name.toLocaleUpperCase('pt-BR')} · ${currentMinute} MIN · ${substitutionCount}/5`} footer={<><Button variant="ghost" onClick={() => setSubOpen(false)}>Cancelar</Button><Button variant="primary" onClick={confirmSubstitution} disabled={substitutionCount >= 5}>Confirmar troca</Button></>}>
         <div className="substitution-form"><label><span>SAI</span><select value={outPlayer} onChange={(event) => setOutPlayer(event.target.value)}>{players.slice(0, 11).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name} ({player.condition}%)</option>)}</select></label><span className="sub-arrow"><ArrowRightLeft size={18} /></span><label><span>ENTRA</span><select value={inPlayer} onChange={(event) => setInPlayer(event.target.value)}>{players.slice(11, 18).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name} ({player.condition}%)</option>)}</select></label></div>
       </Modal>
 

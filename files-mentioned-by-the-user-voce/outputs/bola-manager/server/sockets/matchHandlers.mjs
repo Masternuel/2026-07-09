@@ -1,35 +1,66 @@
 import { resolveServerFixture } from "../game/fixtures.mjs";
 import { MatchPlayback, simulateMatch } from "../game/matchSimulator.mjs";
-import { matchControlSchema, matchStartSchema, parseOrThrow } from "../schemas.mjs";
-import { channelForRoom, registerSafe } from "./helpers.mjs";
+import { matchControlSchema, matchReadySchema, matchStartSchema, parseOrThrow } from "../schemas.mjs";
+import { channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
 
 function clone(value) {
   return value == null ? value : structuredClone(value);
 }
 
-export function registerMatchHandlers(io, socket, { store, matchSessions, matchDelayMs }) {
+function matchError(message, code, status = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function assertRoomAvailable(code, deletingRooms, deletedRooms) {
+  if (deletingRooms.has(code) || deletedRooms.has(code)) {
+    throw matchError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+  }
+}
+
+function readinessFor(room, fixtureId) {
+  const validManagerIds = new Set(room.managerIds);
+  const readyIds = room.matchReadiness?.fixtureId === fixtureId
+    ? room.matchReadiness.managerIds.filter((managerId) => validManagerIds.has(managerId))
+    : [];
+  return {
+    readyIds,
+    readyCount: readyIds.length,
+    requiredCount: room.managerIds.length,
+    allReady: room.managerIds.length > 0 && room.managerIds.every((managerId) => readyIds.includes(managerId)),
+  };
+}
+
+export function registerMatchHandlers(io, socket, {
+  store,
+  matchSessions,
+  deletingRooms,
+  deletedRooms,
+  matchDelayMs,
+}) {
   const user = socket.data.user;
 
-  registerSafe(socket, "match:start", async (payload) => {
-    const data = parseOrThrow(matchStartSchema, payload);
-    const room = await store.requireMembership(data.code, user.uid);
+  function startMatchSession(room, code, requestedFixtureId) {
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     if (room.status !== "active") {
-      const error = new Error("Inicie a temporada antes da partida");
-      error.code = "ROOM_NOT_ACTIVE";
-      error.status = 409;
-      throw error;
+      throw matchError("Inicie a temporada antes da partida", "ROOM_NOT_ACTIVE");
     }
-    if (matchSessions.has(data.code)) {
-      const error = new Error("Ja existe uma partida em andamento nesta sala");
-      error.code = "MATCH_IN_PROGRESS";
-      error.status = 409;
-      throw error;
+    if (matchSessions.has(code)) {
+      throw matchError("Ja existe uma partida em andamento nesta sala", "MATCH_IN_PROGRESS");
     }
 
-    const fixture = resolveServerFixture(room, data.fixtureId);
+    const fixture = resolveServerFixture(room, requestedFixtureId);
+    const readiness = readinessFor(room, fixture.fixtureId);
+    if (!readiness.allReady) {
+      throw matchError("Todos os managers precisam confirmar que estao prontos", "MATCH_MANAGERS_NOT_READY");
+    }
+
     const match = { ...simulateMatch(fixture), fixtureId: fixture.fixtureId };
-    const roomChannel = channelForRoom(data.code);
+    const roomChannel = channelForRoom(code);
     const started = {
+      code,
       id: match.id,
       fixtureId: fixture.fixtureId,
       homeTeam: match.homeTeam,
@@ -37,12 +68,7 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
       eventCount: match.events.length,
       delayMs: matchDelayMs,
     };
-    const session = {
-      started,
-      events: [],
-      result: null,
-      playback: null,
-    };
+    const session = { started, events: [], result: null, playback: null };
     const playback = new MatchPlayback(match, {
       delayMs: matchDelayMs,
       onEvent: (matchEvent, playbackState) => {
@@ -50,15 +76,17 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
           matchId: match.id,
           fixtureId: fixture.fixtureId,
           ...matchEvent,
+          code,
           skipped: playbackState.skipped,
         };
         session.events.push(clone(enrichedEvent));
         io.to(roomChannel).emit("match:event", enrichedEvent);
       },
       onFinish: async (result) => {
-        const completion = await store.completeMatch(data.code, fixture.fixtureId, result);
+        const completion = await store.completeMatch(code, fixture.fixtureId, result);
         const finishedResult = {
           ...result,
+          code,
           fixtureId: fixture.fixtureId,
           completedAt: completion.summary.completedAt,
           roomRevision: completion.room.revision,
@@ -70,7 +98,7 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
       },
     });
     session.playback = playback;
-    matchSessions.set(data.code, session);
+    matchSessions.set(code, session);
 
     return {
       matchId: match.id,
@@ -82,22 +110,48 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
             error: { code: error.code || "MATCH_PLAYBACK_ERROR", message: error.message },
           }))
           .finally(() => {
-            if (matchSessions.get(data.code) === session) matchSessions.delete(data.code);
+            if (matchSessions.get(code) === session) matchSessions.delete(code);
           });
       },
     };
+  }
+
+  registerSafe(socket, "match:ready", async (payload) => {
+    const data = parseOrThrow(matchReadySchema, payload);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
+    if (matchSessions.has(data.code)) {
+      throw matchError("A partida desta rodada ja esta em andamento", "MATCH_IN_PROGRESS");
+    }
+    const room = await store.setMatchReady(data.code, user.uid, data.ready, data.fixtureId);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
+    const fixtureId = room.currentFixtureId;
+    const readiness = readinessFor(room, fixtureId);
+    io.to(channelForRoom(data.code)).emit("room:state", room);
+
+    if (!data.ready || !readiness.allReady) {
+      return { room, started: false, ...readiness };
+    }
+    const start = startMatchSession(room, data.code, fixtureId);
+    return { room, started: true, ...readiness, ...start };
+  });
+
+  registerSafe(socket, "match:start", async (payload) => {
+    const data = parseOrThrow(matchStartSchema, payload);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
+    const prepared = await store.prepareMatch(data.code, user.uid, data.fixtureId);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
+    rememberMembership(socket, data.code);
+    if (prepared.migrated) io.to(channelForRoom(data.code)).emit("room:state", prepared.room);
+    return startMatchSession(prepared.room, data.code, prepared.fixtureId);
   });
 
   registerSafe(socket, "match:skip", async (payload) => {
     const data = parseOrThrow(matchControlSchema, payload);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
     await store.requireMembership(data.code, user.uid);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
     const session = matchSessions.get(data.code);
-    if (!session) {
-      const error = new Error("Nao existe partida em andamento");
-      error.code = "MATCH_NOT_FOUND";
-      error.status = 404;
-      throw error;
-    }
+    if (!session) throw matchError("Nao existe partida em andamento", "MATCH_NOT_FOUND", 404);
     session.playback.skip();
     io.to(channelForRoom(data.code)).emit("match:skipped", { code: data.code });
     return { skipped: true };
@@ -105,8 +159,10 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
 
   registerSafe(socket, "match:sync", async (payload) => {
     const data = parseOrThrow(matchControlSchema, payload);
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
     const room = await store.requireMembership(data.code, user.uid);
-    socket.join(channelForRoom(data.code));
+    assertRoomAvailable(data.code, deletingRooms, deletedRooms);
+    rememberMembership(socket, data.code);
     const session = matchSessions.get(data.code);
     if (session) {
       return {
@@ -127,4 +183,3 @@ export function registerMatchHandlers(io, socket, { store, matchSessions, matchD
     return { source: "idle", started: null, events: [], result: null };
   });
 }
-

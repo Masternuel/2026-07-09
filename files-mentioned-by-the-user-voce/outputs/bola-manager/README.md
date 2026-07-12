@@ -24,6 +24,7 @@ Na tela inicial, entre com Google/e-mail para usar o fluxo autenticado ou escolh
 
 - Firebase Auth real com e-mail, criação de conta, Google e modo demonstração explícito.
 - Lobby privado conectado ao Socket.io, com código, escolha exclusiva de clube, managers, revisão monotônica, prontidão e reconexão.
+- Gerenciador de saves com seleção, retomada e exclusão permanente confirmada; somente o criador pode apagar uma temporada compartilhada.
 - Central do clube com próximo jogo, classificação, tática, elenco, finanças, diretoria e imprensa.
 - Elenco filtrável e ordenável com atributos de 1 a 10 estrelas e perfil detalhado.
 - Editor tático dirigido por `lineupSlots` das formações, troca por arrastar, banco e instruções.
@@ -49,6 +50,8 @@ Com Firebase Admin configurado, o backend verifica o ID token no REST e no hands
 
 O importador em `scripts/import-brasfoot.mjs` é administrativo e aceita entrada JSON já normalizada. Ele **não tenta interpretar o formato binário proprietário `.dat`**, cuja estrutura não foi documentada. Para integrar arquivos reais, implemente um adaptador autorizado que gere o contrato JSON validado pelo script e faça primeiro um `--dry-run`.
 
+O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O projeto não depende do Firebase Storage: escudos e imagens podem ser servidos como assets estáticos do frontend.
+
 ## Deploy
 
 ### Vercel (frontend)
@@ -63,13 +66,13 @@ O importador em `scripts/import-brasfoot.mjs` é administrativo e aceita entrada
 
 - Start command: `npm run server`.
 - Health check: `/health`.
-- Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e, opcionalmente, as credenciais Firebase Admin.
+- Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
 - O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
 
 ## Limites desta vertical slice
 
 O projeto comprova o ciclo principal e apresenta as áreas dos 23 módulos, mas não implementa uma carreira de décadas, todos os regulamentos internacionais ou negociação completa entre contas reais. Os clubes e jogadores da demo são fictícios/sem licença.
 
-O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Nesta etapa, salas são persistidas no Firestore quando o Admin está configurado; a reprodução de uma partida em andamento ainda vive no processo Socket.io e precisa de histórico/sincronização persistente para sobreviver a reinícios ou múltiplas réplicas Railway.
+O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados e o histórico necessário para sincronização são persistidos no Firestore. A emissão temporizada de uma partida que ainda está acontecendo continua no processo Socket.io e exigirá coordenação entre réplicas para escalar horizontalmente no Railway.
 
 Também permanecem como próximas etapas: catálogo Brasfoot real, engines completos dos 23 módulos, persistência de táticas/calendário/finanças, adapter Socket.io entre réplicas, balanceamento avançado e testes E2E com dois navegadores reais.

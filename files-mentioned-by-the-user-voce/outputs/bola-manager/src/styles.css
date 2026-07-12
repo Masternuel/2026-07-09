@@ -45,7 +45,7 @@ h1, h2, h3, p { margin: 0; }
 em { font-style: normal; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
-.eyebrow { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .13em; line-height: 1.4; text-transform: uppercase; }
+.eyebrow { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .13em; line-height: 1.4; text-transform: uppercase; }
 .wordmark-glyph { display: grid; width: 30px; height: 30px; place-items: center; color: #111; background: var(--accent); transform: skew(-5deg); }
 .wordmark-glyph > * { transform: skew(5deg); }
 
@@ -70,7 +70,7 @@ em { font-style: normal; }
 .icon-button { display: inline-grid; width: 34px; height: 34px; place-items: center; color: var(--muted); border: 1px solid var(--line); border-radius: 2px; background: transparent; transition: all 160ms ease; }
 .icon-button:hover:not(:disabled) { color: var(--ink); border-color: #3a3f47; background: var(--raised); }
 
-.badge { display: inline-flex; width: max-content; align-items: center; gap: 5px; padding: 3px 7px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 2px; background: rgba(255,255,255,.02); font-size: 9px; font-weight: 600; letter-spacing: .04em; line-height: 1.2; text-transform: uppercase; white-space: nowrap; }
+.badge { display: inline-flex; width: max-content; align-items: center; gap: 5px; padding: 4px 8px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 2px; background: rgba(255,255,255,.02); font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 1.2; text-transform: uppercase; white-space: nowrap; }
 .badge__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .badge--positive { color: var(--green); border-color: rgba(105,213,150,.2); background: rgba(105,213,150,.07); }
 .badge--warning { color: var(--amber); border-color: rgba(230,184,92,.22); background: rgba(230,184,92,.07); }

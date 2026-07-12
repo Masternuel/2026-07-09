@@ -43,16 +43,25 @@ function authMessage(error: unknown): string {
   if (!(error instanceof FirebaseError)) return 'Não foi possível concluir a autenticação.';
   const messages: Record<string, string> = {
     'auth/email-already-in-use': 'Este e-mail já possui uma conta.',
+    'auth/account-exists-with-different-credential': 'Este e-mail já usa outro método de entrada. Entre com o método original.',
+    'auth/app-not-authorized': 'Este aplicativo não está autorizado a usar o Firebase Auth.',
+    'auth/cancelled-popup-request': 'Outra janela de login já foi aberta. Aguarde e tente novamente.',
+    'auth/internal-error': 'O Firebase retornou um erro interno. Aguarde e tente novamente.',
     'auth/invalid-credential': 'E-mail ou senha inválidos.',
     'auth/invalid-email': 'Informe um e-mail válido.',
+    'auth/invalid-api-key': 'A configuração do Firebase publicada é inválida.',
+    'auth/operation-not-supported-in-this-environment': 'Este navegador não permite o fluxo de autenticação solicitado.',
     'auth/popup-blocked': 'O navegador bloqueou a janela de login do Google.',
     'auth/popup-closed-by-user': 'A janela de login foi fechada antes da conclusão.',
     'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente novamente.',
+    'auth/user-disabled': 'Esta conta foi desativada.',
+    'auth/web-storage-unsupported': 'O navegador bloqueou cookies ou armazenamento necessários para o login.',
     'auth/weak-password': 'A senha precisa ter pelo menos seis caracteres.',
     'auth/network-request-failed': 'Não foi possível acessar o Firebase. Verifique sua conexão.',
     'auth/operation-not-allowed': 'Este método de login ainda não foi habilitado no Firebase.',
+    'auth/unauthorized-domain': 'Este endereço não está autorizado no Firebase. Abra o jogo usando localhost.',
   };
-  return messages[error.code] ?? 'Falha ao autenticar no Firebase.';
+  return messages[error.code] ?? `Falha ao autenticar no Firebase (${error.code}).`;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

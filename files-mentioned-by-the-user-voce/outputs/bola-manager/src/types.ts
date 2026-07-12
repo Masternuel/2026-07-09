@@ -16,6 +16,7 @@ export type RouteKey =
   | 'staff'
   | 'reports'
   | 'match'
+  | 'press-conference'
   | 'settings';
 
 export type PlayerPosition = 'GOL' | 'ZAG' | 'LD' | 'LE' | 'VOL' | 'MC' | 'MEI' | 'PD' | 'PE' | 'ATA';
@@ -104,6 +105,7 @@ export interface ManagerIdentity {
 }
 
 export interface ClubChoice {
+  id: string;
   name: string;
   code: string;
   city: string;
@@ -118,6 +120,24 @@ export interface RoomManager {
   clubId: string | null;
   ready: boolean;
   joinedAt: string;
+}
+
+export interface RoomFixture {
+  fixtureId: string;
+  round: number;
+  competition: string;
+  homeClubId: string;
+  awayClubId: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeManagerId: string | null;
+  awayManagerId: string | null;
+  managerIds: string[];
+}
+
+export interface MatchReadiness {
+  fixtureId: string | null;
+  managerIds: string[];
 }
 
 export interface Room {
@@ -135,6 +155,9 @@ export interface Room {
   revision: number;
   version?: number;
   currentFixtureId?: string | null;
+  scheduleVersion?: number;
+  fixtureSchedule?: RoomFixture[];
+  matchReadiness?: MatchReadiness;
   completedFixtureIds?: string[];
   completedMatches?: ServerMatchFinished[];
   lastCompletedMatch?: ServerMatchFinished | null;
@@ -192,6 +215,7 @@ export type ServerMatchEventType =
   | 'fulltime';
 
 export interface ServerMatchEvent {
+  code: string;
   matchId: string;
   fixtureId: string;
   id: string;
@@ -207,6 +231,7 @@ export interface ServerMatchEvent {
 }
 
 export interface ServerMatchStarted {
+  code: string;
   id: string;
   fixtureId: string;
   homeTeam: string;
@@ -215,9 +240,10 @@ export interface ServerMatchStarted {
   delayMs: number;
 }
 
-export type ServerMatchResultEvent = Omit<ServerMatchEvent, 'matchId' | 'fixtureId' | 'skipped'>;
+export type ServerMatchResultEvent = Omit<ServerMatchEvent, 'code' | 'matchId' | 'fixtureId' | 'skipped'>;
 
 export interface ServerMatchFinished {
+  code: string;
   id: string;
   fixtureId?: string;
   homeTeam: string;
@@ -240,11 +266,21 @@ export interface MatchSyncResponse {
   result: ServerMatchFinished | null;
 }
 
+export interface MatchReadyResponse {
+  room: Room;
+  started: boolean;
+  matchId?: string;
+  readyCount: number;
+  requiredCount: number;
+  allReady: boolean;
+}
+
 export interface ServerToClientEvents {
   'server:ready': (payload: { socketId: string }) => void;
   'server:error': (payload: { event: string; error: ServerErrorPayload }) => void;
   'room:state': (room: Room) => void;
   'room:started': (room: Room) => void;
+  'room:deleted': (payload: { code: string }) => void;
   'match:started': (match: ServerMatchStarted) => void;
   'match:event': (event: ServerMatchEvent) => void;
   'match:finished': (result: ServerMatchFinished) => void;
@@ -256,8 +292,10 @@ export interface ClientToServerEvents {
   'room:join': (payload: { code: string; clubId?: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
   'room:ready': (payload: { code: string; ready: boolean; clubId?: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
   'room:start': (payload: { code: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
+  'room:delete': (payload: { code: string }, acknowledge: (response: AckResponse<{ code: string }>) => void) => void;
   'room:resume': (payload: { code: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
   'room:sync': (payload: { code: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
+  'match:ready': (payload: { code: string; fixtureId?: string; ready: boolean }, acknowledge: (response: AckResponse<MatchReadyResponse>) => void) => void;
   'match:start': (payload: { code: string; fixtureId?: string }, acknowledge: (response: AckResponse<{ matchId: string }>) => void) => void;
   'match:skip': (payload: { code: string }, acknowledge: (response: AckResponse<{ skipped: boolean }>) => void) => void;
   'match:sync': (payload: { code: string }, acknowledge: (response: AckResponse<MatchSyncResponse>) => void) => void;

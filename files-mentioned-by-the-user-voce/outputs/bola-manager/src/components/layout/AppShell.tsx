@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import type { ClubChoice, ManagerIdentity, RouteKey } from '../../types';
+import type { ClubChoice, ManagerIdentity, RoomFixture, RouteKey } from '../../types';
 import { BottomBar } from './BottomBar';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -8,12 +8,14 @@ interface AppShellProps {
   route: RouteKey;
   club: ClubChoice;
   manager: ManagerIdentity;
+  nextFixture: RoomFixture | null;
+  commitmentLabel?: string;
   onNavigate: (route: RouteKey) => void;
   onExit: () => void;
   children: ReactNode;
 }
 
-export function AppShell({ route, club, manager, onNavigate, onExit, children }: AppShellProps) {
+export function AppShell({ route, club, manager, nextFixture, commitmentLabel, onNavigate, onExit, children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [lightMode, setLightMode] = useState(false);
 
@@ -28,7 +30,7 @@ export function AppShell({ route, club, manager, onNavigate, onExit, children }:
     >
       <Sidebar activeRoute={route} club={club} onNavigate={onNavigate} open={sidebarOpen} onClose={() => setSidebarOpen(false)} onExit={onExit} />
       <div className="app-main">
-        <Header route={route} club={club} manager={manager} onMenu={() => setSidebarOpen(true)} onNavigate={onNavigate} lightMode={lightMode} onToggleTheme={() => setLightMode((value) => !value)} />
+        <Header route={route} club={club} manager={manager} nextFixture={nextFixture} commitmentLabel={commitmentLabel} onMenu={() => setSidebarOpen(true)} onNavigate={onNavigate} lightMode={lightMode} onToggleTheme={() => setLightMode((value) => !value)} />
         <div className="view-wrap" key={route}>{children}</div>
       </div>
       <BottomBar active={route} onNavigate={onNavigate} onMore={() => setSidebarOpen(true)} />

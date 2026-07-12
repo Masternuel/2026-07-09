@@ -1,7 +1,12 @@
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const projectRoot = dirname(fileURLToPath(import.meta.url));
+
 export default defineConfig({
+  root: projectRoot,
   plugins: [react()],
   build: {
     rollupOptions: {
@@ -19,6 +24,9 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    fs: {
+      allow: [projectRoot],
+    },
     proxy: {
       '/api': { target: 'http://localhost:3001', changeOrigin: true },
       '/socket.io': { target: 'http://localhost:3001', ws: true },

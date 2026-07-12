@@ -57,17 +57,19 @@ Todos os eventos de mutacao usam acknowledgement `{ ok: true, ...data }` ou `{ o
 - `room:ready`: `{ code, ready, clubId? }`; ack `{ room }`; emite `room:state`.
 - `room:start`: `{ code }`; ack `{ room }`; emite `room:started` e `room:state`.
 - `room:resume` ou `room:sync`: `{ code }`; reentra no canal sem mutar a sala e devolve `{ room }`.
+- `room:delete`: `{ code }`; somente o owner; ack `{ code }`; emite `room:deleted` a todos os managers. Rejeita durante partida e remove todos os sockets do canal apagado.
 - `chat:send`: `{ code, message }`; emite `chat:message`.
 - `chat:direct`: `{ code, recipientId, message }`; emite `chat:direct-message` aos dois managers.
 - `market:offer`: `{ code, recipientId, playerId, amount, message? }`.
 - `market:bid`: `{ code, auctionId, amount }`. Mercado em tempo real ainda e scaffold e marca objetos com `persistent: false`.
-- `match:start`: `{ code, fixtureId? }`; ack `{ matchId }`.
+- `match:ready`: `{ code, fixtureId?, ready }`; ack `{ room, started, readyCount, requiredCount, matchId? }`. O ultimo manager pronto inicia a transmissao.
+- `match:start`: `{ code, fixtureId? }`; ack `{ matchId }`; rejeita enquanto nem todos os managers estiverem prontos.
 - `match:skip`: `{ code }`; ack `{ skipped: true }`; emite `match:skipped`.
 - `match:sync`: `{ code }`; ack `{ source, started, events, result }`.
 
-O cliente nunca envia times, forcas ou seed. O servidor resolve esses dados pelo catalogo e pelo estado da sala. Uma fixture concluida nao pode ser repetida; a conclusao e persistida na transacao da Room, marca a fixture como consumida e avanca `currentFixtureId` antes de emitir `match:finished`.
+O cliente nunca envia times, forcas ou seed. O servidor resolve esses dados pelo catalogo e pelo estado da sala. Ao iniciar a temporada, o servidor gera `fixtureSchedule` com jogos de cada manager contra clubes controlados pela IA e intercala confrontos entre managers. Uma fixture concluida nao pode ser repetida; a conclusao e persistida na transacao da Room, marca a fixture como consumida, limpa `matchReadiness` e avanca `currentFixtureId` antes de emitir `match:finished`.
 
-A ordem garantida e: ack de `match:start`, `match:started`, zero ou mais `match:event`, e `match:finished`. Eventos mantem `score` como tupla `[mandante, visitante]` e `statistics` como snapshot. O intervalo padrao e 800 ms, configuravel por `MATCH_EVENT_DELAY_MS`.
+A ordem garantida e: ack do ultimo `match:ready` (ou de `match:start`), `match:started`, zero ou mais `match:event`, e `match:finished`. Os payloads `match:started`, `match:event` e `match:finished`, inclusive o resumo persistido, incluem `code` para o cliente filtrar a sala. Eventos mantem `score` como tupla `[mandante, visitante]` e `statistics` como snapshot. O intervalo padrao e 800 ms, configuravel por `MATCH_EVENT_DELAY_MS`.
 
 Payload de sincronizacao:
 
@@ -85,7 +87,7 @@ Payload de sincronizacao:
 
 ## Persistencia de salas
 
-`RoomStore` depende de uma interface de persistencia. `FirestoreRoomPersistence` usa criacao atomica e transacoes para entrada, escolha de clube, prontidao, inicio e conclusao de fixture; a gravacao termina antes de qualquer broadcast ou ack. `MemoryRoomPersistence` existe apenas para teste/demo explicitamente habilitado.
+`RoomStore` depende de uma interface de persistencia. `FirestoreRoomPersistence` usa criacao atomica e transacoes para entrada, escolha de clube, prontidao, inicio e conclusao de fixture; a gravacao termina antes de qualquer broadcast ou ack. Ao excluir, substitui o documento por uma tombstone minima `{ code, deleted: true }`: dados do save e managers somem, mas o codigo nunca pode ser reutilizado por outra temporada nem herdar news/market antigos. `MemoryRoomPersistence` aplica a mesma reserva com um conjunto de codigos excluidos e existe apenas para teste/demo explicitamente habilitado.
 
 ## Importacao Brasfoot
 

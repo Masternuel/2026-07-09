@@ -94,6 +94,13 @@
   .lobby-intro h1 { font-size: 46px; }
   .lobby-facts { grid-template-columns: 1fr; }
   .lobby-facts > span:first-child { border-right: 0; border-bottom: 1px solid var(--line); }
+  .segmented-control--three button { gap: 4px; padding-inline: 3px; font-size: 9px; }
+  .save-manager { padding: 18px 14px; }
+  .save-manager__header { flex-direction: column; }
+  .save-manager__create { width: 100%; }
+  .save-manager__actions { align-items: stretch; flex-wrap: wrap; }
+  .save-manager__continue, .save-manager__delete { flex: 1; margin-left: 0; }
+  .save-manager__owner-note { width: 100%; margin-left: 0; text-align: left; }
   .room-layout { width: calc(100% - 24px); padding-block: 24px; }
   .room-title-row { align-items: flex-start; flex-direction: column; gap: 14px; }
   .room-code { width: 100%; }
@@ -195,4 +202,180 @@
   .toast { right: 12px; bottom: 68px; left: 12px; }
   .modal-backdrop { padding: 12px; place-items: end center; }
   .modal { max-height: calc(100vh - 24px); overflow-y: auto; }
+}
+
+@media (min-width: 1600px) and (min-height: 900px) {
+  :root { --sidebar-w: 264px; }
+  body { font-size: 16px; line-height: 1.5; }
+
+  .eyebrow { font-size: 13px; }
+  .button { min-height: 46px; padding-inline: 17px; font-size: 14px; }
+  .button--sm { min-height: 38px; padding-inline: 13px; font-size: 13px; }
+  .icon-button { width: 40px; height: 40px; }
+  .badge { padding: 5px 9px; font-size: 12px; }
+  .panel__header { min-height: 66px; padding: 14px 19px; }
+  .panel__header h2 { font-size: 17px; }
+  .panel__action { font-size: 12px; }
+  .view-wrap { min-height: calc(100vh - 72px); }
+  .view-heading { margin-bottom: 24px; }
+  .view-heading h1 { font-size: 34px; }
+  .view-heading > div:first-child > p:last-child { font-size: 15px; }
+  .secondary-view, .squad-view, .tactics-view, .match-view { padding: 30px 32px 46px; }
+  .compact-tabs button { min-height: 36px; padding-inline: 14px; font-size: 12px; }
+  .auth-error, .form-error, .match-online-error { font-size: 13px; }
+
+  .sidebar__wordmark { height: 72px; gap: 11px; padding-inline: 20px; font-size: 15px; }
+  .sidebar__wordmark .wordmark-glyph { width: 32px; height: 32px; }
+  .club-switcher { min-height: 72px; margin: 12px 12px 6px; padding: 9px 11px; grid-template-columns: 40px 1fr 16px; }
+  .club-switcher strong { font-size: 14px; }
+  .club-switcher small { font-size: 12px; }
+  .sidebar__nav { padding: 8px 10px 12px; }
+  .nav-group > p { padding: 0 11px 6px; font-size: 11px; }
+  .nav-group > button { height: 40px; gap: 11px; padding-inline: 11px; font-size: 13px; }
+  .nav-group > button > small { min-width: 22px; font-size: 11px; }
+  .sidebar__season { margin-inline: 12px; padding: 12px; }
+  .season-progress-head { font-size: 12px; }
+  .season-status strong, .sidebar__upgrade strong { font-size: 13px; }
+  .season-status small, .sidebar__upgrade small { font-size: 12px; }
+  .sidebar__upgrade { margin-inline: 12px; padding: 10px 12px; }
+  .sidebar__exit { height: 44px; padding-inline: 21px; font-size: 13px; }
+
+  .topbar { height: 72px; padding: 0 24px 0 30px; }
+  .topbar__title p { font-size: 11px; }
+  .topbar__title h1 { font-size: 18px; }
+  .next-deadline { min-height: 46px; gap: 11px; padding: 6px 10px; }
+  .next-deadline > span { min-width: 220px; }
+  .next-deadline small { font-size: 11px; }
+  .next-deadline strong { font-size: 13px; }
+  .notification-button > span { width: 20px; height: 20px; font-size: 9px; }
+  .manager-menu { min-width: 160px; gap: 10px; grid-template-columns: 34px 1fr 14px; }
+  .manager-menu strong { font-size: 13px; }
+  .manager-menu small { font-size: 11px; }
+
+  .lobby-header { height: 76px; padding-inline: 46px; }
+  .back-button, .connection-status { font-size: 12px; }
+  .lobby-wordmark { gap: 10px; font-size: 16px; }
+  .lobby-setup {
+    width: min(1480px, calc(100% - 80px));
+    min-height: calc(100vh - 76px);
+    gap: 80px;
+    padding-block: 60px;
+    grid-template-columns: minmax(0, 1fr) 540px;
+  }
+  .lobby-intro h1 { font-size: clamp(60px, 5vw, 88px); }
+  .lobby-intro > p:last-of-type { max-width: 560px; font-size: 17px; }
+  .lobby-facts { max-width: 560px; }
+  .lobby-facts > span { padding: 18px 12px; grid-template-columns: 30px 1fr; }
+  .lobby-facts strong { font-size: 14px; }
+  .lobby-facts small { font-size: 12px; }
+  .segmented-control button { min-height: 56px; font-size: 14px; }
+  .setup-form { gap: 22px; padding: 32px; }
+  .setup-form label > span:first-child { font-size: 12px; }
+  .setup-form input, .setup-form select { min-height: 50px; padding-inline: 14px; font-size: 14px; }
+  .form-grid { gap: 16px; }
+  .league-selector legend { margin-bottom: 9px; font-size: 12px; }
+  .league-selector label { min-height: 50px; padding-inline: 13px; grid-template-columns: 18px 32px 1fr; font-size: 12px; }
+  .form-note { font-size: 12px; }
+  .save-manager { padding: 30px; }
+  .save-manager__header { margin-bottom: 22px; }
+  .save-manager__eyebrow { font-size: 11px; }
+  .save-manager__header h2 { font-size: 24px; }
+  .save-manager__description { font-size: 13px; }
+  .save-manager__list { max-height: min(56vh, 620px); gap: 12px; }
+  .save-manager__select { padding: 18px; }
+  .save-manager__name { font-size: 16px; }
+  .save-manager__status { font-size: 10px; }
+  .save-manager__code { font-size: 11px; }
+  .save-manager__metrics { font-size: 11px; }
+  .save-manager__actions { padding: 12px 14px; }
+  .save-manager__owner-note { font-size: 10px; }
+
+  .match-view { max-width: 1600px; }
+  .score-context { height: 48px; padding-inline: 20px; font-size: 12px; }
+  .score-context strong { font-size: 12px; }
+  .score-main { min-height: 164px; grid-template-columns: 1fr 220px 1fr; }
+  .score-team { gap: 18px; }
+  .score-team strong { font-size: 22px; }
+  .score-team span { font-size: 12px; }
+  .score-center > span { min-width: 50px; font-size: 12px; }
+  .score-center > strong { font-size: 60px; }
+  .score-center > strong i { margin-inline: 22px; }
+  .score-center > small { font-size: 12px; }
+  .score-scorers { min-height: 44px; font-size: 12px; }
+  .match-progress { margin-bottom: 12px; }
+  .match-layout { gap: 12px; grid-template-columns: minmax(0, 1.5fr) minmax(380px, .75fr); }
+  .commentary-panel > header, .live-stats > header { height: 64px; padding-inline: 18px; }
+  .commentary-panel h2, .live-stats h2 { font-size: 18px; }
+  .match-feed { height: 455px; padding: 10px 16px; }
+  .match-event { min-height: 62px; gap: 12px; padding-block: 9px; grid-template-columns: 34px 32px 1fr auto; }
+  .match-event time { font-size: 12px; }
+  .event-icon { width: 30px; height: 30px; }
+  .match-event p { font-size: 14px; }
+  .match-event > strong { font-size: 15px; }
+  .match-feed__typing small { font-size: 12px; }
+  .commentary-status { height: 40px; padding-inline: 17px; font-size: 12px; }
+  .match-analysis { gap: 12px; }
+  .stats-clubs { padding: 14px 17px 4px; font-size: 13px; }
+  .stat-row { padding: 8px 17px; }
+  .stat-row > div:first-child { grid-template-columns: 44px 1fr 44px; font-size: 12px; }
+  .momentum-panel { padding: 15px 17px 11px; }
+  .momentum-labels { font-size: 11px; }
+  .touchline-note { gap: 10px; padding: 14px; grid-template-columns: 24px 1fr 30px; }
+  .touchline-note strong { font-size: 13px; }
+  .touchline-note p { font-size: 12px; }
+  .touchline-note button { width: 30px; height: 30px; }
+  .match-controls { min-height: 68px; padding: 11px 14px; }
+  .control-status { padding: 8px 10px; font-size: 12px; }
+  .final-whistle { padding: 17px; grid-template-columns: 46px 1fr auto; }
+  .final-whistle__icon { width: 44px; height: 44px; }
+  .final-whistle h2 { font-size: 18px; }
+  .final-whistle p:last-child { font-size: 13px; }
+  .substitution-form label > span, .match-tactic-form label > span { font-size: 12px; }
+  .substitution-form select, .match-tactic-form select { height: 46px; font-size: 14px; }
+  .match-tactic-form label > div button { height: 44px; font-size: 12px; }
+  .tactic-impact strong { font-size: 13px; }
+  .tactic-impact small { font-size: 12px; }
+
+  .dashboard { padding: 30px 32px 46px; }
+  .dashboard-heading { margin-bottom: 24px; }
+  .dashboard-heading h1 { font-size: 34px; }
+  .dashboard-heading > div:first-child > p:last-child { font-size: 15px; }
+  .dashboard-actions button { min-height: 46px; padding-inline: 16px; font-size: 14px; }
+  .fixture-command__rail { width: 42px; }
+  .fixture-command { min-height: 330px; padding-left: 42px; }
+  .fixture-command__rail span { font-size: 11px; }
+  .fixture-command__meta { min-height: 52px; padding-inline: 19px; }
+  .fixture-command__meta > span { font-size: 11px; }
+  .fixture-command__teams { min-height: 190px; padding-inline: 50px; grid-template-columns: 1fr 180px 1fr; }
+  .fixture-team strong { font-size: 22px; }
+  .fixture-team span { font-size: 12px; }
+  .fixture-kickoff small { font-size: 11px; }
+  .fixture-kickoff strong { font-size: 48px; }
+  .fixture-kickoff span { padding: 5px 8px; font-size: 11px; }
+  .fixture-command__intel { min-height: 78px; padding-inline: 20px; }
+  .fixture-command__intel small { font-size: 11px; }
+  .fixture-command__intel strong, .fixture-command__intel button { font-size: 13px; }
+  .mini-table > div { min-height: 44px; padding-inline: 10px; grid-template-columns: 28px 1fr 34px 42px 42px; font-size: 12px; }
+  .mini-table .mini-table__head { min-height: 34px; font-size: 11px; }
+  .position-gap { padding: 13px 16px; font-size: 11px; }
+  .tactics-field--compact .pitch-player__disc { width: 28px; height: 28px; font-size: 10px; }
+  .tactics-field--compact .pitch-player__name { max-width: 68px; font-size: 9px; }
+  .tactic-tags span { padding: 5px 8px; font-size: 11px; }
+  .pulse-score strong { font-size: 43px; }
+  .pulse-score span { font-size: 13px; }
+  .pulse-hero > div:last-child strong { font-size: 14px; }
+  .pulse-hero p { font-size: 12px; }
+  .pulse-stats span, .availability-row > span:last-child { font-size: 11px; }
+  .pulse-stats strong { font-size: 16px; }
+  .pulse-stats strong small { font-size: 11px; }
+  .finance-total small, .trend, .finance-legend span { font-size: 11px; }
+  .finance-total strong { font-size: 26px; }
+  .objective-row > span:nth-child(2) strong, .objective-row > strong { font-size: 12px; }
+  .objective-row > span:nth-child(2) small { font-size: 11px; }
+  .lead-news__visual { height: 112px; font-size: 12px; }
+  .lead-news > div:last-child h3 { font-size: 16px; }
+  .lead-news > div:last-child p { font-size: 12px; }
+  .lead-news > div:last-child > span:last-child { font-size: 11px; }
+  .news-headlines span { font-size: 10px; }
+  .news-headlines strong { font-size: 12px; }
 }

@@ -1,0 +1,285 @@
+.press-conference-view {
+  width: min(100%, 1320px);
+  padding-top: 34px;
+}
+
+.press-conference-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.press-conference-heading h1 {
+  margin-top: 5px;
+  font-size: clamp(32px, 3vw, 46px);
+  font-weight: 600;
+  letter-spacing: -.035em;
+}
+
+.press-conference-heading > div > p:last-child {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.press-score-card {
+  display: grid;
+  align-items: center;
+  min-height: 168px;
+  grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.press-score-team {
+  display: flex;
+  min-width: 0;
+  padding: 28px 34px;
+  flex-direction: column;
+}
+
+.press-score-team--away { text-align: right; }
+
+.press-score-team strong {
+  overflow: hidden;
+  font-size: clamp(20px, 2vw, 28px);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.press-score-team span {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.press-score-result {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+  grid-template-columns: auto auto auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.press-score-result > span {
+  font-size: clamp(48px, 5vw, 68px);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.press-score-result i {
+  color: var(--muted-2);
+  font-size: 36px;
+  font-style: normal;
+}
+
+.press-score-result small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.press-score-meta {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+
+.press-score-meta span { display: inline-flex; align-items: center; gap: 8px; }
+.press-score-meta svg { color: var(--accent); }
+
+.press-interview {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.press-interview-progress {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 28px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.press-interview-progress > div { display: flex; gap: 7px; }
+
+.press-interview-progress i {
+  width: 48px;
+  height: 4px;
+  background: var(--line);
+}
+
+.press-interview-progress i.is-active { background: var(--accent); }
+
+.press-journalist {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 32px 0;
+}
+
+.press-journalist > span {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #101311;
+  background: var(--accent);
+}
+
+.press-journalist > div { display: flex; flex-direction: column; }
+.press-journalist strong { font-size: 16px; }
+.press-journalist small { margin-top: 3px; color: var(--muted); font-size: 13px; }
+
+.press-interview > h2 {
+  max-width: 940px;
+  padding: 22px 32px 28px;
+  font-size: clamp(24px, 2.25vw, 34px);
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -.02em;
+}
+
+.press-answers {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0 32px 30px;
+  border: 0;
+}
+
+.press-answer {
+  position: relative;
+  display: grid;
+  min-height: 72px;
+  align-items: center;
+  gap: 18px;
+  padding: 13px 54px 13px 16px;
+  grid-template-columns: 104px 1fr;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  border-radius: 3px;
+  background: #131518;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.press-answer:hover {
+  color: var(--ink);
+  border-color: #3b4048;
+  background: var(--raised);
+}
+
+.press-answer:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.press-answer.is-selected {
+  color: var(--ink);
+  border-color: rgba(200,255,61,.4);
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.press-answer input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.press-answer-tone {
+  width: max-content;
+  padding: 5px 8px;
+  color: var(--accent);
+  border: 1px solid rgba(200,255,61,.22);
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.press-answer strong { font-size: 15px; font-weight: 500; line-height: 1.45; }
+
+.press-answer-check {
+  position: absolute;
+  right: 18px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: #101311;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  transform: scale(.8);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.press-answer.is-selected .press-answer-check { opacity: 1; transform: scale(1); }
+
+.press-interview-actions {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 32px;
+  border-top: 1px solid var(--line-soft);
+  background: #141619;
+}
+
+.press-interview-actions p { color: var(--muted); font-size: 13px; }
+.press-interview-actions .button { min-width: 210px; min-height: 46px; font-size: 14px; }
+
+@media (max-width: 800px) {
+  .press-conference-view { padding: 22px 16px 36px; }
+  .press-conference-heading { align-items: flex-start; }
+  .press-score-card { grid-template-columns: 1fr auto 1fr; }
+  .press-score-team { padding: 22px 14px; }
+  .press-score-team strong { white-space: normal; }
+  .press-score-meta { gap: 14px; padding: 10px 14px; flex-wrap: wrap; }
+  .press-interview-progress, .press-journalist, .press-interview > h2, .press-answers, .press-interview-actions { padding-inline: 20px; }
+  .press-answer { grid-template-columns: 1fr; gap: 8px; }
+}
+
+@media (max-width: 540px) {
+  .press-conference-heading { flex-direction: column; }
+  .press-score-card { grid-template-columns: 1fr 1fr; }
+  .press-score-result { grid-row: 1; grid-column: 1 / -1; justify-content: center; padding-top: 22px; }
+  .press-score-team { grid-row: 2; }
+  .press-interview-progress i { width: 28px; }
+  .press-interview-actions { align-items: stretch; flex-direction: column; }
+  .press-interview-actions .button { width: 100%; }
+}

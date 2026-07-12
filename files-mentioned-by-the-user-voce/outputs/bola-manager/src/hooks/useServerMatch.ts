@@ -3,6 +3,7 @@ import type {
   AckResponse,
   BolaSocket,
   MatchEvent,
+  MatchReadyResponse,
   MatchStatistics,
   MatchSyncResponse,
   Room,
@@ -31,6 +32,7 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
   const [rawEvents, setRawEvents] = useState<ServerMatchEvent[]>([]);
   const [result, setResult] = useState<ServerMatchFinished | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [readyPending, setReadyPending] = useState(false);
 
   useEffect(() => {
     setPhase('idle');
@@ -38,11 +40,13 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setRawEvents([]);
     setResult(null);
     setError(null);
+    setReadyPending(false);
   }, [room?.code]);
 
   useEffect(() => {
     if (!socket || !enabled) return;
     const onStarted = (started: ServerMatchStarted) => {
+      if (started.code !== room?.code) return;
       setMatch(started);
       setRawEvents([]);
       setResult(null);
@@ -50,10 +54,12 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
       setPhase('running');
     };
     const onEvent = (event: ServerMatchEvent) => {
+      if (event.code !== room?.code) return;
       setRawEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
       setPhase('running');
     };
     const onFinished = (finished: ServerMatchFinished) => {
+      if (finished.code && finished.code !== room?.code) return;
       setResult(finished);
       setPhase('finished');
     };
@@ -72,13 +78,15 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
       socket.off('match:finished', onFinished);
       socket.off('server:error', onServerError);
     };
-  }, [socket, enabled]);
+  }, [socket, enabled, room?.code]);
 
   useEffect(() => {
     if (!enabled || !socket?.connected || !room) return;
+    let cancelled = false;
     setPhase((current) => current === 'idle' || current === 'error' ? 'syncing' : current);
     void waitForAck<MatchSyncResponse>((acknowledge) => socket.emit('match:sync', { code: room.code }, acknowledge))
       .then((synced) => {
+        if (cancelled) return;
         if (synced.started) setMatch(synced.started);
         setRawEvents(synced.events);
         setResult(synced.result);
@@ -86,9 +94,13 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
         setPhase(synced.result ? 'finished' : synced.started ? 'running' : 'idle');
       })
       .catch((nextError: unknown) => {
+        if (cancelled) return;
         setError(nextError instanceof Error ? nextError.message : 'Não foi possível sincronizar a partida.');
         setPhase('error');
       });
+    return () => {
+      cancelled = true;
+    };
   }, [enabled, socket, socket?.connected, room?.code]);
 
   const start = useCallback(async () => {
@@ -107,6 +119,27 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
       setError(message);
       setPhase('error');
       throw new Error(message);
+    }
+  }, [enabled, socket, room, phase]);
+
+  const setReady = useCallback(async (ready: boolean) => {
+    if (!enabled || !socket?.connected || !room) throw new Error('A partida online ainda não está disponível.');
+    if (!room.currentFixtureId) throw new Error('A temporada não possui partidas pendentes.');
+    if (phase === 'running' || phase === 'starting') throw new Error('A partida desta rodada já começou.');
+    setReadyPending(true);
+    setError(null);
+    try {
+      return await waitForAck<MatchReadyResponse>((acknowledge) => socket.emit(
+        'match:ready',
+        { code: room.code, fixtureId: room.currentFixtureId ?? undefined, ready },
+        acknowledge,
+      ));
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : 'Não foi possível confirmar a prontidão.';
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setReadyPending(false);
     }
   }, [enabled, socket, room, phase]);
 
@@ -129,6 +162,7 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setRawEvents([]);
     setResult(null);
     setError(null);
+    setReadyPending(false);
   }, []);
 
   return {
@@ -140,7 +174,9 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     score,
     result,
     error,
+    readyPending,
     start,
+    setReady,
     skip,
     reset,
   };

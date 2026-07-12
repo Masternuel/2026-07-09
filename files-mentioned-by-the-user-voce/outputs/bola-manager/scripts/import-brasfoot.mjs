@@ -7,8 +7,11 @@ import { z } from "zod";
 import { initializeFirebaseAdmin } from "../server/config.mjs";
 
 const attributeSchema = z.record(z.coerce.number().finite()).default({});
+const recordIdSchema = z.union([z.string(), z.number()])
+  .transform(String)
+  .pipe(z.string().trim().min(1).max(128).refine((value) => !value.includes("/"), "ID nao pode conter /"));
 const clubSchema = z.object({
-  id: z.union([z.string(), z.number()]).transform(String),
+  id: recordIdSchema,
   name: z.string().trim().min(1),
   abbreviation: z.string().trim().max(8).optional(),
   colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i, "cor deve usar #RRGGBB")).max(4).default([]),
@@ -19,8 +22,8 @@ const clubSchema = z.object({
   state: z.string().nullable().optional(),
 }).passthrough();
 const playerSchema = z.object({
-  id: z.union([z.string(), z.number()]).transform(String),
-  clubId: z.union([z.string(), z.number()]).transform(String),
+  id: recordIdSchema,
+  clubId: recordIdSchema,
   name: z.string().trim().min(1),
   position: z.string().trim().min(1),
   age: z.coerce.number().int().min(14).max(60),
@@ -30,7 +33,7 @@ const playerSchema = z.object({
   attributes: attributeSchema,
 }).passthrough();
 const competitionSchema = z.object({
-  id: z.union([z.string(), z.number()]).transform(String),
+  id: recordIdSchema,
   name: z.string().trim().min(1),
 }).passthrough();
 const datasetSchema = z.object({
@@ -109,8 +112,9 @@ export function normalizeDataset(rawData) {
   ]) {
     const ids = new Set();
     for (const record of records) {
-      if (ids.has(record.id)) throw new Error(`ID duplicado em ${label}: ${record.id}`);
-      ids.add(record.id);
+      const comparisonId = record.id.toLocaleUpperCase("pt-BR");
+      if (ids.has(comparisonId)) throw new Error(`ID duplicado em ${label}: ${record.id}`);
+      ids.add(comparisonId);
     }
   }
   const clubsById = new Map(parsed.clubs.map((club) => [club.id, club]));

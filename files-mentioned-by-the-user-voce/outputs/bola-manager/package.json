@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -n WEB,SERVER -c green,cyan \"npm:dev:client\" \"npm:server:dev\"",
-    "dev:client": "vite",
+    "dev:client": "vite --configLoader runner",
     "server": "node server/index.mjs",
     "server:dev": "node --watch server/index.mjs",
     "build": "tsc -b && vite build --configLoader runner",

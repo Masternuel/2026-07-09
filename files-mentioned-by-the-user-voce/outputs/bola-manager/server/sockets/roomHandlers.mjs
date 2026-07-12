@@ -6,9 +6,27 @@ import {
   roomCodeSchema,
   startRoomSchema,
 } from "../schemas.mjs";
-import { channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
+import { channelForManager, channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
 
-export function registerRoomHandlers(io, socket, { store }) {
+function roomError(message, code, status = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function assertRoomAvailable(code, deletingRooms, deletedRooms) {
+  if (deletingRooms.has(code) || deletedRooms.has(code)) {
+    throw roomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+  }
+}
+
+export function registerRoomHandlers(io, socket, {
+  store,
+  matchSessions,
+  deletingRooms,
+  deletedRooms,
+}) {
   const user = socket.data.user;
 
   registerSafe(socket, "room:create", async (payload) => {
@@ -18,6 +36,7 @@ export function registerRoomHandlers(io, socket, { store }) {
       creatorId: user.uid,
       creatorName: user.name,
     });
+    assertRoomAvailable(room.code, deletingRooms, deletedRooms);
     rememberMembership(socket, room.code);
     io.to(channelForRoom(room.code)).emit("room:state", room);
     return { room };
@@ -25,6 +44,7 @@ export function registerRoomHandlers(io, socket, { store }) {
 
   registerSafe(socket, "room:join", async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     const data = parseOrThrow(joinRoomSchema, {
       managerId: payload.managerId,
       managerName: payload.managerName,
@@ -35,6 +55,7 @@ export function registerRoomHandlers(io, socket, { store }) {
       managerId: user.uid,
       managerName: user.name,
     });
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
     if (room.status === "waiting") io.to(channelForRoom(code)).emit("room:state", room);
     else socket.emit("room:state", room);
@@ -43,7 +64,9 @@ export function registerRoomHandlers(io, socket, { store }) {
 
   const resume = async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     const room = await store.requireMembership(code, user.uid);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
     socket.emit("room:state", room);
     return { room };
@@ -53,12 +76,14 @@ export function registerRoomHandlers(io, socket, { store }) {
 
   registerSafe(socket, "room:ready", async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     const data = parseOrThrow(readyRoomSchema, {
       managerId: payload.managerId,
       ready: payload.ready,
       clubId: payload.clubId,
     });
     const room = await store.setReady(code, user.uid, data.ready, data.clubId);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
     io.to(channelForRoom(code)).emit("room:state", room);
     return { room };
@@ -66,10 +91,40 @@ export function registerRoomHandlers(io, socket, { store }) {
 
   registerSafe(socket, "room:start", async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     parseOrThrow(startRoomSchema, { managerId: payload.managerId });
     const room = await store.startRoom(code, user.uid);
+    assertRoomAvailable(code, deletingRooms, deletedRooms);
     io.to(channelForRoom(code)).emit("room:started", room);
     io.to(channelForRoom(code)).emit("room:state", room);
     return { room };
+  });
+
+  registerSafe(socket, "room:delete", async (payload) => {
+    const code = parseOrThrow(roomCodeSchema, payload.code);
+    await store.requireOwnership(code, user.uid);
+    if (deletedRooms.has(code)) throw roomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+    if (deletingRooms.has(code)) {
+      throw roomError("A temporada ja esta sendo excluida", "ROOM_DELETE_IN_PROGRESS");
+    }
+    if (matchSessions.has(code)) {
+      throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
+    }
+
+    deletingRooms.add(code);
+    try {
+      const deletedRoom = await store.deleteRoom(code, user.uid);
+      deletedRooms.add(code);
+      const deleted = { code };
+      let recipients = io.to(channelForRoom(code));
+      for (const managerId of deletedRoom.managerIds) {
+        recipients = recipients.to(channelForManager(managerId));
+      }
+      recipients.emit("room:deleted", deleted);
+      io.in(channelForRoom(code)).socketsLeave(channelForRoom(code));
+      return deleted;
+    } finally {
+      deletingRooms.delete(code);
+    }
   });
 }

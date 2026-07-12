@@ -6,10 +6,12 @@ import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
 import { formations } from '../constants/formations';
 import { players } from '../data/demoData';
-import type { Player } from '../types';
+import type { ClubChoice, Player } from '../types';
 import { average } from '../utils/formatters';
 
 interface TacticsViewProps {
+  club: ClubChoice;
+  opponentName?: string;
   onToast: (message: string) => void;
 }
 
@@ -18,7 +20,7 @@ const initialInstructions: InstructionValues = {
   pressureLine: 'Alta', width: 'Ampla', tempo: 'Rápido', pressing: 'Intensa', offensiveTransition: 'Construir', defensiveTransition: 'Pressão imediata',
 };
 
-export function TacticsView({ onToast }: TacticsViewProps) {
+export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsViewProps) {
   const [formationId, setFormationId] = useState('4-3-3');
   const [lineup, setLineup] = useState<Player[]>(initialLineup);
   const [bench, setBench] = useState<Player[]>(players.slice(11, 18));
@@ -60,7 +62,7 @@ export function TacticsView({ onToast }: TacticsViewProps) {
 
   function save() {
     setDirty(false);
-    onToast('Plano “Aurora vertical” salvo para a sala.');
+    onToast(`Plano “${club.name} vertical” salvo para a sala.`);
   }
 
   function restore() {
@@ -91,7 +93,7 @@ export function TacticsView({ onToast }: TacticsViewProps) {
           <div className="field-stage">
             <div className="field-stage__label"><span><Target size={14} /> Ataque</span><span>ARRASTE PARA TROCAR POSIÇÕES</span></div>
             <TacticsField formation={formation} lineup={lineup} onSwap={swap} selectedIndex={selectedSlot} onSelect={(index) => setSelectedSlot(index === selectedSlot ? null : index)} />
-            <div className="field-stage__label field-stage__label--bottom"><span><Shield size={14} /> Defesa</span><span>AURORA FC · MANDO DE CAMPO</span></div>
+            <div className="field-stage__label field-stage__label--bottom"><span><Shield size={14} /> Defesa</span><span>{club.name.toUpperCase()} · MANDO DE CAMPO</span></div>
           </div>
 
           <div className="bench">
@@ -127,7 +129,7 @@ export function TacticsView({ onToast }: TacticsViewProps) {
             <div className="setpiece-panel"><ClipboardCheck size={25} /><h3>Bolas paradas</h3><p>Defina cobradores e movimentos ensaiados para o clássico.</p>{['Escanteio ofensivo', 'Falta frontal', 'Tiro de meta'].map((item, index) => <button key={item}><span><strong>{item}</strong><small>{index === 0 ? 'Curto · 3 variações' : index === 1 ? 'Igor Sampaio' : 'Saída curta'}</small></span><ChevronDown size={14} /></button>)}</div>
           )}
           <label className="secret-tactic"><span><EyeOff size={15} /><span><strong>Tática secreta</strong><small>Ocultar plano dos outros managers</small></span></span><input type="checkbox" checked={secret} onChange={(event) => setSecret(event.target.checked)} /><i /></label>
-          <div className="assistant-note"><Sparkles size={16} /><div><strong>Leitura do auxiliar</strong><p>O Santos cede espaço entre lateral e zagueiro. A amplitude do 4–3–3 favorece seus pontas.</p></div></div>
+          <div className="assistant-note"><Sparkles size={16} /><div><strong>Leitura do auxiliar</strong><p>O {opponentName} cede espaço entre lateral e zagueiro. A amplitude do 4–3–3 favorece seus pontas.</p></div></div>
         </aside>
       </div>
     </main>

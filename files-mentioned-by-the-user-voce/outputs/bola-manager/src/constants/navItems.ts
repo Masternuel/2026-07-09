@@ -41,6 +41,7 @@ export const navItems: NavItem[] = [
   { key: 'settings', label: 'Configurações', icon: Settings, group: 'Análise' },
 ];
 
-export const routeLabels: Record<RouteKey, string> = Object.fromEntries(
-  navItems.map((item) => [item.key, item.label]),
-) as Record<RouteKey, string>;
+export const routeLabels: Record<RouteKey, string> = {
+  ...Object.fromEntries(navItems.map((item) => [item.key, item.label])),
+  'press-conference': 'Coletiva pós-jogo',
+} as Record<RouteKey, string>;

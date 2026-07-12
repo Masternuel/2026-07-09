@@ -6,23 +6,75 @@ import { ProgressBar } from '../components/shared/ProgressBar';
 import { TacticsField } from '../components/tactics/TacticsField';
 import { formations } from '../constants/formations';
 import { leagueTable, news, players } from '../data/demoData';
-import type { RouteKey } from '../types';
+import type { ServerMatchController } from '../hooks/useServerMatch';
+import type { ClubChoice, Room, RouteKey } from '../types';
 import { formatCurrency } from '../utils/formatters';
 
 interface HomeViewProps {
   onNavigate: (route: RouteKey) => void;
+  onToast: (message: string) => void;
+  club: ClubChoice;
+  room: Room | null;
+  managerId: string;
+  onlineMatch: ServerMatchController | null;
 }
 
 const startingEleven = [players[0], players[3], players[1], players[2], players[4], players[5], players[6], players[7], players[8], players[9], players[10]];
 
-export function HomeView({ onNavigate }: HomeViewProps) {
+function compactTeamCode(teamName: string) {
+  return teamName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase();
+}
+
+function sameClub(left: string | undefined, club: ClubChoice) {
+  const normalized = left?.toLocaleUpperCase('pt-BR');
+  return normalized === club.id.toLocaleUpperCase('pt-BR') || normalized === club.code.toLocaleUpperCase('pt-BR');
+}
+
+function sameFixtureId(left: string | null | undefined, right: string | null | undefined) {
+  return Boolean(left && right && left.toLocaleLowerCase('pt-BR') === right.toLocaleLowerCase('pt-BR'));
+}
+
+export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMatch }: HomeViewProps) {
+  const currentFixture = room?.fixtureSchedule?.find((fixture) => sameFixtureId(fixture.fixtureId, room.currentFixtureId));
+  const readiness = room && sameFixtureId(room.matchReadiness?.fixtureId, room.currentFixtureId) ? room.matchReadiness : null;
+  const readyCount = readiness?.managerIds.length ?? 0;
+  const requiredCount = room?.managers.length ?? 1;
+  const managerReady = readiness?.managerIds.includes(managerId) ?? false;
+  const matchRunning = onlineMatch?.phase === 'running';
+  const homeCode = currentFixture ? (sameClub(currentFixture.homeClubId, club) ? club.code : compactTeamCode(currentFixture.homeTeam)) : club.code;
+  const awayCode = currentFixture ? (sameClub(currentFixture.awayClubId, club) ? club.code : compactTeamCode(currentFixture.awayTeam)) : 'ADV';
+  const homeName = currentFixture?.homeTeam ?? club.name;
+  const awayName = currentFixture?.awayTeam ?? 'Adversário a definir';
+
+  const readinessLabel = !onlineMatch
+    ? 'Ir para a partida'
+    : matchRunning
+      ? 'Assistir partida'
+      : onlineMatch.readyPending
+        ? 'Confirmando…'
+        : !room?.currentFixtureId
+          ? 'Temporada concluída'
+          : managerReady
+            ? 'Cancelar pronto'
+            : 'Estou pronto';
+
+  function handleMatchAction() {
+    if (!onlineMatch || matchRunning) {
+      onNavigate('match');
+      return;
+    }
+    void onlineMatch.setReady(!managerReady).catch((nextError: unknown) => {
+      onToast(nextError instanceof Error ? nextError.message : 'Não foi possível confirmar sua prontidão.');
+    });
+  }
+
   return (
     <main className="dashboard view-enter">
       <div className="dashboard-heading">
         <div><p className="eyebrow">QUARTA-FEIRA, 16 DE JULHO</p><h1>Bom jogo, Emanuel.</h1><p>O elenco está concentrado. Restam duas decisões antes do clássico.</p></div>
         <div className="dashboard-actions">
           <button onClick={() => onNavigate('calendar')}><CalendarDays size={15} /> Ver agenda</button>
-          <button className="accent" onClick={() => onNavigate('match')}><Goal size={15} /> Ir para a partida</button>
+          <button className="accent" onClick={handleMatchAction} disabled={Boolean(onlineMatch?.readyPending) || (Boolean(onlineMatch) && !room?.currentFixtureId)}><Goal size={15} /> {readinessLabel}</button>
         </div>
       </div>
 
@@ -30,18 +82,19 @@ export function HomeView({ onNavigate }: HomeViewProps) {
         <section className="fixture-command">
           <div className="fixture-command__rail"><span>PRÓXIMO JOGO</span><i /></div>
           <div className="fixture-command__meta">
-            <Badge tone="neutral">BRASILEIRÃO · RODADA 14</Badge>
+            <Badge tone="neutral">BRASILEIRÃO · RODADA {currentFixture?.round ?? 14}</Badge>
+            {onlineMatch && <Badge tone={managerReady ? 'positive' : 'warning'}>{readyCount}/{requiredCount} MANAGERS PRONTOS</Badge>}
             <span><CloudRain size={14} /> 17 °C · Chuva fraca</span>
             <span>Estádio Boreal · 36.250</span>
           </div>
           <div className="fixture-command__teams">
-            <div className="fixture-team fixture-team--home"><ClubMark code="AUR" size="xl" /><div><strong>Aurora FC</strong><span>2º · 27 pontos</span></div></div>
+            <div className="fixture-team fixture-team--home"><ClubMark code={homeCode} size="xl" /><div><strong>{homeName}</strong><span>{currentFixture ? (currentFixture.homeManagerId ? 'Controlado por manager' : 'Controlado pela IA') : '2º · 27 pontos'}</span></div></div>
             <div className="fixture-kickoff"><small>HOJE</small><strong>21:30</strong><span>em 48 minutos</span></div>
-            <div className="fixture-team fixture-team--away"><ClubMark code="SAN" color="#dedede" size="xl" /><div><strong>Santos</strong><span>10º · 15 pontos</span></div></div>
+            <div className="fixture-team fixture-team--away"><ClubMark code={awayCode} color="#dedede" size="xl" /><div><strong>{awayName}</strong><span>{currentFixture ? (currentFixture.awayManagerId ? 'Controlado por manager' : 'Controlado pela IA') : '10º · 15 pontos'}</span></div></div>
           </div>
           <div className="fixture-command__intel">
             <div><span className="intel-icon"><Crosshair size={15} /></span><span><small>CHAVE DO JOGO</small><strong>Atacar o espaço nas costas do lateral-direito</strong></span></div>
-            <div><span className="intel-icon"><ShieldCheck size={15} /></span><span><small>ESCALAÇÃO</small><strong>10 de 11 confirmados</strong></span></div>
+            <div><span className="intel-icon"><ShieldCheck size={15} /></span><span><small>{onlineMatch ? 'PRONTIDÃO DA SALA' : 'ESCALAÇÃO'}</small><strong>{onlineMatch ? `${readyCount} de ${requiredCount} managers confirmados` : '10 de 11 confirmados'}</strong></span></div>
             <button onClick={() => onNavigate('tactics')}>Revisar plano <ArrowRight size={15} /></button>
           </div>
         </section>

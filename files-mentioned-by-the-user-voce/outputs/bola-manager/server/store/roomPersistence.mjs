@@ -2,15 +2,33 @@ function clone(value) {
   return value == null ? null : structuredClone(value);
 }
 
+function isDeletedRoom(value) {
+  return Boolean(value?.deleted === true);
+}
+
+function deletedRoom(code) {
+  return { code, deleted: true };
+}
+
+function reservedCodeError(code) {
+  const error = new Error(`Codigo de sala reservado: ${code}`);
+  error.code = "ROOM_CODE_RESERVED";
+  return error;
+}
+
 export class MemoryRoomPersistence {
   #rooms = new Map();
+  #deletedCodes = new Set();
 
   constructor(initialRooms = []) {
-    for (const room of initialRooms) this.#rooms.set(room.code, clone(room));
+    for (const room of initialRooms) {
+      if (isDeletedRoom(room)) this.#deletedCodes.add(room.code);
+      else this.#rooms.set(room.code, clone(room));
+    }
   }
 
   async create(room) {
-    if (this.#rooms.has(room.code)) return false;
+    if (this.#rooms.has(room.code) || this.#deletedCodes.has(room.code)) return false;
     this.#rooms.set(room.code, clone(room));
     return true;
   }
@@ -20,15 +38,26 @@ export class MemoryRoomPersistence {
   }
 
   async save(room) {
+    if (this.#deletedCodes.has(room.code)) throw reservedCodeError(room.code);
     this.#rooms.set(room.code, clone(room));
   }
 
   async mutate(code, mutation) {
-    const current = clone(this.#rooms.get(code));
+    const reserved = this.#deletedCodes.has(code);
+    const current = reserved ? null : clone(this.#rooms.get(code));
     const next = mutation(current);
     if (next === undefined) return current;
+    if (reserved) throw reservedCodeError(code);
     this.#rooms.set(code, clone(next));
     return clone(next);
+  }
+
+  async remove(code, authorize) {
+    const current = clone(this.#rooms.get(code));
+    authorize(current);
+    this.#rooms.delete(code);
+    this.#deletedCodes.add(code);
+    return clone(current);
   }
 
   async listByManager(managerId) {
@@ -66,22 +95,43 @@ export class FirestoreRoomPersistence {
 
   async get(code) {
     const snapshot = await this.#collection.doc(code).get();
-    return snapshot.exists ? clone(snapshot.data()) : null;
+    const current = snapshot.exists ? snapshot.data() : null;
+    return current && !isDeletedRoom(current) ? clone(current) : null;
   }
 
   async save(room) {
-    await this.#collection.doc(room.code).set(clone(room));
+    const reference = this.#collection.doc(room.code);
+    await this.#firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      if (snapshot.exists && isDeletedRoom(snapshot.data())) throw reservedCodeError(room.code);
+      transaction.set(reference, clone(room));
+    });
   }
 
   async mutate(code, mutation) {
     const reference = this.#collection.doc(code);
     return this.#firestore.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(reference);
-      const current = snapshot.exists ? clone(snapshot.data()) : null;
+      const stored = snapshot.exists ? snapshot.data() : null;
+      const reserved = isDeletedRoom(stored);
+      const current = stored && !reserved ? clone(stored) : null;
       const next = mutation(current);
       if (next === undefined) return current;
+      if (reserved) throw reservedCodeError(code);
       transaction.set(reference, clone(next));
       return clone(next);
+    });
+  }
+
+  async remove(code, authorize) {
+    const reference = this.#collection.doc(code);
+    return this.#firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      const stored = snapshot.exists ? snapshot.data() : null;
+      const current = stored && !isDeletedRoom(stored) ? clone(stored) : null;
+      authorize(current);
+      transaction.set(reference, deletedRoom(code));
+      return clone(current);
     });
   }
 

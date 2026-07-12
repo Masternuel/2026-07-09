@@ -6,3 +6,6 @@ dist/
 !.env.example
 coverage/
 npm-debug.log*
+/.npm-cache/
+/data/brasfoot-normalized.json
+/data/*.dat

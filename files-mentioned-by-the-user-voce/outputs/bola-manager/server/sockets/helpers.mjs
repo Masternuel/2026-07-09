@@ -31,7 +31,9 @@ export function registerSafe(socket, eventName, handler) {
 }
 
 export function rememberMembership(socket, code) {
-  socket.data.roomCodes ??= [];
-  if (!socket.data.roomCodes.includes(code)) socket.data.roomCodes.push(code);
+  for (const previousCode of socket.data.roomCodes ?? []) {
+    if (previousCode !== code) socket.leave(channelForRoom(previousCode));
+  }
+  socket.data.roomCodes = [code];
   socket.join(channelForRoom(code));
 }

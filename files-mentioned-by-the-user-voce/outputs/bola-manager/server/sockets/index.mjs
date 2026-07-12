@@ -6,13 +6,15 @@ import { channelForManager } from "./helpers.mjs";
 
 export function registerSocketHandlers(io, options) {
   const matchSessions = new Map();
+  const deletingRooms = new Set();
+  const deletedRooms = new Set();
 
   io.on("connection", (socket) => {
     socket.join(channelForManager(socket.data.user.uid));
     socket.emit("server:ready", { socketId: socket.id });
-    registerRoomHandlers(io, socket, options);
+    registerRoomHandlers(io, socket, { ...options, matchSessions, deletingRooms, deletedRooms });
     registerChatHandlers(io, socket, options);
-    registerMatchHandlers(io, socket, { ...options, matchSessions });
+    registerMatchHandlers(io, socket, { ...options, matchSessions, deletingRooms, deletedRooms });
     registerMarketHandlers(io, socket, options);
   });
 
@@ -20,6 +22,8 @@ export function registerSocketHandlers(io, options) {
     close() {
       for (const session of matchSessions.values()) session.playback?.cancel();
       matchSessions.clear();
+      deletingRooms.clear();
+      deletedRooms.clear();
     },
   };
 }

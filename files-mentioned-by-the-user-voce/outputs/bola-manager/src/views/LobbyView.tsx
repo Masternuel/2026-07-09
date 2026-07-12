@@ -1,22 +1,32 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { ArrowLeft, Check, ChevronRight, Copy, Link2, LockKeyhole, Plus, Radio, Settings2, Shield, Zap } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { ArrowLeft, Check, ChevronRight, Copy, Link2, LockKeyhole, Plus, Radio, Save, Settings2, Shield, Zap } from 'lucide-react';
+import { SaveManager } from '../components/lobby/SaveManager';
 import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
 import { ClubMark } from '../components/shared/ClubMark';
-import { clubByCode, clubOptions } from '../constants/clubs';
+import { clubByCode, type ClubOption } from '../constants/clubs';
+import type { ClubCatalogSource } from '../hooks/useClubCatalog';
 import type { SocketState } from '../hooks/useSocket';
 import type { ClubChoice, ManagerIdentity, Room, RoomCreatePayload } from '../types';
 
 interface LobbyViewProps {
+  clubs: ClubOption[];
+  catalogLoading: boolean;
+  catalogSource: ClubCatalogSource;
+  catalogError: string | null;
   identity: ManagerIdentity;
   room: Room | null;
+  savedRooms: Room[];
   connectionState: SocketState;
   loading: boolean;
   pending: boolean;
   error: string | null;
   onBack: () => void;
+  onDeselectRoom: () => void;
   onCreate: (payload: RoomCreatePayload) => Promise<Room>;
   onJoin: (code: string) => Promise<Room>;
+  onSelectSave: (code: string) => Promise<Room>;
+  onDeleteSave: (code: string) => Promise<void>;
   onReady: (ready: boolean, clubId?: string) => Promise<Room>;
   onStart: () => Promise<Room>;
   onEnterGame: () => void;
@@ -24,21 +34,34 @@ interface LobbyViewProps {
   onToast: (message: string) => void;
 }
 
+const lobbyTabs = ['saves', 'create', 'join'] as const;
+
 export function LobbyView(props: LobbyViewProps) {
-  const [tab, setTab] = useState<'create' | 'join'>('create');
+  const [tab, setTab] = useState<'saves' | 'create' | 'join'>('saves');
   const [roomName, setRoomName] = useState('Noite dos Managers');
-  const [selectedClub, setSelectedClub] = useState('AUR');
+  const [selectedClub, setSelectedClub] = useState(() => props.clubs[0]?.id ?? 'AUR');
   const [seasonLength, setSeasonLength] = useState('3');
   const [maxManagers, setMaxManagers] = useState('6');
 
   const currentManager = props.room?.managers.find((manager) => manager.id === props.identity.uid);
-  const selected = useMemo(() => clubByCode(selectedClub), [selectedClub]);
+  const selected = useMemo(
+    () => clubByCode(selectedClub, props.clubs),
+    [selectedClub, props.clubs],
+  );
+  const selectedExists = props.clubs.some((club) => club.id === selectedClub);
+  const restoringSavedClub = Boolean(currentManager?.clubId && !selectedExists);
   const isOwner = props.room?.ownerId === props.identity.uid;
   const allReady = Boolean(props.room?.managers.length && props.room.managers.every((manager) => manager.ready));
 
   useEffect(() => {
-    if (currentManager?.clubId) setSelectedClub(currentManager.clubId);
-  }, [currentManager?.clubId]);
+    const savedClubId = currentManager?.clubId;
+    setSelectedClub((current) => {
+      if (savedClubId) return savedClubId;
+      return props.clubs.some((club) => club.id === current)
+        ? current
+        : props.clubs[0]?.id ?? current;
+    });
+  }, [currentManager?.clubId, props.clubs]);
 
   async function createRoom() {
     try {
@@ -67,7 +90,7 @@ export function LobbyView(props: LobbyViewProps) {
 
   async function confirmClub() {
     try {
-      await props.onReady(true, selected.code);
+      await props.onReady(true, selected.id);
       props.onClubSelected(selected);
       props.onToast(`${selected.name} reservado para você.`);
     } catch {
@@ -90,6 +113,23 @@ export function LobbyView(props: LobbyViewProps) {
     props.onToast('Código da sala copiado.');
   }
 
+  function changeTab(nextTab: typeof lobbyTabs[number], focus = false) {
+    setTab(nextTab);
+    if (focus) window.requestAnimationFrame(() => document.getElementById(`lobby-tab-${nextTab}`)?.focus());
+  }
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    const currentIndex = lobbyTabs.indexOf(tab);
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % lobbyTabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + lobbyTabs.length) % lobbyTabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = lobbyTabs.length - 1;
+    else return;
+    event.preventDefault();
+    changeTab(lobbyTabs[nextIndex], true);
+  }
+
   const connectionLabel = props.connectionState === 'connected'
     ? 'TEMPO REAL CONECTADO'
     : props.connectionState === 'connecting' ? 'CONECTANDO AO SERVIDOR' : 'MODO LOCAL / RECONECTANDO';
@@ -97,7 +137,9 @@ export function LobbyView(props: LobbyViewProps) {
   return (
     <main className="lobby-screen">
       <header className="lobby-header">
-        <button onClick={props.onBack} className="back-button"><ArrowLeft size={17} /> Sair</button>
+        <button onClick={props.room ? props.onDeselectRoom : props.onBack} className="back-button">
+          <ArrowLeft size={17} /> {props.room ? 'Meus saves' : 'Sair'}
+        </button>
         <div className="lobby-wordmark"><span className="wordmark-glyph"><Shield size={17} /></span>BOLA<span>MANAGER</span></div>
         <div className="connection-status"><span /> {connectionLabel}</div>
       </header>
@@ -115,15 +157,27 @@ export function LobbyView(props: LobbyViewProps) {
           </div>
 
           <div className="lobby-config">
-            <div className="segmented-control" role="tablist" aria-label="Tipo de acesso">
-              <button role="tab" aria-selected={tab === 'create'} onClick={() => setTab('create')}><Plus size={15} /> Criar sala</button>
-              <button role="tab" aria-selected={tab === 'join'} onClick={() => setTab('join')}><Link2 size={15} /> Entrar com código</button>
+            <div className="segmented-control segmented-control--three" role="tablist" aria-label="Gerenciar saves">
+              <button id="lobby-tab-saves" role="tab" aria-controls="lobby-panel-saves" aria-selected={tab === 'saves'} tabIndex={tab === 'saves' ? 0 : -1} onKeyDown={handleTabKeyDown} onClick={() => changeTab('saves')}><Save size={15} /> Meus saves</button>
+              <button id="lobby-tab-create" role="tab" aria-controls="lobby-panel-create" aria-selected={tab === 'create'} tabIndex={tab === 'create' ? 0 : -1} onKeyDown={handleTabKeyDown} onClick={() => changeTab('create')}><Plus size={15} /> Criar sala</button>
+              <button id="lobby-tab-join" role="tab" aria-controls="lobby-panel-join" aria-selected={tab === 'join'} tabIndex={tab === 'join' ? 0 : -1} onKeyDown={handleTabKeyDown} onClick={() => changeTab('join')}><Link2 size={15} /> Entrar</button>
             </div>
 
             {props.error && <p className="form-error" role="alert">{props.error}</p>}
             {props.loading && <p className="form-note">Buscando suas salas salvas no servidor…</p>}
 
-            {tab === 'create' ? (
+            <div id="lobby-panel-saves" role="tabpanel" aria-labelledby="lobby-tab-saves" hidden={tab !== 'saves'}>
+              <SaveManager
+                saves={props.savedRooms}
+                identity={props.identity}
+                pending={props.pending}
+                onSelect={props.onSelectSave}
+                onDelete={props.onDeleteSave}
+                onCreateNew={() => changeTab('create')}
+                onToast={props.onToast}
+              />
+            </div>
+            <div id="lobby-panel-create" role="tabpanel" aria-labelledby="lobby-tab-create" hidden={tab !== 'create'}>
               <div className="setup-form">
                 <label><span>Nome da temporada</span><input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label>
                 <div className="form-grid">
@@ -138,13 +192,14 @@ export function LobbyView(props: LobbyViewProps) {
                 </fieldset>
                 <Button variant="primary" loading={props.pending} disabled={props.pending} onClick={() => void createRoom()} icon={<ChevronRight size={16} />}>Criar e escolher clube</Button>
               </div>
-            ) : (
+            </div>
+            <div id="lobby-panel-join" role="tabpanel" aria-labelledby="lobby-tab-join" hidden={tab !== 'join'}>
               <form className="setup-form" onSubmit={(event) => void submitJoin(event)}>
                 <label><span>Código do convite</span><input name="roomCode" className="room-input" placeholder="BOLA-XXXX" maxLength={9} required /></label>
                 <p className="form-note"><LockKeyhole size={14} /> O código possui o formato BOLA-XXXX.</p>
                 <Button variant="primary" type="submit" loading={props.pending} disabled={props.pending} icon={<ChevronRight size={16} />}>Localizar sala</Button>
               </form>
-            )}
+            </div>
           </div>
         </section>
       ) : (
@@ -157,18 +212,19 @@ export function LobbyView(props: LobbyViewProps) {
 
             {props.error && <p className="form-error" role="alert">{props.error}</p>}
             <div className="club-selection">
-              <header><div><h2>Escolha seu clube</h2><p>Clubes confirmados por outro manager ficam bloqueados em tempo real.</p></div><Badge tone="info">{clubOptions.length} clubes</Badge></header>
+              <header><div><h2>Escolha seu clube</h2><p>Clubes confirmados por outro manager ficam bloqueados em tempo real.</p></div><Badge tone="info">{props.catalogLoading ? 'Atualizando…' : `${props.clubs.length} clubes · ${props.catalogSource === 'firestore' ? 'servidor' : 'demo'}`}</Badge></header>
+              {props.catalogError && <p className="form-note">{props.catalogError}</p>}
               <div className="club-list">
-                {clubOptions.map((club) => {
-                  const holder = props.room?.managers.find((manager) => manager.id !== props.identity.uid && manager.clubId === club.code);
+                {props.clubs.map((club) => {
+                  const holder = props.room?.managers.find((manager) => manager.id !== props.identity.uid && manager.clubId === club.id);
                   const available = !holder;
                   return (
-                    <button key={club.code} disabled={!available || Boolean(currentManager?.ready)} className={club.code === selectedClub ? 'selected' : ''} onClick={() => setSelectedClub(club.code)}>
+                    <button key={club.id} disabled={!available || Boolean(currentManager?.ready)} className={club.id === selectedClub ? 'selected' : ''} onClick={() => setSelectedClub(club.id)}>
                       <ClubMark code={club.code} color={club.color} />
                       <span className="club-list__name"><strong>{club.name}</strong><small>{club.city}</small></span>
                       <span className="club-list__metric"><small>FORÇA</small><strong>{club.stars.toFixed(1)} ★</strong></span>
                       <span className="club-list__metric"><small>CAIXA</small><strong>{club.budget}</strong></span>
-                      <span className="club-list__status">{available ? club.code === selectedClub ? <Check size={15} /> : 'Livre' : 'Escolhido'}</span>
+                      <span className="club-list__status">{available ? club.id === selectedClub ? <Check size={15} /> : 'Livre' : 'Escolhido'}</span>
                     </button>
                   );
                 })}
@@ -182,7 +238,7 @@ export function LobbyView(props: LobbyViewProps) {
               {props.room.managers.map((manager, index) => (
                 <div key={manager.id}>
                   <span className={`avatar ${index % 2 ? 'avatar--blue' : ''}`}>{manager.name.slice(0, 2).toUpperCase()}</span>
-                  <span><strong>{manager.name}</strong><small>{manager.clubId ? clubByCode(manager.clubId).name : 'Escolhendo clube'}{manager.id === props.identity.uid ? ' · Você' : ''}</small></span>
+                  <span><strong>{manager.name}</strong><small>{manager.clubId ? clubByCode(manager.clubId, props.clubs).name : 'Escolhendo clube'}{manager.id === props.identity.uid ? ' · Você' : ''}</small></span>
                   <Badge tone={manager.ready ? 'positive' : 'warning'} dot>{manager.ready ? 'Pronto' : 'Escolhendo'}</Badge>
                 </div>
               ))}
@@ -196,7 +252,7 @@ export function LobbyView(props: LobbyViewProps) {
             {props.room.status === 'active' ? (
               <Button variant="primary" onClick={props.onEnterGame} icon={<Zap size={16} />}>Entrar na temporada</Button>
             ) : !currentManager?.ready ? (
-              <Button variant="primary" loading={props.pending} disabled={props.pending} onClick={() => void confirmClub()} icon={<Check size={16} />}>Confirmar {selected.name}</Button>
+              <Button variant="primary" loading={props.pending || props.catalogLoading} disabled={props.pending || props.catalogLoading || restoringSavedClub} onClick={() => void confirmClub()} icon={<Check size={16} />}>{restoringSavedClub ? 'Carregando clube salvo' : `Confirmar ${selected.name}`}</Button>
             ) : isOwner && allReady ? (
               <Button variant="primary" loading={props.pending} disabled={props.pending} onClick={() => void startSeason()} icon={<Zap size={16} />}>Iniciar temporada</Button>
             ) : (

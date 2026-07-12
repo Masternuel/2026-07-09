@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const legacyIdentifier = z.string().trim().min(1).max(128).optional();
-const clubIdentifier = z.string().trim().min(2).max(40).transform((value) => value.toUpperCase());
+const clubIdentifier = z.string().trim().min(1).max(128);
 
 export const roomCodeSchema = z.string()
   .trim()
@@ -41,6 +41,13 @@ export const chatMessageSchema = z.object({
 export const matchStartSchema = z.object({
   code: roomCodeSchema,
   fixtureId: z.string().trim().min(1).max(80).optional(),
+  managerId: legacyIdentifier,
+}).strict();
+
+export const matchReadySchema = z.object({
+  code: roomCodeSchema,
+  fixtureId: z.string().trim().min(1).max(80).optional(),
+  ready: z.boolean().default(true),
   managerId: legacyIdentifier,
 }).strict();
 

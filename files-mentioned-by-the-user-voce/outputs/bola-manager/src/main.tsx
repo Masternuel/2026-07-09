@@ -9,6 +9,7 @@ import './styles/dashboard.css';
 import './styles/squad.css';
 import './styles/tactics.css';
 import './styles/match.css';
+import './styles/press-conference.css';
 import './styles/season.css';
 import './styles/club.css';
 import './styles/media.css';
