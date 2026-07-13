@@ -21,6 +21,7 @@ function normalizedUser(decoded, authType = "firebase") {
     name: decoded.name || emailName || "Manager",
     email: decoded.email || null,
     picture: decoded.picture || null,
+    editor: authType === "firebase" && decoded.editor === true,
     authType,
   };
 }
@@ -83,4 +84,3 @@ export function createSocketAuthMiddleware({ auth, allowDemoAuth = false, nodeEn
     }
   };
 }
-

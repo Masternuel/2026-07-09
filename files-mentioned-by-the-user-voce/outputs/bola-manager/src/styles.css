@@ -19,6 +19,7 @@
   --accent-dim: rgba(200, 255, 61, .1);
   --blue: #66a3ff;
   --red: #e05d60;
+  --star-red: #ff4d57;
   --amber: #e6b85c;
   --green: #69d596;
   --sidebar-w: 232px;
@@ -93,6 +94,7 @@ em { font-style: normal; }
 .club-mark::before { position: absolute; inset: 0; border: 1.5px solid var(--club-color); background: color-mix(in srgb, var(--club-color) 7%, transparent); content: ""; clip-path: polygon(50% 0, 93% 15%, 86% 75%, 50% 100%, 14% 75%, 7% 15%); }
 .club-mark::after { position: absolute; inset: 5px; border: 1px solid color-mix(in srgb, var(--club-color) 55%, transparent); content: ""; clip-path: polygon(50% 0, 93% 15%, 86% 75%, 50% 100%, 14% 75%, 7% 15%); }
 .club-mark > span { position: relative; z-index: 1; color: var(--club-color); font-size: 9px; font-weight: 700; letter-spacing: -.02em; }
+.club-mark > img { position: absolute; z-index: 2; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); object-fit: contain; filter: none; }
 .club-mark--sm { width: 28px; height: 32px; }
 .club-mark--sm > span { font-size: 7px; }
 .club-mark--lg { width: 55px; height: 64px; }
@@ -108,6 +110,12 @@ em { font-style: normal; }
 .star-rating--compact { min-width: 48px; gap: 3px; color: var(--amber); }
 .star-rating--compact strong { color: var(--ink); }
 .star-rating--compact span { color: var(--muted-2); font-size: 8px; }
+
+.star-player-mark { display: inline-grid; flex: none; place-items: center; color: var(--star-red); vertical-align: middle; }
+.star-player-mark--sm { width: 14px; height: 14px; }
+.star-player-mark--sm svg { width: 12px; height: 12px; }
+.star-player-mark--md { width: 18px; height: 18px; }
+.star-player-mark--md svg { width: 16px; height: 16px; }
 
 .modal-open { overflow: hidden; }
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; overflow: auto; place-items: center; padding: 24px; background: rgba(5,6,7,.78); animation: fade-in 140ms ease both; }

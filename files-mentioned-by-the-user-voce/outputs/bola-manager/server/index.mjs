@@ -11,8 +11,16 @@ import { createMarketRouter } from "./routes/market.mjs";
 import { createMatchRouter } from "./routes/match.mjs";
 import { createNewsRouter } from "./routes/news.mjs";
 import { createTeamsRouter } from "./routes/teams.mjs";
+import { createTournamentsRouter } from "./routes/tournaments.mjs";
+import { createEditorRouter } from "./routes/editor.mjs";
 import { initializeFirebaseAdmin } from "./services/firebaseAdmin.mjs";
+import { createSocialAiService } from "./services/socialAi.mjs";
+import { createCatalogMediaService } from "./services/catalogMedia.mjs";
+import { createBrasfootImportSessionService } from "./services/brasfootImportSessions.mjs";
+import { channelForRoom } from "./sockets/helpers.mjs";
 import { registerSocketHandlers } from "./sockets/index.mjs";
+import { NewsStore } from "./store/newsStore.mjs";
+import { CatalogStore } from "./store/catalogStore.mjs";
 import { createRoomPersistence } from "./store/roomPersistence.mjs";
 import { RoomStore } from "./store/roomStore.mjs";
 
@@ -21,6 +29,11 @@ export async function createBolaManagerServer({
   logger = console,
   store: injectedStore,
   firebase: injectedFirebase,
+  newsStore: injectedNewsStore,
+  socialAi: injectedSocialAi,
+  catalogStore: injectedCatalogStore,
+  mediaService: injectedMediaService,
+  brasfootImportService: injectedBrasfootImportService,
 } = {}) {
   const config = getServerConfig(env);
   const firebase = injectedFirebase ?? await initializeFirebaseAdmin(env);
@@ -43,6 +56,20 @@ export async function createBolaManagerServer({
     },
     credentials: true,
   };
+  const io = new SocketIOServer(httpServer, { cors: corsOptions });
+  const newsStore = injectedNewsStore ?? new NewsStore({ firestore: firebase.firestore });
+  const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore: firebase.firestore });
+  const mediaService = injectedMediaService ?? createCatalogMediaService({ bucket: firebase.bucket });
+  const brasfootImportService = injectedBrasfootImportService ?? createBrasfootImportSessionService({
+    database: firebase.firestore,
+    mediaService,
+    logger,
+  });
+  const socialAi = injectedSocialAi ?? createSocialAiService({
+    apiKey: env.GEMINI_API_KEY,
+    model: env.GEMINI_MODEL,
+    logger,
+  });
 
   app.disable("x-powered-by");
   app.use(cors(corsOptions));
@@ -65,10 +92,22 @@ export async function createBolaManagerServer({
     nodeEnv: config.nodeEnv,
   });
   app.use("/api/rooms", expressAuth, createRoomsRouter(store));
-  app.use("/api/teams", expressAuth, createTeamsRouter(firebase.firestore));
+  app.use("/api/teams", expressAuth, createTeamsRouter(firebase.firestore, catalogStore));
+  app.use("/api/tournaments", expressAuth, createTournamentsRouter(catalogStore));
   app.use("/api/matches", expressAuth, createMatchRouter(store));
   app.use("/api/market", expressAuth, createMarketRouter(store, firebase.firestore));
-  app.use("/api/news", expressAuth, createNewsRouter(store, firebase.firestore));
+  app.use("/api/news", expressAuth, createNewsRouter(store, newsStore, socialAi, {
+    logger,
+    broadcast(post) {
+      io.to(channelForRoom(post.roomCode)).emit("news:post", post);
+    },
+  }));
+  app.use("/api/editor", expressAuth, createEditorRouter(catalogStore, mediaService, {
+    nodeEnv: config.nodeEnv,
+    allowLocalEditor: config.allowLocalEditor,
+    editorAdminUids: config.editorAdminUids,
+    brasfootImportService,
+  }));
 
   app.use((request, response) => {
     response.status(404).json({
@@ -81,13 +120,12 @@ export async function createBolaManagerServer({
     response.status(status).json({
       error: {
         code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
-        message: status >= 500 ? "Erro interno do servidor" : error.message,
+        message: status >= 500 && error.expose !== true ? "Erro interno do servidor" : error.message,
         details: error.details,
       },
     });
   });
 
-  const io = new SocketIOServer(httpServer, { cors: corsOptions });
   io.use(createSocketAuthMiddleware({
     auth: firebase.auth,
     allowDemoAuth: config.allowDemoAuth,
@@ -95,6 +133,8 @@ export async function createBolaManagerServer({
   }));
   const sockets = registerSocketHandlers(io, {
     store,
+    catalogStore,
+    mediaService,
     matchDelayMs: config.matchEventDelayMs,
   });
 
@@ -104,6 +144,10 @@ export async function createBolaManagerServer({
     firebase,
     httpServer,
     io,
+    newsStore,
+    catalogStore,
+    brasfootImportService,
+    socialAi,
     store,
     async listen(port = config.port) {
       await new Promise((resolveListen, reject) => {
@@ -118,6 +162,7 @@ export async function createBolaManagerServer({
     async close() {
       sockets.close();
       await new Promise((resolveClose) => io.close(() => resolveClose()));
+      await brasfootImportService.close?.();
     },
   };
 }

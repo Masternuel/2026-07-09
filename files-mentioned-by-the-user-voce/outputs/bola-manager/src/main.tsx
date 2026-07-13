@@ -13,6 +13,7 @@ import './styles/press-conference.css';
 import './styles/season.css';
 import './styles/club.css';
 import './styles/media.css';
+import './styles/editor.css';
 import './styles/responsive.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

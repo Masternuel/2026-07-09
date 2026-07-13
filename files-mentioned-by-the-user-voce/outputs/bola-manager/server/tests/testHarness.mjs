@@ -6,12 +6,17 @@ const USERS = {
   "owner-token": { uid: "uid-owner", name: "Dona da Sala", email: "owner@example.com" },
   "second-token": { uid: "uid-second", name: "Segundo Manager", email: "second@example.com" },
   "intruder-token": { uid: "uid-intruder", name: "Intruso", email: "intruder@example.com" },
+  "editor-token": { uid: "uid-editor", name: "Editora", email: "editor@example.com", editor: true },
+  "admin-token": { uid: "uid-admin", name: "Admin", email: "admin@example.com" },
+  "string-editor-token": { uid: "uid-string-editor", name: "Claim invalido", editor: "true" },
 };
 
-export function fakeFirebase() {
+export function fakeFirebase({ firestore = null, bucket = null } = {}) {
   return {
     enabled: true,
-    firestore: null,
+    firestore,
+    storage: bucket ? { bucket: () => bucket } : null,
+    bucket,
     auth: {
       async verifyIdToken(token) {
         const decoded = USERS[token];
@@ -22,7 +27,17 @@ export function fakeFirebase() {
   };
 }
 
-export async function startTestServer({ store: injectedStore, matchDelayMs = 0 } = {}) {
+export async function startTestServer({
+  store: injectedStore,
+  newsStore,
+  socialAi,
+  catalogStore,
+  mediaService,
+  brasfootImportService,
+  firebase,
+  env = {},
+  matchDelayMs = 0,
+} = {}) {
   const store = injectedStore ?? new RoomStore({
     persistence: new MemoryRoomPersistence(),
     codeFactory: () => "BOLA-T3ST",
@@ -33,9 +48,15 @@ export async function startTestServer({ store: injectedStore, matchDelayMs = 0 }
       NODE_ENV: "test",
       CLIENT_ORIGIN: "*",
       MATCH_EVENT_DELAY_MS: String(matchDelayMs),
+      ...env,
     },
-    firebase: fakeFirebase(),
+    firebase: firebase ?? fakeFirebase(),
     store,
+    newsStore,
+    socialAi,
+    catalogStore,
+    mediaService,
+    brasfootImportService,
     logger: { error() {} },
   });
   const address = await server.listen(0);

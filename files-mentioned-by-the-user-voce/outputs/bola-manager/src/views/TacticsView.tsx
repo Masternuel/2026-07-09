@@ -1,38 +1,56 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ClipboardCheck, EyeOff, GripVertical, RotateCcw, Save, Shield, Sparkles, Target, Users } from 'lucide-react';
 import { InstructionsPanel, type InstructionKey, type InstructionValues } from '../components/tactics/InstructionsPanel';
 import { TacticsField } from '../components/tactics/TacticsField';
 import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
+import { StarPlayerMark } from '../components/shared/StarPlayerMark';
 import { formations } from '../constants/formations';
-import { players } from '../data/demoData';
-import type { ClubChoice, Player } from '../types';
+import type { ClubChoice, LineupSaveResponse, Player } from '../types';
 import { average } from '../utils/formatters';
+import { buildSavedLineup, createBench } from '../utils/playerRoster';
 
 interface TacticsViewProps {
+  players: Player[];
   club: ClubChoice;
   opponentName?: string;
+  savedLineupIds?: string[];
+  onSaveLineup?: (lineupIds: string[]) => Promise<LineupSaveResponse>;
   onToast: (message: string) => void;
 }
 
-const initialLineup = [players[0], players[3], players[1], players[2], players[4], players[5], players[6], players[7], players[8], players[9], players[10]];
 const initialInstructions: InstructionValues = {
   pressureLine: 'Alta', width: 'Ampla', tempo: 'Rápido', pressing: 'Intensa', offensiveTransition: 'Construir', defensiveTransition: 'Pressão imediata',
 };
 
-export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsViewProps) {
+export function TacticsView({ players, club, opponentName = 'Santos', savedLineupIds, onSaveLineup, onToast }: TacticsViewProps) {
+  const savedLineupKey = savedLineupIds?.join('\u0000') ?? '';
+  const initialSquad = useMemo(() => {
+    const lineup = buildSavedLineup(players, formations[0], savedLineupIds);
+    return { lineup, bench: createBench(players, lineup) };
+  }, [players, savedLineupKey]);
   const [formationId, setFormationId] = useState('4-3-3');
-  const [lineup, setLineup] = useState<Player[]>(initialLineup);
-  const [bench, setBench] = useState<Player[]>(players.slice(11, 18));
+  const [lineup, setLineup] = useState<Array<Player | undefined>>(() => initialSquad.lineup);
+  const [bench, setBench] = useState<Player[]>(() => initialSquad.bench);
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [instructions, setInstructions] = useState(initialInstructions);
   const [mentality, setMentality] = useState('Positiva');
   const [dirty, setDirty] = useState(false);
+  const [savePending, setSavePending] = useState(false);
   const [secret, setSecret] = useState(true);
   const [panelTab, setPanelTab] = useState<'team' | 'individual' | 'setpieces'>('team');
 
   const formation = formations.find((item) => item.id === formationId) ?? formations[0];
-  const teamRating = useMemo(() => average(lineup.map((player) => average(Object.values(player.attributes)))), [lineup]);
+  const teamRating = useMemo(() => average(lineup.flatMap((player) => (
+    player ? [average(Object.values(player.attributes))] : []
+  ))), [lineup]);
+  const selectedPlayer = selectedSlot === null ? undefined : lineup[selectedSlot];
+
+  useEffect(() => {
+    setLineup(initialSquad.lineup);
+    setBench(initialSquad.bench);
+    setSelectedSlot(null);
+  }, [initialSquad]);
 
   function swap(from: number, to: number) {
     setLineup((current) => {
@@ -50,7 +68,9 @@ export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsV
     }
     const outgoing = lineup[selectedSlot];
     setLineup((current) => current.map((item, index) => index === selectedSlot ? player : item));
-    setBench((current) => current.map((item) => item.id === player.id ? outgoing : item));
+    setBench((current) => outgoing
+      ? current.map((item) => item.id === player.id ? outgoing : item)
+      : current.filter((item) => item.id !== player.id));
     setSelectedSlot(null);
     setDirty(true);
   }
@@ -60,15 +80,33 @@ export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsV
     setDirty(true);
   }
 
-  function save() {
-    setDirty(false);
-    onToast(`Plano “${club.name} vertical” salvo para a sala.`);
+  async function save() {
+    const lineupIds = lineup.flatMap((player) => player ? [player.id] : []).slice(0, 11);
+    if (lineupIds.length === 0) {
+      onToast('Defina pelo menos um jogador no campo antes de salvar.');
+      return;
+    }
+    if (!onSaveLineup) {
+      setDirty(false);
+      onToast(`Plano “${club.name} vertical” salvo localmente.`);
+      return;
+    }
+    setSavePending(true);
+    try {
+      await onSaveLineup(lineupIds);
+      setDirty(false);
+      onToast(`Plano “${club.name} vertical” salvo para a sala.`);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Não foi possível salvar a escalação.');
+    } finally {
+      setSavePending(false);
+    }
   }
 
   function restore() {
     setFormationId('4-3-3');
-    setLineup(initialLineup);
-    setBench(players.slice(11, 18));
+    setLineup(initialSquad.lineup);
+    setBench(initialSquad.bench);
     setSelectedSlot(null);
     setInstructions(initialInstructions);
     setMentality('Positiva');
@@ -79,7 +117,7 @@ export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsV
     <main className="tactics-view view-enter">
       <div className="view-heading tactics-heading">
         <div><p className="eyebrow">PLANO DE JOGO · VERSÃO 08</p><h1>Táticas</h1><p>Estrutura dinâmica, funções e comportamento sem a bola.</p></div>
-        <div className="view-heading__actions"><Button variant="secondary" icon={<RotateCcw size={15} />} onClick={restore}>Restaurar</Button><Button variant="primary" icon={dirty ? <Save size={15} /> : <Check size={15} />} onClick={save}>{dirty ? 'Salvar alterações' : 'Plano salvo'}</Button></div>
+        <div className="view-heading__actions"><Button variant="secondary" icon={<RotateCcw size={15} />} onClick={restore}>Restaurar</Button><Button variant="primary" loading={savePending} icon={dirty ? <Save size={15} /> : <Check size={15} />} onClick={() => void save()}>{dirty ? 'Salvar alterações' : 'Plano salvo'}</Button></div>
       </div>
 
       <div className="tactics-workspace">
@@ -100,7 +138,7 @@ export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsV
             <header><span><Users size={14} /> BANCO DE RESERVAS</span><small>Selecione uma posição e toque no reserva</small></header>
             <div className="bench-list">
               {bench.map((player) => (
-                <button key={player.id} onClick={() => selectFromBench(player)}><GripVertical size={13} /><span className="bench-number">{player.number}</span><span><strong>{player.shortName}</strong><small>{player.position} · {player.condition}%</small></span><strong>{average(Object.values(player.attributes)).toFixed(1)}</strong></button>
+                <button key={player.id} onClick={() => selectFromBench(player)}><GripVertical size={13} /><span className="bench-number">{player.number}</span><span><span className="bench-player__name"><strong>{player.shortName}</strong>{player.isStar && <StarPlayerMark />}</span><small>{player.position} · {player.condition}%</small></span><strong>{average(Object.values(player.attributes)).toFixed(1)}</strong></button>
               ))}
             </div>
           </div>
@@ -120,7 +158,7 @@ export function TacticsView({ club, opponentName = 'Santos', onToast }: TacticsV
           {panelTab === 'individual' && (
             <div className="individual-panel">
               <p>Selecione um atleta no campo para definir a função individual.</p>
-              {selectedSlot !== null ? <div className="selected-player-instruction"><span className="avatar">{lineup[selectedSlot].number}</span><span><strong>{lineup[selectedSlot].name}</strong><small>{formation.slots[selectedSlot].role}</small></span></div> : <div className="empty-instruction"><Users size={22} /><strong>Nenhum atleta selecionado</strong><span>Toque em uma posição do campo.</span></div>}
+              {selectedSlot !== null && selectedPlayer ? <div className="selected-player-instruction"><span className="avatar">{selectedPlayer.number}</span><span><strong>{selectedPlayer.name}</strong><small>{formation.slots[selectedSlot].role}</small></span></div> : <div className="empty-instruction"><Users size={22} /><strong>Nenhum atleta selecionado</strong><span>Toque em uma posição do campo.</span></div>}
               <label><span>Com a bola</span><select defaultValue="Apoiar por dentro"><option>Apoiar por dentro</option><option>Dar amplitude</option><option>Atacar o espaço</option></select></label>
               <label><span>Sem a bola</span><select defaultValue="Pressionar mais"><option>Pressionar mais</option><option>Guardar posição</option><option>Marcação individual</option></select></label>
             </div>

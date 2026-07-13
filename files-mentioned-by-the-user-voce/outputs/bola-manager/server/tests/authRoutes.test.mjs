@@ -10,6 +10,25 @@ test("bloqueia modo demo em producao", () => {
   );
 });
 
+test("aceita dev e preview nos hosts locais por padrao", () => {
+  const origins = getServerConfig({}).clientOrigin.split(",");
+  assert.deepEqual(origins, [
+    "http://localhost:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:4173",
+  ]);
+});
+
+test("health nao revela o provedor de conteudo social", async (context) => {
+  const { server, url } = await startTestServer();
+  context.after(() => server.close());
+
+  const response = await jsonRequest(`${url}/health`);
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(JSON.stringify(await response.json()), /gemini|socialAi|fallback/i);
+});
+
 test("rotas exigem token, sobrescrevem identidade e listam somente memberships", async (context) => {
   const { server, url } = await startTestServer();
   context.after(() => server.close());
@@ -49,4 +68,3 @@ test("rotas exigem token, sobrescrevem identidade e listam somente memberships",
   const memberList = await jsonRequest(`${url}/api/rooms`, "second-token");
   assert.equal((await memberList.json()).rooms.length, 1);
 });
-

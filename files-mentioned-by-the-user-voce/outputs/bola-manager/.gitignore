@@ -7,5 +7,7 @@ dist/
 coverage/
 npm-debug.log*
 /.npm-cache/
+/.tmp/
+/artifacts/
 /data/brasfoot-normalized.json
 /data/*.dat

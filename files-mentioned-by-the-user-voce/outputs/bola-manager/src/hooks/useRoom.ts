@@ -227,6 +227,12 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
       status: 'waiting',
       activeLeagues: payload.activeLeagues ?? ['BR-A', 'BR-B'],
       seasonLength: payload.seasonLength ?? 1,
+      unlimitedSeasons: payload.unlimitedSeasons === true,
+      currentSeason: 1,
+      seasonYear: new Date(now).getUTCFullYear(),
+      seasonStartedAt: null,
+      seasonHistory: [],
+      careerCompleted: false,
       maxManagers: payload.maxManagers ?? 6,
       createdAt: now,
       startedAt: null,
@@ -333,7 +339,8 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
   const startRoom = useCallback(() => withPending(async () => {
     if (!room || !identity) throw new Error('Nenhuma sala selecionada.');
     if (!socket?.connected && identity.mode === 'demo') {
-      return { ...room, status: 'active', startedAt: new Date().toISOString(), revision: room.revision + 1 };
+      const startedAt = new Date().toISOString();
+      return { ...room, status: 'active', startedAt, seasonStartedAt: room.seasonStartedAt ?? startedAt, revision: room.revision + 1 };
     }
     if (!socket?.connected) throw new Error('A conexão em tempo real foi interrompida.');
     return waitForRoomAck((acknowledge) => socket.emit('room:start', { code: room.code }, acknowledge));

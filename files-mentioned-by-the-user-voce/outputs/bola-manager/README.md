@@ -30,6 +30,7 @@ Na tela inicial, entre com Google/e-mail para usar o fluxo autenticado ou escolh
 - Editor tático dirigido por `lineupSlots` das formações, troca por arrastar, banco e instruções.
 - Partida autoritativa no servidor com eventos Socket.io a cada 800 ms; o cliente adapta todos os eventos para a narração e recebe placar/estatísticas do servidor.
 - Rotas de calendário, competições, mercado, finanças, infraestrutura, rankings, notícias, comissão, relatórios e configurações com dados e interações próprias.
+- Rede social da sala com posts persistentes, conversas encadeadas em tempo real, repercussão de personagens e notícias editoriais geradas a partir de declarações relevantes.
 
 ## Comandos
 
@@ -39,7 +40,7 @@ npm run build           # typecheck + build Vite
 npm run typecheck       # TypeScript estrito
 npm run test:server     # testes Node do backend
 npm run server          # servidor de produção
-npm run import:brasfoot # importação normalizada em dry-run
+npm run import:brasfoot # dry-run do JSON padrão; aceite -- --input C:\Brasfoot para a pasta real
 ```
 
 ## Firebase e dados
@@ -48,9 +49,11 @@ O Firebase Web fornecido está em `.env.local`, ignorado pelo Git. Variáveis `V
 
 Com Firebase Admin configurado, o backend verifica o ID token no REST e no handshake Socket.io, deriva o UID no servidor e persiste salas em transações Firestore. Sem credenciais, o backend só inicia em memória quando `ALLOW_DEMO_AUTH=true` e nunca permite esse modo em produção.
 
-O importador em `scripts/import-brasfoot.mjs` é administrativo e aceita entrada JSON já normalizada. Ele **não tenta interpretar o formato binário proprietário `.dat`**, cuja estrutura não foi documentada. Para integrar arquivos reais, implemente um adaptador autorizado que gere o contrato JSON validado pelo script e faça primeiro um `--dry-run`.
+O importador administrativo em `scripts/import-brasfoot.mjs` aceita JSON normalizado, `.ban`, `.cfg`, a pasta `teams` ou a raiz do Brasfoot. O parser lê Java Serialization como dados e nunca carrega classes da origem. Faça primeiro um `--dry-run --report`, confira corrompidos/duplicidades e consulte [scripts/BRASFOOT_IMPORT.md](./scripts/BRASFOOT_IMPORT.md) antes do commit.
 
-O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O projeto não depende do Firebase Storage: escudos e imagens podem ser servidos como assets estáticos do frontend.
+O mesmo fluxo está disponível na interface: entre com uma conta autorizada, abra **Editor da Base**, clique em **Importar Brasfoot** e arraste os arquivos de `teams` ou use **Selecionar pasta**. O Editor aceita `.ban`, `.cfg` e os escudos `.png`, mostra uma prévia de clubes/jogadores/avisos e só grava no Firebase após confirmação. Cada lote aceita até 200 arquivos, 32 MB por arquivo e 256 MB no total.
+
+O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O Editor aceita escudos, avatares e troféus pelo backend; configure `FIREBASE_STORAGE_BUCKET` no servidor. Upload direto pelo cliente permanece bloqueado pelas regras do Storage.
 
 ## Deploy
 
@@ -67,6 +70,7 @@ O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootCl
 - Start command: `npm run server`.
 - Health check: `/health`.
 - Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
+- Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). Nunca use prefixo `VITE_` nessa chave.
 - O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
 
 ## Limites desta vertical slice
@@ -75,4 +79,4 @@ O projeto comprova o ciclo principal e apresenta as áreas dos 23 módulos, mas 
 
 O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados e o histórico necessário para sincronização são persistidos no Firestore. A emissão temporizada de uma partida que ainda está acontecendo continua no processo Socket.io e exigirá coordenação entre réplicas para escalar horizontalmente no Railway.
 
-Também permanecem como próximas etapas: catálogo Brasfoot real, engines completos dos 23 módulos, persistência de táticas/calendário/finanças, adapter Socket.io entre réplicas, balanceamento avançado e testes E2E com dois navegadores reais.
+Também permanecem como próximas etapas: engines completos dos 23 módulos, persistência de táticas/calendário/finanças, adapter Socket.io entre réplicas, balanceamento avançado e testes E2E com dois navegadores reais.

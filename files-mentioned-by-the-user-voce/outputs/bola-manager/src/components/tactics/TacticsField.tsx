@@ -1,10 +1,11 @@
 import { useState } from 'react';
+import { StarPlayerMark } from '../shared/StarPlayerMark';
 import type { Formation, Player } from '../../types';
 import { cx } from '../../utils/formatters';
 
 interface TacticsFieldProps {
   formation: Formation;
-  lineup: Player[];
+  lineup: Array<Player | undefined>;
   compact?: boolean;
   onSwap?: (fromIndex: number, toIndex: number) => void;
   selectedIndex?: number | null;
@@ -27,16 +28,16 @@ export function TacticsField({ formation, lineup, compact = false, onSwap, selec
             key={slot.id}
             className={cx('pitch-player', selectedIndex === index && 'selected', dragIndex === index && 'dragging')}
             style={{ left: `${slot.x}%`, top: `${slot.y}%` }}
-            draggable={Boolean(onSwap)}
+            draggable={Boolean(onSwap && activePlayer)}
             onDragStart={() => setDragIndex(index)}
             onDragEnd={() => setDragIndex(null)}
             onDragOver={(event) => event.preventDefault()}
             onDrop={() => { if (dragIndex !== null && dragIndex !== index) onSwap?.(dragIndex, index); setDragIndex(null); }}
-            onClick={() => onSelect?.(index)}
-            aria-label={`${slot.role}: ${activePlayer?.name ?? 'posição vazia'}`}
+            onClick={() => { if (activePlayer) onSelect?.(index); }}
+            aria-label={`${slot.role}: ${activePlayer?.name ?? 'posição vazia'}${activePlayer?.isStar ? ', jogador estrela' : ''}`}
           >
             <span className="pitch-player__disc">{activePlayer?.number ?? '–'}</span>
-            <span className="pitch-player__name">{activePlayer?.shortName ?? slot.role}</span>
+            <span className="pitch-player__name"><span>{activePlayer?.shortName ?? slot.role}</span>{activePlayer?.isStar && <StarPlayerMark />}</span>
             {!compact && <span className="pitch-player__role">{slot.role}</span>}
           </button>
         );

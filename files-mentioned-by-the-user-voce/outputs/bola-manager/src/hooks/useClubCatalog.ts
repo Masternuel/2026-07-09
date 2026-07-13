@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clubOptions, type ClubOption } from '../constants/clubs';
 import { apiRequest, type ApiCredentials } from '../lib/apiClient';
 import { useAuth } from './useAuth';
@@ -15,6 +15,7 @@ interface BrasfootClubDto {
   state?: string | null;
   city?: string;
   budget?: number | string;
+  crestImageUrl?: string | null;
 }
 
 interface TeamsResponse {
@@ -61,6 +62,7 @@ function normalizeClub(team: BrasfootClubDto): ClubOption | null {
     stars,
     budget: formatBudget(team.budget),
     color: primaryColor,
+    crestImageUrl: typeof team.crestImageUrl === 'string' ? team.crestImageUrl : null,
     initiallyAvailable: true,
   };
 }
@@ -85,6 +87,7 @@ export function useClubCatalog() {
   const [remoteClubs, setRemoteClubs] = useState<ClubOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     if (auth.status !== 'authenticated' || !auth.identity || auth.identity.mode !== 'firebase') {
@@ -118,12 +121,15 @@ export function useClubCatalog() {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [auth.status, auth.identity, auth.getIdToken]);
+  }, [auth.status, auth.identity, auth.getIdToken, refreshToken]);
+
+  const refresh = useCallback(() => setRefreshToken((current) => current + 1), []);
 
   return useMemo(() => ({
     clubs: remoteClubs.length ? remoteClubs : clubOptions,
     source: (remoteClubs.length ? 'firestore' : 'fallback') as ClubCatalogSource,
     loading,
     error,
-  }), [remoteClubs, loading, error]);
+    refresh,
+  }), [remoteClubs, loading, error, refresh]);
 }

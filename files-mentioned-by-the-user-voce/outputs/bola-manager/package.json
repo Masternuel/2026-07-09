@@ -12,7 +12,8 @@
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview",
     "test:server": "node --test server/tests/*.test.mjs",
-    "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json"
+    "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json",
+    "seed:builtin": "node scripts/seed-builtin-catalog.mjs --dry-run"
   },
   "dependencies": {
     "cors": "^2.8.5",

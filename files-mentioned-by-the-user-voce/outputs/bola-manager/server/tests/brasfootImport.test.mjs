@@ -35,9 +35,25 @@ test("normaliza atributos sem alterar IDs canonicos", () => {
   assert.equal(player.attributes.passe, 12);
   assert.equal(player.stars.velocidade, 8);
   assert.equal(player.marketValue, 21_000_000);
+  assert.equal(player.isStar, false);
   assert.deepEqual(Object.keys(player.attributes), [
     "velocidade", "chute", "drible", "nocao", "defesa", "passe", "peBom", "peRuim",
   ]);
+});
+
+test("preserva jogador estrela explicitamente sem inferir por overall", () => {
+  const dataset = validDataset();
+  dataset.players[0].isStar = true;
+  dataset.players.push({
+    ...dataset.players[0],
+    id: "player-overall-alto",
+    isStar: undefined,
+    overall: 100,
+  });
+  const result = normalizeDataset(dataset);
+
+  assert.equal(result.players[0].isStar, true);
+  assert.equal(result.players[1].isStar, false);
 });
 
 test("preserva IDs numericos curtos usados por bases legadas", () => {

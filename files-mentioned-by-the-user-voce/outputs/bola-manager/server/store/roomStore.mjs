@@ -6,6 +6,7 @@ import {
   fixtureIdsEqual,
   nextFixtureId,
 } from "../game/fixtures.mjs";
+import { careerHasNextSeason, ensureCareerState } from "../game/career.mjs";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -38,7 +39,16 @@ export class RoomStore {
     this.#now = now;
   }
 
-  async createRoom({ name, creatorId, creatorName, clubId, activeLeagues, seasonLength, maxManagers }) {
+  async createRoom({
+    name,
+    creatorId,
+    creatorName,
+    clubId,
+    activeLeagues,
+    seasonLength,
+    unlimitedSeasons = false,
+    maxManagers,
+  }) {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const code = this.#normalizeCode(this.#codeFactory());
       const createdAt = this.#now().toISOString();
@@ -50,6 +60,13 @@ export class RoomStore {
         status: "waiting",
         activeLeagues: [...activeLeagues],
         seasonLength,
+        unlimitedSeasons,
+        currentSeason: 1,
+        seasonYear: new Date(createdAt).getUTCFullYear(),
+        seasonStartedAt: createdAt,
+        seasonHistory: [],
+        careerCompleted: false,
+        careerCompletedAt: null,
         maxManagers,
         createdAt,
         updatedAt: createdAt,
@@ -62,6 +79,7 @@ export class RoomStore {
         completedFixtureIds: [],
         completedMatches: [],
         lastCompletedMatch: null,
+        lineups: [],
         managerIds: [creatorId],
         managers: [{
           id: creatorId,
@@ -128,6 +146,7 @@ export class RoomStore {
         if (room.status !== "waiting") return undefined;
         if (clubId) this.#assertClubAvailable(room, clubId, managerId);
         existing.name = managerName;
+        if (clubId && !this.#clubIdsEqual(existing.clubId, clubId)) this.#removeLineup(room, managerId);
         existing.clubId = clubId ?? existing.clubId;
         return room;
       }
@@ -159,6 +178,7 @@ export class RoomStore {
       if (!manager) throw new RoomError("Manager nao pertence a sala", "MANAGER_NOT_FOUND", 404);
       if (clubId) {
         this.#assertClubAvailable(room, clubId, managerId);
+        if (!this.#clubIdsEqual(manager.clubId, clubId)) this.#removeLineup(room, managerId);
         manager.clubId = clubId;
       }
       if (ready && !manager.clubId) {
@@ -177,6 +197,7 @@ export class RoomStore {
       }
       const manager = room.managers.find((candidate) => candidate.id === managerId);
       if (!manager) throw new RoomError("Manager nao pertence a sala", "MANAGER_NOT_FOUND", 404);
+      ensureCareerState(room, this.#now());
       const migrated = ensureFixtureSchedule(room);
       migratedDuringTransaction = migratedDuringTransaction || migrated;
       if (!room.currentFixtureId) {
@@ -198,13 +219,40 @@ export class RoomStore {
     });
   }
 
+  async saveLineup(code, managerId, clubId, lineupIds) {
+    return this.#mutate(code, (room) => {
+      const manager = room.managers.find((candidate) => candidate.id === managerId);
+      if (!manager) throw new RoomError("Manager nao pertence a sala", "MANAGER_NOT_FOUND", 404);
+      if (!manager.clubId) throw new RoomError("Escolha um clube antes de escalar", "CLUB_REQUIRED", 409);
+      if (!this.#clubIdsEqual(manager.clubId, clubId)) {
+        throw new RoomError("Clube da escalacao mudou", "LINEUP_CLUB_CHANGED", 409);
+      }
+      room.lineups = Array.isArray(room.lineups) ? room.lineups : [];
+      this.#removeLineup(room, managerId);
+      const lineup = {
+        managerId,
+        clubId: manager.clubId,
+        lineupIds: [...lineupIds],
+        updatedAt: this.#now().toISOString(),
+      };
+      room.lineups.push(lineup);
+      if (Array.isArray(room.matchReadiness?.managerIds)) {
+        room.matchReadiness.managerIds = room.matchReadiness.managerIds
+          .filter((readyManagerId) => readyManagerId !== managerId);
+      }
+      return room;
+    });
+  }
+
   async prepareMatch(code, managerId, requestedFixtureId) {
     let migrated = false;
     const room = await this.#mutate(code, (current) => {
       if (!current.managerIds.includes(managerId)) {
         throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
       }
-      const changed = ensureFixtureSchedule(current);
+      const careerChanged = ensureCareerState(current, this.#now());
+      const fixtureChanged = ensureFixtureSchedule(current);
+      const changed = careerChanged || fixtureChanged;
       migrated ||= changed;
       return changed ? current : undefined;
     });
@@ -217,6 +265,7 @@ export class RoomStore {
 
   async startRoom(code, managerId) {
     return this.#mutate(code, (room) => {
+      ensureCareerState(room, this.#now());
       if (room.ownerId !== managerId) {
         throw new RoomError("Somente o criador pode iniciar a temporada", "OWNER_REQUIRED", 403);
       }
@@ -228,6 +277,9 @@ export class RoomStore {
       }
       room.status = "active";
       room.startedAt = this.#now().toISOString();
+      room.seasonStartedAt = room.startedAt;
+      room.careerCompleted = false;
+      room.careerCompletedAt = null;
       room.fixtureSchedule = createFixtureSchedule(room);
       room.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
       room.currentFixtureId = room.fixtureSchedule[0]?.fixtureId ?? null;
@@ -246,6 +298,7 @@ export class RoomStore {
       if (current.status !== "active") {
         throw new RoomError("A sala nao esta ativa", "ROOM_NOT_ACTIVE", 409);
       }
+      ensureCareerState(current, this.#now());
       current.completedFixtureIds ??= [];
       current.completedMatches ??= [];
       if (current.completedFixtureIds.some((completedId) => fixtureIdsEqual(completedId, fixtureId))) {
@@ -258,6 +311,7 @@ export class RoomStore {
         (fixture) => fixtureIdsEqual(fixture.fixtureId, fixtureId),
       )?.fixtureId ?? current.currentFixtureId;
       const upcomingFixtureId = nextFixtureId(current, canonicalFixtureId);
+      const completedAt = this.#now().toISOString();
       const summary = {
         code: current.code,
         id: result.id,
@@ -266,8 +320,12 @@ export class RoomStore {
         awayTeam: result.awayTeam,
         score: structuredClone(result.score),
         statistics: structuredClone(result.statistics),
+        ...(result.starImpact ? { starImpact: structuredClone(result.starImpact) } : {}),
+        ...(result.strengthProfile ? { strengthProfile: structuredClone(result.strengthProfile) } : {}),
         skipped: Boolean(result.skipped),
-        completedAt: this.#now().toISOString(),
+        completedAt,
+        seasonNumber: current.currentSeason,
+        seasonYear: current.seasonYear,
         roomRevision: (current.revision || current.version || 0) + 1,
         nextFixtureId: upcomingFixtureId,
       };
@@ -276,6 +334,39 @@ export class RoomStore {
       current.lastCompletedMatch = summary;
       current.currentFixtureId = upcomingFixtureId;
       current.matchReadiness = { fixtureId: upcomingFixtureId, managerIds: [] };
+
+      if (!upcomingFixtureId) {
+        const seasonNumber = current.currentSeason;
+        current.seasonHistory.push({
+          seasonNumber,
+          seasonYear: current.seasonYear,
+          startedAt: current.seasonStartedAt,
+          completedAt,
+          completedFixtureIds: [...current.completedFixtureIds],
+          matchIds: current.completedMatches
+            .filter((match) => (match.seasonNumber ?? seasonNumber) === seasonNumber)
+            .map((match) => match.id),
+        });
+        if (careerHasNextSeason(current)) {
+          current.currentSeason += 1;
+          current.seasonYear += 1;
+          current.seasonStartedAt = completedAt;
+          current.completedFixtureIds = [];
+          current.fixtureSchedule = createFixtureSchedule(current);
+          current.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
+          current.currentFixtureId = current.fixtureSchedule[0]?.fixtureId ?? null;
+          current.matchReadiness = { fixtureId: current.currentFixtureId, managerIds: [] };
+          current.lineups = [];
+          current.careerCompleted = false;
+          current.careerCompletedAt = null;
+          summary.nextFixtureId = current.currentFixtureId;
+          summary.nextSeasonNumber = current.currentSeason;
+          summary.nextSeasonYear = current.seasonYear;
+        } else {
+          current.careerCompleted = true;
+          current.careerCompletedAt = completedAt;
+        }
+      }
       return current;
     });
     return { room, summary: this.#snapshot(room.lastCompletedMatch) };
@@ -288,6 +379,16 @@ export class RoomStore {
         && manager.clubId?.toLocaleUpperCase("pt-BR") === comparisonId,
     );
     if (holder) throw new RoomError("Este clube ja foi escolhido", "CLUB_UNAVAILABLE", 409);
+  }
+
+  #clubIdsEqual(left, right) {
+    return String(left ?? "").trim().toLocaleUpperCase("pt-BR")
+      === String(right ?? "").trim().toLocaleUpperCase("pt-BR");
+  }
+
+  #removeLineup(room, managerId) {
+    if (!Array.isArray(room.lineups)) room.lineups = [];
+    else room.lineups = room.lineups.filter((lineup) => lineup.managerId !== managerId);
   }
 
   async #mutate(code, mutation) {
@@ -309,6 +410,8 @@ export class RoomStore {
   }
 
   #snapshot(room) {
-    return structuredClone(room);
+    const snapshot = structuredClone(room);
+    if (snapshot && Array.isArray(snapshot.managers)) ensureCareerState(snapshot, this.#now());
+    return snapshot;
   }
 }

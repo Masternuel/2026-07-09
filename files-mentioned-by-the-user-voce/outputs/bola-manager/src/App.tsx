@@ -4,6 +4,8 @@ import { Toast } from './components/shared/Toast';
 import { clubByCode, defaultClub } from './constants/clubs';
 import { useAuth } from './hooks/useAuth';
 import { useClubCatalog } from './hooks/useClubCatalog';
+import { usePlayerCatalog } from './hooks/usePlayerCatalog';
+import { useTournamentCatalog } from './hooks/useTournamentCatalog';
 import { useRoom } from './hooks/useRoom';
 import { useServerMatch } from './hooks/useServerMatch';
 import { useSocket } from './hooks/useSocket';
@@ -15,6 +17,7 @@ import { MatchView } from './views/MatchView';
 import { PressConferenceView } from './views/PressConferenceView';
 import { SquadView } from './views/SquadView';
 import { TacticsView } from './views/TacticsView';
+import { EditorView } from './views/editor/EditorView';
 import { FinanceView } from './views/club/FinanceView';
 import { MarketView } from './views/club/MarketView';
 import { StadiumView } from './views/club/StadiumView';
@@ -56,9 +59,12 @@ function App() {
   const [stage, setStage] = useState<AppStage>('entry');
   const [route, setRoute] = useState<RouteKey>('home');
   const [club, setClub] = useState<ClubChoice>(defaultClub);
+  const playerCatalog = usePlayerCatalog(club);
+  const tournamentCatalog = useTournamentCatalog();
   const [toast, setToast] = useState<string | null>(null);
   const currentFixture = rooms.room?.fixtureSchedule?.find((fixture) => sameFixtureId(fixture.fixtureId, rooms.room?.currentFixtureId)) ?? null;
   const managerClubId = rooms.room?.managers.find((manager) => manager.id === auth.identity?.uid)?.clubId ?? club.id;
+  const managerLineupIds = rooms.room?.lineups?.find((lineup) => lineup.managerId === auth.identity?.uid)?.lineupIds;
   const completedFixtureIds = new Set((rooms.room?.completedFixtureIds ?? []).map((fixtureId) => fixtureId.toLocaleLowerCase('pt-BR')));
   const managerFixture = rooms.room?.fixtureSchedule?.find((fixture) => (
     !completedFixtureIds.has(fixture.fixtureId.toLocaleLowerCase('pt-BR'))
@@ -135,21 +141,21 @@ function App() {
 
   function renderRoute() {
     const serverMatch = auth.identity?.mode === 'firebase' ? onlineMatch : null;
-    const homeView = <HomeView onNavigate={navigate} onToast={showToast} club={club} room={rooms.room} managerId={auth.identity?.uid ?? ''} onlineMatch={serverMatch} />;
+    const homeView = <HomeView players={playerCatalog.players} savedLineupIds={managerLineupIds} onNavigate={navigate} onToast={showToast} club={club} room={rooms.room} managerId={auth.identity?.uid ?? ''} onlineMatch={serverMatch} />;
     switch (route) {
       case 'home': return homeView;
-      case 'squad': return <SquadView onToast={showToast} />;
-      case 'tactics': return <TacticsView club={club} opponentName={opponentName} onToast={showToast} />;
+      case 'squad': return <SquadView players={playerCatalog.players} onToast={showToast} />;
+      case 'tactics': return <TacticsView players={playerCatalog.players} club={club} opponentName={opponentName} savedLineupIds={managerLineupIds} onSaveLineup={serverMatch?.saveLineup} onToast={showToast} />;
       case 'calendar': return <CalendarView room={rooms.room} onNavigate={navigate} />;
-      case 'competitions': return <CompetitionsView club={club} room={rooms.room} />;
+      case 'competitions': return <CompetitionsView club={club} room={rooms.room} tournaments={tournamentCatalog.tournaments} loadingTournaments={tournamentCatalog.loading} tournamentError={tournamentCatalog.error} />;
       case 'market': return <MarketView onToast={showToast} />;
-      case 'finance': return <FinanceView onToast={showToast} />;
+      case 'finance': return <FinanceView club={club} onToast={showToast} />;
       case 'stadium': return <StadiumView onToast={showToast} />;
-      case 'rankings': return <RankingsView />;
-      case 'news': return <NewsView onToast={showToast} />;
+      case 'rankings': return <RankingsView players={playerCatalog.players} club={club} />;
+      case 'news': return <NewsView onToast={showToast} room={rooms.room} socket={realtime.socket} club={club} />;
       case 'staff': return <StaffView onToast={showToast} />;
       case 'reports': return <ReportsView />;
-      case 'match': return <MatchView onToast={showToast} onNavigate={navigate} onlineMatch={serverMatch} room={rooms.room} club={club} />;
+      case 'match': return <MatchView players={playerCatalog.players} onToast={showToast} onNavigate={navigate} onlineMatch={serverMatch} room={rooms.room} club={club} />;
       case 'press-conference': return managerInFinishedMatch
         ? <PressConferenceView result={onlineMatch.result} club={club} onComplete={() => { onlineMatch.reset(); navigate('home'); showToast('Coletiva encerrada. Próxima rodada liberada.'); }} />
         : homeView;
@@ -187,7 +193,16 @@ function App() {
           onReady={rooms.setReady}
           onStart={rooms.startRoom}
           onEnterGame={() => { setStage('game'); setRoute('home'); }}
+          onOpenEditor={() => { rooms.clearRoom(); setStage('editor'); }}
           onClubSelected={setClub}
+          onToast={showToast}
+        />
+      )}
+      {stage === 'editor' && auth.identity && (
+        <EditorView
+          identity={auth.identity}
+          getIdToken={auth.getIdToken}
+          onBack={() => { clubCatalog.refresh(); playerCatalog.refresh(); tournamentCatalog.refresh(); setStage('lobby'); }}
           onToast={showToast}
         />
       )}

@@ -31,12 +31,22 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /tournaments/{documentId} {
+      // Leitura publica/autenticada e escrita passam somente pelo backend.
+      allow read, write: if false;
+    }
+
     // Salas e partidas são acessadas apenas pelo backend Firebase Admin.
     match /rooms/{document=**} {
       allow read, write: if false;
     }
 
     match /matches/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Feed social e respostas da IA passam apenas pelo backend autenticado.
+    match /news/{document=**} {
       allow read, write: if false;
     }
 

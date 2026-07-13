@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   AckResponse,
   BolaSocket,
+  LineupSaveResponse,
   MatchEvent,
   MatchReadyResponse,
   MatchStatistics,
@@ -143,6 +144,24 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     }
   }, [enabled, socket, room, phase]);
 
+  const saveLineup = useCallback(async (lineupIds: string[]) => {
+    if (!enabled || !socket?.connected || !room) throw new Error('A conexão com a sala ainda não está disponível.');
+    if (lineupIds.length < 1 || lineupIds.length > 11) throw new Error('A escalação deve ter entre 1 e 11 jogadores.');
+    if (new Set(lineupIds).size !== lineupIds.length) throw new Error('A escalação não pode repetir jogadores.');
+    setError(null);
+    try {
+      return await waitForAck<LineupSaveResponse>((acknowledge) => socket.emit(
+        'lineup:save',
+        { code: room.code, lineupIds },
+        acknowledge,
+      ));
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : 'Não foi possível salvar a escalação.';
+      setError(message);
+      throw new Error(message);
+    }
+  }, [enabled, socket, room]);
+
   const skip = useCallback(async () => {
     if (!socket?.connected || !room) throw new Error('A conexão com a partida foi interrompida.');
     await waitForAck<{ skipped: boolean }>((acknowledge) => socket.emit('match:skip', { code: room.code }, acknowledge));
@@ -177,6 +196,7 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     readyPending,
     start,
     setReady,
+    saveLineup,
     skip,
     reset,
   };

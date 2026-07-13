@@ -1,0 +1,15 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Imagens do Editor sao validadas e gravadas somente pelo Firebase Admin.
+    // O cliente recebe uma URL de download token; nenhum upload direto e permitido.
+    match /editor-media/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

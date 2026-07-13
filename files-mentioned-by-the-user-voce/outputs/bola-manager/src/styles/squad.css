@@ -29,6 +29,8 @@
 .squad-table tbody tr:hover { background: rgba(255,255,255,.025); cursor: pointer; }
 .player-number { display: grid; width: 25px; height: 27px; flex: 0 0 auto; place-items: center; color: var(--accent); border: 1px solid rgba(200,255,61,.15); background: rgba(200,255,61,.035); font-size: 9px; font-weight: 600; }
 .player-cell { display: flex; min-width: 110px; flex-direction: column; }
+.player-cell__name { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.player-cell__name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .player-cell strong { color: var(--ink); font-size: 10px; font-weight: 600; }
 .player-cell small { margin-top: 2px; color: var(--muted); font-size: 8px; }
 .position-tag { display: inline-grid; min-width: 30px; height: 21px; place-items: center; color: var(--blue); border: 1px solid rgba(102,163,255,.18); background: rgba(102,163,255,.05); font-size: 8px; font-weight: 600; }
@@ -50,10 +52,16 @@
 .player-profile__identity { padding-right: 20px; border-right: 1px solid var(--line); }
 .player-silhouette { position: relative; display: flex; height: 174px; align-items: center; justify-content: flex-end; padding: 16px; flex-direction: column; overflow: hidden; border: 1px solid var(--line); background: radial-gradient(circle at 50% 18%, rgba(200,255,61,.15), transparent 18%), linear-gradient(160deg, #20241f, #121416); }
 .player-silhouette::before { position: absolute; top: 26px; width: 58px; height: 58px; border-radius: 50%; background: #30362d; box-shadow: 0 63px 0 28px #30362d; content: ""; }
+.player-silhouette > img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 20%; }
+.player-silhouette.has-avatar::after { position: absolute; z-index: 1; inset: 42% 0 0; background: linear-gradient(transparent, rgba(8,10,11,.92)); content: ""; }
 .player-silhouette span { position: absolute; z-index: 1; right: 15px; top: 3px; color: rgba(200,255,61,.18); font-size: 76px; font-weight: 600; letter-spacing: -.09em; }
 .player-silhouette strong { position: relative; z-index: 2; font-size: 12px; letter-spacing: .15em; }
 .player-world-star { display: flex; align-items: center; gap: 6px; padding: 9px 10px; color: var(--amber); border: 1px solid var(--line); border-top: 0; font-size: 8px; text-transform: uppercase; }
 .player-world-star strong { margin-left: auto; color: var(--ink); }
+.player-star-callout { display: flex; align-items: flex-start; gap: 9px; padding: 10px; color: var(--star-red); border: 1px solid rgba(255,77,87,.28); border-top: 0; background: rgba(255,77,87,.065); }
+.player-star-callout > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.player-star-callout strong { font-size: 11px; letter-spacing: .06em; }
+.player-star-callout small { color: var(--ink-soft); font-size: 11px; line-height: 1.4; }
 .player-profile__identity dl { margin: 13px 0; }
 .player-profile__identity dl > div { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 8px; }
 .player-profile__identity dt { display: flex; align-items: center; gap: 5px; color: var(--muted); }

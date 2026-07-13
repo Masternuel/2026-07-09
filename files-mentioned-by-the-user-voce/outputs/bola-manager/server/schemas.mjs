@@ -15,6 +15,7 @@ export const createRoomSchema = z.object({
   clubId: clubIdentifier.optional(),
   activeLeagues: z.array(z.string().trim().min(2).max(40)).min(1).max(24).default(["BR-A", "BR-B"]),
   seasonLength: z.coerce.number().int().min(1).max(20).default(1),
+  unlimitedSeasons: z.boolean().default(false),
   maxManagers: z.coerce.number().int().min(1).max(16).default(6),
 }).strict();
 
@@ -56,6 +57,20 @@ export const matchControlSchema = z.object({
   managerId: legacyIdentifier,
 }).strict();
 
+const lineupPlayerIdSchema = z.string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine((value) => !value.includes("/"), "ID de jogador nao pode conter /");
+
+export const lineupSaveSchema = z.object({
+  code: roomCodeSchema,
+  lineupIds: z.array(lineupPlayerIdSchema)
+    .min(1)
+    .max(11)
+    .refine((ids) => new Set(ids).size === ids.length, "Escalacao nao pode repetir jogador"),
+}).strict();
+
 export const marketOfferSchema = z.object({
   code: roomCodeSchema,
   managerId: legacyIdentifier,
@@ -70,6 +85,31 @@ export const marketBidSchema = z.object({
   managerId: legacyIdentifier,
   auctionId: z.string().trim().min(1).max(128),
   amount: z.coerce.number().int().positive().max(2_000_000_000),
+}).strict();
+
+const socialSourceTypeSchema = z.enum(["imprensa", "clube", "jogador", "torcida"]);
+
+export const socialAiFeedSchema = z.object({
+  posts: z.array(z.object({
+    id: z.string().trim().min(1).max(80),
+    source: z.string().trim().min(1).max(80),
+    sourceType: socialSourceTypeSchema,
+    headline: z.string().trim().min(1).max(180),
+    body: z.string().trim().max(800),
+    tag: z.string().trim().min(1).max(40).optional(),
+    reactions: z.coerce.number().int().min(0).max(10_000_000).optional(),
+  }).strict()).min(1).max(8),
+}).strict();
+
+export const socialPostCreateSchema = z.object({
+  message: z.string().trim().min(1).max(500),
+}).strict();
+
+export const newsPostIdSchema = z.string().trim().min(1).max(128);
+
+export const socialCommentCreateSchema = z.object({
+  message: z.string().trim().min(1).max(320),
+  parentCommentId: z.string().trim().min(1).max(128),
 }).strict();
 
 export function parseOrThrow(schema, value) {

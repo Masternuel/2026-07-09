@@ -6,6 +6,7 @@ import {
   roomCodeSchema,
   startRoomSchema,
 } from "../schemas.mjs";
+import { emitRoomForViewers, roomForViewer } from "../services/roomVisibility.mjs";
 import { channelForManager, channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
 
 function roomError(message, code, status = 409) {
@@ -38,8 +39,8 @@ export function registerRoomHandlers(io, socket, {
     });
     assertRoomAvailable(room.code, deletingRooms, deletedRooms);
     rememberMembership(socket, room.code);
-    io.to(channelForRoom(room.code)).emit("room:state", room);
-    return { room };
+    await emitRoomForViewers(io, room);
+    return { room: roomForViewer(room, user.uid) };
   });
 
   registerSafe(socket, "room:join", async (payload) => {
@@ -57,9 +58,9 @@ export function registerRoomHandlers(io, socket, {
     });
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    if (room.status === "waiting") io.to(channelForRoom(code)).emit("room:state", room);
-    else socket.emit("room:state", room);
-    return { room };
+    if (room.status === "waiting") await emitRoomForViewers(io, room);
+    else socket.emit("room:state", roomForViewer(room, user.uid));
+    return { room: roomForViewer(room, user.uid) };
   });
 
   const resume = async (payload) => {
@@ -68,8 +69,8 @@ export function registerRoomHandlers(io, socket, {
     const room = await store.requireMembership(code, user.uid);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    socket.emit("room:state", room);
-    return { room };
+    socket.emit("room:state", roomForViewer(room, user.uid));
+    return { room: roomForViewer(room, user.uid) };
   };
   registerSafe(socket, "room:resume", resume);
   registerSafe(socket, "room:sync", resume);
@@ -85,8 +86,8 @@ export function registerRoomHandlers(io, socket, {
     const room = await store.setReady(code, user.uid, data.ready, data.clubId);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    io.to(channelForRoom(code)).emit("room:state", room);
-    return { room };
+    await emitRoomForViewers(io, room);
+    return { room: roomForViewer(room, user.uid) };
   });
 
   registerSafe(socket, "room:start", async (payload) => {
@@ -95,9 +96,9 @@ export function registerRoomHandlers(io, socket, {
     parseOrThrow(startRoomSchema, { managerId: payload.managerId });
     const room = await store.startRoom(code, user.uid);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
-    io.to(channelForRoom(code)).emit("room:started", room);
-    io.to(channelForRoom(code)).emit("room:state", room);
-    return { room };
+    await emitRoomForViewers(io, room, "room:started");
+    await emitRoomForViewers(io, room);
+    return { room: roomForViewer(room, user.uid) };
   });
 
   registerSafe(socket, "room:delete", async (payload) => {

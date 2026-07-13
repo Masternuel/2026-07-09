@@ -6,11 +6,12 @@ import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
 import { Modal } from '../components/shared/Modal';
 import { ProgressBar } from '../components/shared/ProgressBar';
-import { matchEvents, players } from '../data/demoData';
+import { matchEvents } from '../data/demoData';
 import type { ServerMatchController } from '../hooks/useServerMatch';
-import type { ClubChoice, MatchEvent, Room, RouteKey } from '../types';
+import type { ClubChoice, MatchEvent, Player, Room, RouteKey } from '../types';
 
 interface MatchViewProps {
+  players?: Player[];
   onToast: (message: string) => void;
   onNavigate: (route: RouteKey) => void;
   onlineMatch: ServerMatchController | null;
@@ -35,13 +36,13 @@ function roundLabel(fixtureId: string | null, round?: number): string {
   return numberedRound ? `Rodada ${numberedRound}` : 'Rodada 14';
 }
 
-export function MatchView({ onToast, onNavigate, onlineMatch, room, club }: MatchViewProps) {
+export function MatchView({ players = [], onToast, onNavigate, onlineMatch, room, club }: MatchViewProps) {
   const [eventCount, setEventCount] = useState(2);
   const [running, setRunning] = useState(true);
   const [subOpen, setSubOpen] = useState(false);
   const [tacticOpen, setTacticOpen] = useState(false);
-  const [outPlayer, setOutPlayer] = useState('p11');
-  const [inPlayer, setInPlayer] = useState('p17');
+  const [outPlayer, setOutPlayer] = useState(() => players[10]?.id ?? players[0]?.id ?? '');
+  const [inPlayer, setInPlayer] = useState(() => players[11]?.id ?? '');
   const [mentality, setMentality] = useState('Positiva');
   const [extraEvents, setExtraEvents] = useState<MatchEvent[]>([]);
   const [substitutionCount, setSubstitutionCount] = useState(0);
@@ -73,6 +74,13 @@ export function MatchView({ onToast, onNavigate, onlineMatch, room, club }: Matc
   const currentMinute = revealed.at(-1)?.minute ?? 0;
   const score = onlineMatch?.score ?? revealed.reduce<[number, number]>((latest, event) => event.score ?? latest, [0, 0]);
   const progress = Math.min(100, currentMinute / 0.9);
+
+  useEffect(() => {
+    const starters = players.slice(0, 11);
+    const reserves = players.slice(11, 18);
+    setOutPlayer((current) => starters.some((player) => player.id === current) ? current : starters.at(-1)?.id ?? '');
+    setInPlayer((current) => reserves.some((player) => player.id === current) ? current : reserves[0]?.id ?? '');
+  }, [players]);
 
   useEffect(() => {
     if (onlineMatch || !running || finished) return;
@@ -188,13 +196,13 @@ export function MatchView({ onToast, onNavigate, onlineMatch, room, club }: Matc
 
       <section className="match-controls">
         <div><span className="control-status"><Activity size={15} /> Intensidade <strong>Alta</strong></span><span className="control-status"><CircleGauge size={15} /> Ritmo <strong>Rápido</strong></span><span className="control-status"><Shield size={15} /> Substituições <strong>{substitutionCount}/5</strong></span></div>
-        <div><Button icon={<ArrowRightLeft size={15} />} onClick={() => setSubOpen(true)} disabled={finished || substitutionCount >= 5 || Boolean(onlineMatch)}>Substituição</Button><Button icon={<SlidersHorizontal size={15} />} onClick={() => setTacticOpen(true)} disabled={finished}>Ajuste tático</Button><Button variant="danger" icon={<FastForward size={15} />} onClick={() => void skipToResult()} disabled={finished || onlineMatch?.phase === 'starting'}>Pular resultado</Button></div>
+        <div><Button icon={<ArrowRightLeft size={15} />} onClick={() => setSubOpen(true)} disabled={finished || substitutionCount >= 5 || Boolean(onlineMatch) || players.length < 12}>Substituição</Button><Button icon={<SlidersHorizontal size={15} />} onClick={() => setTacticOpen(true)} disabled={finished}>Ajuste tático</Button><Button variant="danger" icon={<FastForward size={15} />} onClick={() => void skipToResult()} disabled={finished || onlineMatch?.phase === 'starting'}>Pular resultado</Button></div>
       </section>
 
       {finished && <section className="final-whistle"><span className="final-whistle__icon"><Goal size={22} /></span><div><p className="eyebrow">APITO FINAL</p><h2>{homeTeam} {score[0]}–{score[1]} {awayTeam}.</h2><p>{managedClubInFixture ? 'A imprensa já prepara a coletiva pós-jogo.' : 'Partida dos outros managers encerrada.'}</p></div><div className="final-whistle__actions"><Button variant="primary" icon={<Flag size={15} />} onClick={() => { if (onlineMatch && !managedClubInFixture) onlineMatch.reset(); onNavigate(managedClubInFixture ? 'press-conference' : 'home'); }}>{managedClubInFixture ? 'Ir para a coletiva' : 'Voltar à central'}</Button></div></section>}
 
-      <Modal open={subOpen} onClose={() => setSubOpen(false)} title="Fazer substituição" eyebrow={`${club.name.toLocaleUpperCase('pt-BR')} · ${currentMinute} MIN · ${substitutionCount}/5`} footer={<><Button variant="ghost" onClick={() => setSubOpen(false)}>Cancelar</Button><Button variant="primary" onClick={confirmSubstitution} disabled={substitutionCount >= 5}>Confirmar troca</Button></>}>
-        <div className="substitution-form"><label><span>SAI</span><select value={outPlayer} onChange={(event) => setOutPlayer(event.target.value)}>{players.slice(0, 11).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name} ({player.condition}%)</option>)}</select></label><span className="sub-arrow"><ArrowRightLeft size={18} /></span><label><span>ENTRA</span><select value={inPlayer} onChange={(event) => setInPlayer(event.target.value)}>{players.slice(11, 18).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name} ({player.condition}%)</option>)}</select></label></div>
+      <Modal open={subOpen} onClose={() => setSubOpen(false)} title="Fazer substituição" eyebrow={`${club.name.toLocaleUpperCase('pt-BR')} · ${currentMinute} MIN · ${substitutionCount}/5`} footer={<><Button variant="ghost" onClick={() => setSubOpen(false)}>Cancelar</Button><Button variant="primary" onClick={confirmSubstitution} disabled={substitutionCount >= 5 || !outPlayer || !inPlayer}>Confirmar troca</Button></>}>
+        <div className="substitution-form"><label><span>SAI</span><select value={outPlayer} onChange={(event) => setOutPlayer(event.target.value)}>{players.slice(0, 11).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name}{player.isStar ? ' ★' : ''} ({player.condition}%)</option>)}</select></label><span className="sub-arrow"><ArrowRightLeft size={18} /></span><label><span>ENTRA</span><select value={inPlayer} onChange={(event) => setInPlayer(event.target.value)}>{players.slice(11, 18).map((player) => <option key={player.id} value={player.id}>{player.number} · {player.name}{player.isStar ? ' ★' : ''} ({player.condition}%)</option>)}</select></label></div>
       </Modal>
 
       <Modal open={tacticOpen} onClose={() => setTacticOpen(false)} title="Ajuste tático" eyebrow="INSTRUÇÕES À BEIRA DO CAMPO" footer={<><Button variant="ghost" onClick={() => setTacticOpen(false)}>Cancelar</Button><Button variant="primary" onClick={() => { setTacticOpen(false); onToast(`Mentalidade alterada para ${mentality.toLowerCase()}.`); }}>Enviar instrução</Button></>}>

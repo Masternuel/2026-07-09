@@ -2,6 +2,8 @@ import { Router } from "express";
 import { FieldPath } from "firebase-admin/firestore";
 import { z } from "zod";
 import { parseOrThrow } from "../schemas.mjs";
+import { editorRecordIdSchema } from "../editorSchemas.mjs";
+import { CatalogStore } from "../store/catalogStore.mjs";
 
 const querySchema = z.object({
   country: z.string().trim().min(2).max(60).optional(),
@@ -18,8 +20,9 @@ function serializeTeam(document) {
   return { ...document.data(), id: document.id };
 }
 
-export function createTeamsRouter(firestore) {
+export function createTeamsRouter(firestore, injectedCatalogStore) {
   const router = Router();
+  const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore });
   router.get("/", asyncRoute(async (request, response) => {
     const filters = parseOrThrow(querySchema, request.query);
     if (!firestore) {
@@ -32,11 +35,25 @@ export function createTeamsRouter(firestore) {
     query = query.orderBy(FieldPath.documentId());
     if (filters.cursor) query = query.startAfter(filters.cursor);
     const snapshot = await query.limit(filters.limit).get();
-    const teams = snapshot.docs.map(serializeTeam);
+    const teams = snapshot.docs
+      .filter((document) => document.data().active !== false)
+      .map(serializeTeam);
     const nextCursor = snapshot.docs.length === filters.limit
       ? snapshot.docs.at(-1)?.id ?? null
       : null;
     response.json({ teams, count: teams.length, nextCursor, source: "firestore" });
+  }));
+  router.get("/:clubId/star-impact", asyncRoute(async (request, response) => {
+    const clubId = parseOrThrow(editorRecordIdSchema, request.params.clubId);
+    const impact = await catalogStore.getStarImpact(clubId);
+    response.json({
+      impact,
+      source: impact.source ?? catalogStore.source ?? (firestore ? "firestore" : "brasfoot-not-loaded"),
+    });
+  }));
+  router.get("/:clubId/players", asyncRoute(async (request, response) => {
+    const clubId = parseOrThrow(editorRecordIdSchema, request.params.clubId);
+    response.json(await catalogStore.listPlayers(clubId));
   }));
   return router;
 }

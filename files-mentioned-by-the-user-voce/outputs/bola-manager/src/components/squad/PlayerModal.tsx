@@ -5,6 +5,8 @@ import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
 import { ProgressBar } from '../shared/ProgressBar';
+import { ResilientImage } from '../shared/ResilientImage';
+import { StarPlayerMark } from '../shared/StarPlayerMark';
 import { StarRating } from '../shared/StarRating';
 
 interface PlayerModalProps {
@@ -28,8 +30,17 @@ export function PlayerModal({ player, onClose, onAction }: PlayerModalProps) {
     )}>
       <div className="player-profile">
         <aside className="player-profile__identity">
-          <div className="player-silhouette"><span>{player.number}</span><strong>{player.shortName.toUpperCase()}</strong></div>
+          <div className={`player-silhouette ${player.avatarImageUrl ? 'has-avatar' : ''}`}>
+            <ResilientImage src={player.avatarImageUrl} alt={`Foto de ${player.name}`} />
+            <span>{player.number}</span><strong>{player.shortName.toUpperCase()}</strong>
+          </div>
           <div className="player-world-star"><Sparkles size={14} /> Fama mundial <strong>{player.worldStar}/10</strong></div>
+          {player.isStar && (
+            <div className="player-star-callout">
+              <StarPlayerMark size="md" />
+              <span><strong>ESTRELA DO ELENCO</strong><small>Impulsiona patrocinadores e entrega um pequeno bônus coletivo em campo.</small></span>
+            </div>
+          )}
           <dl>
             <div><dt><CalendarClock size={14} /> Idade</dt><dd>{player.age} anos</dd></div>
             <div><dt><Flag size={14} /> Nacionalidade</dt><dd>{player.nationality}</dd></div>

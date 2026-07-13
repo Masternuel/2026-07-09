@@ -92,13 +92,23 @@
 .expense-breakdown > div > i { height: 3px; background: #292d31; }
 .expense-breakdown > div > i b { display: block; height: 100%; background: var(--blue); }
 .expense-breakdown > div > strong { font-size: 8px; text-align: right; }
-.sponsor-card { display: grid; min-height: 135px; align-items: center; gap: 12px; padding: 15px; grid-template-columns: 45px 1fr; }
-.sponsor-mark { display: grid; width: 43px; height: 50px; place-items: center; color: white; background: #244e9a; font-weight: 700; }
+.sponsor-card { display: grid; min-height: 170px; align-items: center; gap: 12px; padding: 15px; grid-template-areas: "mark identity value" "mark impact impact" ". action action"; grid-template-columns: 45px minmax(0, 1fr) auto; }
+.sponsor-mark { display: grid; width: 43px; height: 50px; align-self: start; place-items: center; grid-area: mark; color: white; background: #244e9a; font-weight: 700; }
+.sponsor-card__identity { min-width: 0; grid-area: identity; }
 .sponsor-card h2 { margin-top: 3px; font-size: 13px; }
-.sponsor-card p:last-child { margin-top: 4px; color: var(--muted); font-size: 7px; }
-.sponsor-card > span { display: flex; flex-direction: column; }
-.sponsor-card > span small { color: var(--muted); font-size: 7px; }
-.sponsor-card > span strong { font-size: 12px; }
+.sponsor-card__identity p:last-child { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.sponsor-card__value { display: flex; min-width: 130px; align-items: flex-end; flex-direction: column; grid-area: value; }
+.sponsor-card__value small { color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+.sponsor-card__value strong { margin-top: 3px; font-size: 14px; }
+.sponsor-star-impact { display: grid; min-width: 0; align-items: center; gap: 9px; padding: 9px 10px; grid-area: impact; grid-template-columns: 18px minmax(0, 1fr); color: var(--muted); border: 1px solid var(--line); background: #131518; }
+.sponsor-star-impact > svg { width: 16px; height: 16px; }
+.sponsor-star-impact > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.sponsor-star-impact strong { overflow: hidden; color: var(--ink-soft); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.sponsor-star-impact small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.sponsor-star-impact.has-stars { color: var(--star-red); border-color: rgba(255,77,87,.27); background: rgba(255,77,87,.065); }
+.sponsor-star-impact.has-stars strong { color: #ff9ba1; }
+.sponsor-star-impact.is-unavailable { color: var(--muted-2); background: transparent; }
+.sponsor-card > .button { justify-self: end; grid-area: action; }
 
 .stadium-hero { display: grid; min-height: 255px; margin-bottom: 10px; grid-template-columns: 1.5fr 1fr; }
 .stadium-visual { position: relative; overflow: hidden; min-height: 255px; background: radial-gradient(ellipse at center, #253628 0 30%, #191d1b 31% 48%, #111315 49%); }

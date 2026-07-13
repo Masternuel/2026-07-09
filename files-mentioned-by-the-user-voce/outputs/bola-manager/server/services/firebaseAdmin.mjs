@@ -50,6 +50,8 @@ export async function initializeFirebaseAdmin(env = process.env) {
       app: null,
       auth: null,
       firestore: null,
+      storage: null,
+      bucket: null,
       credentialSource: null,
       reason: "credentials-not-configured",
     };
@@ -58,17 +60,24 @@ export async function initializeFirebaseAdmin(env = process.env) {
   const { applicationDefault, cert, getApps, initializeApp } = await import("firebase-admin/app");
   const { getAuth } = await import("firebase-admin/auth");
   const { getFirestore } = await import("firebase-admin/firestore");
+  const { getStorage } = await import("firebase-admin/storage");
   const credential = serviceAccount ? cert(serviceAccount.account) : applicationDefault();
   const options = { credential };
   const projectId = serviceAccount?.account.projectId || env.FIREBASE_PROJECT_ID?.trim();
   if (projectId) options.projectId = projectId;
+  const storageBucket = env.FIREBASE_STORAGE_BUCKET?.trim();
+  if (storageBucket) options.storageBucket = storageBucket;
 
   const app = getApps()[0] ?? initializeApp(options);
+  const configuredBucket = storageBucket || app.options.storageBucket;
+  const storage = getStorage(app);
   return {
     enabled: true,
     app,
     auth: getAuth(app),
     firestore: getFirestore(app),
+    storage,
+    bucket: configuredBucket ? storage.bucket(configuredBucket) : null,
     credentialSource: serviceAccount?.source || "application-default",
     reason: null,
   };

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, Check, ChevronRight, Copy, Link2, LockKeyhole, Plus, Radio, Save, Settings2, Shield, Zap } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight, Copy, Database, Infinity as InfinityIcon, Link2, LockKeyhole, Plus, Radio, Save, Settings2, Shield, Zap } from 'lucide-react';
 import { SaveManager } from '../components/lobby/SaveManager';
 import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
@@ -30,6 +30,7 @@ interface LobbyViewProps {
   onReady: (ready: boolean, clubId?: string) => Promise<Room>;
   onStart: () => Promise<Room>;
   onEnterGame: () => void;
+  onOpenEditor: () => void;
   onClubSelected: (club: ClubChoice) => void;
   onToast: (message: string) => void;
 }
@@ -64,11 +65,14 @@ export function LobbyView(props: LobbyViewProps) {
   }, [currentManager?.clubId, props.clubs]);
 
   async function createRoom() {
+    const unlimitedSeasons = seasonLength === 'unlimited';
+    const finiteSeasonLength = ['1', '3', '5'].includes(seasonLength) ? Number(seasonLength) : 1;
     try {
       await props.onCreate({
         name: roomName,
         activeLeagues: ['BR-A', 'BR-B', 'AR-A'],
-        seasonLength: Number(seasonLength),
+        seasonLength: unlimitedSeasons ? 1 : finiteSeasonLength,
+        unlimitedSeasons,
         maxManagers: Number(maxManagers),
       });
       props.onToast('Sala criada. Agora escolha seu clube.');
@@ -141,7 +145,10 @@ export function LobbyView(props: LobbyViewProps) {
           <ArrowLeft size={17} /> {props.room ? 'Meus saves' : 'Sair'}
         </button>
         <div className="lobby-wordmark"><span className="wordmark-glyph"><Shield size={17} /></span>BOLA<span>MANAGER</span></div>
-        <div className="connection-status"><span /> {connectionLabel}</div>
+        <div className="lobby-header__right">
+          <button className="lobby-editor-button" onClick={props.onOpenEditor}><Database size={14} /> Editor da Base</button>
+          <div className="connection-status"><span /> {connectionLabel}</div>
+        </div>
       </header>
 
       {!props.room ? (
@@ -181,9 +188,10 @@ export function LobbyView(props: LobbyViewProps) {
               <div className="setup-form">
                 <label><span>Nome da temporada</span><input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label>
                 <div className="form-grid">
-                  <label><span>Duração</span><select value={seasonLength} onChange={(event) => setSeasonLength(event.target.value)}><option value="1">1 temporada</option><option value="3">3 temporadas</option><option value="5">5 temporadas</option></select></label>
+                  <label><span>Duração</span><select value={seasonLength} aria-describedby={seasonLength === 'unlimited' ? 'unlimited-season-note' : undefined} onChange={(event) => setSeasonLength(event.target.value)}><option value="1">1 temporada</option><option value="3">3 temporadas</option><option value="5">5 temporadas</option><option value="unlimited">Temporadas ilimitadas</option></select></label>
                   <label><span>Máx. managers</span><select value={maxManagers} onChange={(event) => setMaxManagers(event.target.value)}><option>4</option><option>6</option><option>8</option></select></label>
                 </div>
+                {seasonLength === 'unlimited' && <p className="unlimited-season-note" id="unlimited-season-note" role="note"><InfinityIcon size={15} aria-hidden="true" /> A carreira gera uma nova temporada automaticamente após a última rodada.</p>}
                 <fieldset className="league-selector">
                   <legend>Ligas ativas</legend>
                   <label><input type="checkbox" defaultChecked /><span>BR</span> Brasil · Séries A e B</label>
@@ -220,7 +228,7 @@ export function LobbyView(props: LobbyViewProps) {
                   const available = !holder;
                   return (
                     <button key={club.id} disabled={!available || Boolean(currentManager?.ready)} className={club.id === selectedClub ? 'selected' : ''} onClick={() => setSelectedClub(club.id)}>
-                      <ClubMark code={club.code} color={club.color} />
+                      <ClubMark code={club.code} color={club.color} imageUrl={club.crestImageUrl} />
                       <span className="club-list__name"><strong>{club.name}</strong><small>{club.city}</small></span>
                       <span className="club-list__metric"><small>FORÇA</small><strong>{club.stars.toFixed(1)} ★</strong></span>
                       <span className="club-list__metric"><small>CAIXA</small><strong>{club.budget}</strong></span>
@@ -246,7 +254,7 @@ export function LobbyView(props: LobbyViewProps) {
             </div>
             <div className="room-rules">
               <h3><Settings2 size={15} /> Regras da sala</h3>
-              <dl><div><dt>Temporadas</dt><dd>{props.room.seasonLength}</dd></div><div><dt>Ligas</dt><dd>{props.room.activeLeagues.length}</dd></div><div><dt>Status</dt><dd>{props.room.status === 'active' ? 'Em andamento' : 'Preparação'}</dd></div></dl>
+              <dl><div><dt>Temporadas</dt><dd>{props.room.unlimitedSeasons ? '∞ Ilimitadas' : props.room.seasonLength}</dd></div><div><dt>Ligas</dt><dd>{props.room.activeLeagues.length}</dd></div><div><dt>Status</dt><dd>{props.room.status === 'active' ? 'Em andamento' : 'Preparação'}</dd></div></dl>
             </div>
 
             {props.room.status === 'active' ? (

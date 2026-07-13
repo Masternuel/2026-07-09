@@ -22,7 +22,7 @@ export function Sidebar({ activeRoute, club, onNavigate, open, onClose, onExit }
       <aside className={cx('sidebar', open && 'is-open')}>
         <div className="sidebar__wordmark"><span className="wordmark-glyph"><Goal size={16} /></span><strong>BOLA<span>MANAGER</span></strong></div>
         <button className="club-switcher">
-          <ClubMark code={club.code} color={club.color} size="sm" />
+          <ClubMark code={club.code} color={club.color} imageUrl={club.crestImageUrl} size="sm" />
           <span><strong>{club.name}</strong><small>Brasileirão Série A</small></span>
           <ChevronsUpDown size={14} />
         </button>

@@ -10,13 +10,14 @@ function player(
   age: number,
   value: number,
   scores: Scores,
-  options: Partial<Pick<Player, 'status' | 'morale' | 'condition' | 'foot' | 'personality' | 'role' | 'worldStar'>> = {},
+  options: Partial<Pick<Player, 'status' | 'morale' | 'condition' | 'foot' | 'personality' | 'role' | 'worldStar' | 'isStar'>> = {},
 ): Player {
   const names = name.split(' ');
   return {
     id,
     name,
     shortName: names[names.length - 1],
+    isStar: options.isStar ?? false,
     number,
     position,
     role: options.role ?? position,
@@ -45,9 +46,9 @@ export const players: Player[] = [
   player('p05', 'Matheus Lima', 2, 'LD', 25, 19_000_000, [8, 5, 7, 7, 8, 7, 8, 6], { role: 'Lateral invertido' }),
   player('p06', 'Diego Alves', 5, 'VOL', 30, 16_000_000, [6, 5, 6, 9, 9, 8, 8, 6], { role: 'Volante âncora', morale: 'Excelente', personality: 'Líder', worldStar: 7 }),
   player('p07', 'Bruno Mendes', 8, 'MC', 26, 31_000_000, [8, 7, 8, 9, 7, 9, 9, 7], { role: 'Meia área a área', worldStar: 8 }),
-  player('p08', 'Igor Sampaio', 10, 'MEI', 24, 42_000_000, [8, 8, 9, 9, 4, 10, 9, 7], { role: 'Armador avançado', morale: 'Excelente', worldStar: 9 }),
+  player('p08', 'Igor Sampaio', 10, 'MEI', 24, 42_000_000, [8, 8, 9, 9, 4, 10, 9, 7], { role: 'Armador avançado', morale: 'Excelente', worldStar: 9, isStar: true }),
   player('p09', 'Leandro Paiva', 11, 'PE', 22, 35_000_000, [10, 8, 9, 8, 4, 7, 9, 6], { foot: 'Esquerdo', role: 'Ponta invertido', worldStar: 8 }),
-  player('p10', 'Felipe Rocha', 9, 'ATA', 27, 38_000_000, [8, 10, 8, 9, 3, 6, 10, 7], { role: 'Atacante completo', morale: 'Excelente', personality: 'Ambicioso', worldStar: 9 }),
+  player('p10', 'Felipe Rocha', 9, 'ATA', 27, 38_000_000, [8, 10, 8, 9, 3, 6, 10, 7], { role: 'Atacante completo', morale: 'Excelente', personality: 'Ambicioso', worldStar: 9, isStar: true }),
   player('p11', 'Victor Moura', 7, 'PD', 21, 27_000_000, [9, 8, 9, 7, 4, 8, 9, 6], { foot: 'Esquerdo', role: 'Ponta criativo', worldStar: 7 }),
   player('p12', 'André Castro', 12, 'GOL', 21, 7_500_000, [5, 2, 3, 7, 8, 6, 7, 4], { role: 'Goleiro', condition: 96 }),
   player('p13', 'João Pedro', 14, 'ZAG', 20, 11_000_000, [7, 3, 4, 7, 8, 6, 7, 5], { role: 'Zagueiro', condition: 89 }),

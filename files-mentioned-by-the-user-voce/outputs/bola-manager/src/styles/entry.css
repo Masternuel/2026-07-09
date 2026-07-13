@@ -110,6 +110,8 @@
 .setup-form { display: flex; padding: 25px; flex-direction: column; gap: 17px; }
 .setup-form input, .setup-form select, .individual-panel select, .settings-form input, .settings-form select { width: 100%; min-height: 40px; padding: 0 11px; color: var(--ink); border: 1px solid var(--line); border-radius: 2px; background: #111315; font-size: 11px; }
 .form-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.unlimited-season-note { display: flex; align-items: flex-start; gap: 8px; margin: -5px 0 0; padding: 9px 10px; color: var(--muted); border-left: 2px solid var(--accent); background: var(--accent-dim); font-size: 11px; line-height: 1.5; }
+.unlimited-season-note svg { flex: none; margin-top: 1px; color: var(--accent); }
 .league-selector { display: flex; margin: 0; padding: 0; flex-direction: column; border: 0; }
 .league-selector legend { margin-bottom: 7px; color: var(--ink-soft); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 .league-selector label { display: grid; min-height: 41px; align-items: center; padding: 0 10px; grid-template-columns: 16px 28px 1fr; border: 1px solid var(--line); border-bottom: 0; color: var(--ink-soft); font-size: 10px; }

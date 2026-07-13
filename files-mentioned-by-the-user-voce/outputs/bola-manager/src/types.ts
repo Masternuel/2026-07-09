@@ -1,6 +1,112 @@
 import type { Socket } from 'socket.io-client';
 
-export type AppStage = 'entry' | 'lobby' | 'game';
+export type AppStage = 'entry' | 'lobby' | 'editor' | 'game';
+
+export type EditorEntity = 'leagues' | 'clubs' | 'players' | 'tournaments';
+
+export type TournamentFormat = 'league' | 'knockout' | 'groups_knockout';
+export type TournamentLegs = 'single' | 'double';
+export type TournamentTiebreaker =
+  | 'goal_difference'
+  | 'goals_scored'
+  | 'wins'
+  | 'head_to_head'
+  | 'fair_play'
+  | 'away_goals'
+  | 'extra_time'
+  | 'penalties'
+  | 'drawing_lots';
+
+export interface EditorLeague {
+  id: string;
+  name: string;
+  country: string;
+  level: number;
+  division: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface EditorClub {
+  id: string;
+  name: string;
+  abbreviation: string;
+  colors: string[];
+  stadium: string;
+  reputation: number;
+  division: string;
+  country: string;
+  state: string | null;
+  city: string | null;
+  leagueId: string | null;
+  budget: number;
+  crestImageUrl: string | null;
+  crestImagePath: string | null;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface EditorPlayerAttributes {
+  velocidade: number;
+  chute: number;
+  drible: number;
+  nocao: number;
+  defesa: number;
+  passe: number;
+  peBom: number;
+  peRuim: number;
+}
+
+export interface EditorPlayer {
+  id: string;
+  clubId: string;
+  name: string;
+  isStar: boolean;
+  position: PlayerPosition;
+  age: number;
+  nationality: string;
+  shirtNumber: number;
+  overall: number;
+  attributes: EditorPlayerAttributes;
+  avatarImageUrl: string | null;
+  avatarImagePath: string | null;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface EditorTournament {
+  id: string;
+  name: string;
+  format: TournamentFormat;
+  teamCount: number;
+  legs: TournamentLegs;
+  tiebreakers: TournamentTiebreaker[];
+  teamIds: string[];
+  trophyImageUrl: string | null;
+  trophyImagePath: string | null;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type EditorRecord = EditorLeague | EditorClub | EditorPlayer | EditorTournament;
+
+export interface EditorCatalog {
+  leagues: EditorLeague[];
+  clubs: EditorClub[];
+  players: EditorPlayer[];
+  tournaments: EditorTournament[];
+}
+
+export interface EditorCatalogCounts {
+  leagues: number;
+  clubs: number;
+  players: number;
+  tournaments: number;
+}
 
 export type RouteKey =
   | 'home'
@@ -29,6 +135,7 @@ export interface Player {
   id: string;
   name: string;
   shortName: string;
+  isStar: boolean;
   number: number;
   position: PlayerPosition;
   role: string;
@@ -43,6 +150,23 @@ export interface Player {
   personality: string;
   worldStar: number;
   attributes: Record<AttributeKey, number>;
+  avatarImageUrl?: string | null;
+}
+
+export interface StarImpactPlayer {
+  id: string;
+  name: string;
+}
+
+export interface StarImpactProfile {
+  clubId: string;
+  catalogPlayerCount: number;
+  starCount: number;
+  starPlayers: StarImpactPlayer[];
+  matchStrengthBonus: number;
+  sponsorBoostPercent: number;
+  sponsorAnnualBonus: number;
+  source?: string;
 }
 
 export interface LeagueTeam {
@@ -93,6 +217,105 @@ export interface NewsItem {
   tag: string;
 }
 
+export type NewsEditorialSourceType = NewsItem['sourceType'];
+export type NewsSourceType = NewsEditorialSourceType | 'manager';
+export type NewsAiRole = 'torcida' | 'imprensa' | 'jogador' | 'clube' | 'manager';
+export type NewsAiSentiment = 'positivo' | 'neutro' | 'critico';
+
+export interface NewsAiCommentDto {
+  id?: string;
+  author?: string;
+  role?: string;
+  text?: string;
+  sentiment?: string;
+  parentCommentId?: string | null;
+  createdAt?: string | null;
+}
+
+export interface NewsAiComment {
+  id: string;
+  author: string;
+  role: NewsAiRole;
+  text: string;
+  sentiment: NewsAiSentiment;
+  parentCommentId: string | null;
+  createdAt: string | null;
+}
+
+export interface NewsPostDto {
+  id?: string;
+  roomCode?: string;
+  editorialKey?: string | null;
+  authorId?: string;
+  authorName?: string;
+  clubId?: string | null;
+  source?: string;
+  sourceType?: string;
+  time?: string;
+  createdAt?: string;
+  headline?: string;
+  body?: string;
+  reactions?: number;
+  tag?: string;
+  comments?: NewsAiCommentDto[];
+}
+
+export interface NewsPost {
+  id: string;
+  roomCode: string | null;
+  editorialKey: string | null;
+  authorId: string | null;
+  authorName: string | null;
+  clubId: string | null;
+  source: string;
+  sourceType: NewsSourceType;
+  time: string;
+  createdAt: string | null;
+  headline: string;
+  body: string;
+  reactions: number;
+  tag: string;
+  comments: NewsAiComment[];
+}
+
+export interface NewsAiReplyDto {
+  postId?: string;
+  comments?: NewsAiCommentDto[];
+}
+
+export interface NewsAiRequestPost {
+  id: string;
+  source: string;
+  sourceType: NewsEditorialSourceType;
+  headline: string;
+  body: string;
+  tag?: string;
+  reactions?: number;
+}
+
+export interface NewsFeedApiResponse {
+  posts?: NewsPostDto[];
+  source?: string;
+}
+
+export interface NewsAiApiResponse {
+  teamComment?: NewsAiCommentDto | null;
+  replies?: NewsAiReplyDto[];
+  posts?: NewsPostDto[];
+}
+
+export interface NewsPublishApiResponse {
+  post?: NewsPostDto;
+  generatedPost?: NewsPostDto | null;
+  teamComment?: NewsAiCommentDto | null;
+}
+
+export interface NewsCommentReplyApiResponse {
+  post?: NewsPostDto;
+  comments?: NewsAiCommentDto[];
+  generatedPost?: NewsPostDto | null;
+}
+
 export type AuthMode = 'firebase' | 'demo';
 export type AuthStatus = 'loading' | 'anonymous' | 'authenticated';
 
@@ -112,6 +335,32 @@ export interface ClubChoice {
   stars: number;
   budget: string;
   color: string;
+  crestImageUrl?: string | null;
+}
+
+export interface TournamentParticipant {
+  id: string;
+  name: string;
+  abbreviation: string;
+  colors: string[];
+  country: string | null;
+  division: string | null;
+  crestImageUrl: string | null;
+  crestImagePath: string | null;
+}
+
+export interface Tournament {
+  id: string;
+  name: string;
+  format: TournamentFormat;
+  teamCount: number;
+  legs: TournamentLegs;
+  tiebreakers: TournamentTiebreaker[];
+  teamIds: string[];
+  trophyImageUrl: string | null;
+  trophyImagePath: string | null;
+  active: boolean;
+  participants: TournamentParticipant[];
 }
 
 export interface RoomManager {
@@ -140,6 +389,13 @@ export interface MatchReadiness {
   managerIds: string[];
 }
 
+export interface RoomLineup {
+  managerId: string;
+  clubId: string;
+  lineupIds: string[];
+  updatedAt: string;
+}
+
 export interface Room {
   id: string;
   code: string;
@@ -148,6 +404,12 @@ export interface Room {
   status: 'waiting' | 'active';
   activeLeagues: string[];
   seasonLength: number;
+  unlimitedSeasons: boolean;
+  currentSeason: number;
+  seasonYear: number;
+  seasonStartedAt: string | null;
+  seasonHistory: unknown[];
+  careerCompleted: boolean;
   maxManagers: number;
   createdAt: string;
   updatedAt?: string;
@@ -158,6 +420,7 @@ export interface Room {
   scheduleVersion?: number;
   fixtureSchedule?: RoomFixture[];
   matchReadiness?: MatchReadiness;
+  lineups?: RoomLineup[];
   completedFixtureIds?: string[];
   completedMatches?: ServerMatchFinished[];
   lastCompletedMatch?: ServerMatchFinished | null;
@@ -179,6 +442,7 @@ export interface RoomCreatePayload {
   clubId?: string;
   activeLeagues?: string[];
   seasonLength?: number;
+  unlimitedSeasons?: boolean;
   maxManagers?: number;
 }
 
@@ -275,6 +539,12 @@ export interface MatchReadyResponse {
   allReady: boolean;
 }
 
+export interface LineupSaveResponse {
+  room: Room;
+  lineup: RoomLineup;
+  source: string;
+}
+
 export interface ServerToClientEvents {
   'server:ready': (payload: { socketId: string }) => void;
   'server:error': (payload: { event: string; error: ServerErrorPayload }) => void;
@@ -285,6 +555,7 @@ export interface ServerToClientEvents {
   'match:event': (event: ServerMatchEvent) => void;
   'match:finished': (result: ServerMatchFinished) => void;
   'match:skipped': (payload: { code: string }) => void;
+  'news:post': (post: NewsPostDto) => void;
 }
 
 export interface ClientToServerEvents {
@@ -299,6 +570,7 @@ export interface ClientToServerEvents {
   'match:start': (payload: { code: string; fixtureId?: string }, acknowledge: (response: AckResponse<{ matchId: string }>) => void) => void;
   'match:skip': (payload: { code: string }, acknowledge: (response: AckResponse<{ skipped: boolean }>) => void) => void;
   'match:sync': (payload: { code: string }, acknowledge: (response: AckResponse<MatchSyncResponse>) => void) => void;
+  'lineup:save': (payload: { code: string; lineupIds: string[] }, acknowledge: (response: AckResponse<LineupSaveResponse>) => void) => void;
 }
 
 export type BolaSocket = Socket<ServerToClientEvents, ClientToServerEvents>;

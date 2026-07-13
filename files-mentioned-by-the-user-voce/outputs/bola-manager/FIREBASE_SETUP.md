@@ -22,10 +22,12 @@ Sem esses provedores habilitados, a interface exibirá `auth/operation-not-allow
 ```powershell
 npx firebase-tools login
 npx firebase-tools use bola-manager
-npx firebase-tools deploy --only firestore:rules,firestore:indexes
+npx firebase-tools deploy --only firestore:rules,firestore:indexes,storage
 ```
 
 As coleções `rooms` e `matches` são bloqueadas para acesso direto do cliente. O Firebase Admin ignora essas regras e mantém a autoridade do servidor. Usuários autenticados podem ler o catálogo Brasfoot importado e editar somente o próprio documento em `users/{uid}`.
+
+Ative tambem o Firebase Storage e anote o nome exato do bucket. `storage.rules` bloqueia uploads diretos: escudos, avatares e trofeus passam pela rota administrativa, que valida PNG/JPEG/WebP (ate 5 MB), gera o caminho e associa a URL ao registro do catalogo.
 
 ## 3. Credencial Firebase Admin local
 
@@ -52,6 +54,7 @@ Defina como secrets/variables:
 NODE_ENV=production
 CLIENT_ORIGIN=https://SEU-DOMINIO.vercel.app
 FIREBASE_PROJECT_ID=bola-manager
+FIREBASE_STORAGE_BUCKET=bola-manager.firebasestorage.app
 FIREBASE_CLIENT_EMAIL=...
 FIREBASE_PRIVATE_KEY=...
 ROOM_STORE=firestore

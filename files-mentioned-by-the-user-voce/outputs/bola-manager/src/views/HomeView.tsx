@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, CloudRain, Crosshair, Gauge, Goal, HeartPulse, Newspaper, ShieldCheck, Sparkles, TrendingUp, Users } from 'lucide-react';
 import { Badge } from '../components/shared/Badge';
 import { ClubMark } from '../components/shared/ClubMark';
@@ -5,12 +6,15 @@ import { Panel } from '../components/shared/Panel';
 import { ProgressBar } from '../components/shared/ProgressBar';
 import { TacticsField } from '../components/tactics/TacticsField';
 import { formations } from '../constants/formations';
-import { leagueTable, news, players } from '../data/demoData';
+import { leagueTable, news } from '../data/demoData';
 import type { ServerMatchController } from '../hooks/useServerMatch';
-import type { ClubChoice, Room, RouteKey } from '../types';
-import { formatCurrency } from '../utils/formatters';
+import type { ClubChoice, Player, Room, RouteKey } from '../types';
+import { average, formatCurrency } from '../utils/formatters';
+import { buildSavedLineup } from '../utils/playerRoster';
 
 interface HomeViewProps {
+  players: Player[];
+  savedLineupIds?: string[];
   onNavigate: (route: RouteKey) => void;
   onToast: (message: string) => void;
   club: ClubChoice;
@@ -18,8 +22,6 @@ interface HomeViewProps {
   managerId: string;
   onlineMatch: ServerMatchController | null;
 }
-
-const startingEleven = [players[0], players[3], players[1], players[2], players[4], players[5], players[6], players[7], players[8], players[9], players[10]];
 
 function compactTeamCode(teamName: string) {
   return teamName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase();
@@ -34,7 +36,13 @@ function sameFixtureId(left: string | null | undefined, right: string | null | u
   return Boolean(left && right && left.toLocaleLowerCase('pt-BR') === right.toLocaleLowerCase('pt-BR'));
 }
 
-export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMatch }: HomeViewProps) {
+export function HomeView({ players, savedLineupIds, onNavigate, onToast, club, room, managerId, onlineMatch }: HomeViewProps) {
+  const [lineupSavePending, setLineupSavePending] = useState(false);
+  const startingEleven = buildSavedLineup(players, formations[0], savedLineupIds);
+  const availableCount = players.filter((player) => player.status === 'Disponível').length;
+  const injuredCount = players.filter((player) => player.status === 'Lesionado').length;
+  const suspendedCount = players.filter((player) => player.status === 'Suspenso').length;
+  const averageCondition = Math.round(average(players.map((player) => player.condition)));
   const currentFixture = room?.fixtureSchedule?.find((fixture) => sameFixtureId(fixture.fixtureId, room.currentFixtureId));
   const readiness = room && sameFixtureId(room.matchReadiness?.fixtureId, room.currentFixtureId) ? room.matchReadiness : null;
   const readyCount = readiness?.managerIds.length ?? 0;
@@ -50,6 +58,8 @@ export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMat
     ? 'Ir para a partida'
     : matchRunning
       ? 'Assistir partida'
+      : lineupSavePending
+        ? 'Salvando escalação…'
       : onlineMatch.readyPending
         ? 'Confirmando…'
         : !room?.currentFixtureId
@@ -58,14 +68,25 @@ export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMat
             ? 'Cancelar pronto'
             : 'Estou pronto';
 
-  function handleMatchAction() {
+  async function handleMatchAction() {
     if (!onlineMatch || matchRunning) {
       onNavigate('match');
       return;
     }
-    void onlineMatch.setReady(!managerReady).catch((nextError: unknown) => {
+    const ready = !managerReady;
+    try {
+      if (ready && !savedLineupIds?.length) {
+        const lineupIds = startingEleven.flatMap((player) => player ? [player.id] : []).slice(0, 11);
+        setLineupSavePending(true);
+        await onlineMatch.saveLineup(lineupIds);
+        setLineupSavePending(false);
+      }
+      await onlineMatch.setReady(ready);
+    } catch (nextError: unknown) {
       onToast(nextError instanceof Error ? nextError.message : 'Não foi possível confirmar sua prontidão.');
-    });
+    } finally {
+      setLineupSavePending(false);
+    }
   }
 
   return (
@@ -74,7 +95,7 @@ export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMat
         <div><p className="eyebrow">QUARTA-FEIRA, 16 DE JULHO</p><h1>Bom jogo, Emanuel.</h1><p>O elenco está concentrado. Restam duas decisões antes do clássico.</p></div>
         <div className="dashboard-actions">
           <button onClick={() => onNavigate('calendar')}><CalendarDays size={15} /> Ver agenda</button>
-          <button className="accent" onClick={handleMatchAction} disabled={Boolean(onlineMatch?.readyPending) || (Boolean(onlineMatch) && !room?.currentFixtureId)}><Goal size={15} /> {readinessLabel}</button>
+          <button className="accent" onClick={() => void handleMatchAction()} disabled={lineupSavePending || Boolean(onlineMatch?.readyPending) || (Boolean(onlineMatch) && !room?.currentFixtureId)}><Goal size={15} /> {readinessLabel}</button>
         </div>
       </div>
 
@@ -117,12 +138,12 @@ export function HomeView({ onNavigate, onToast, club, room, managerId, onlineMat
         </Panel>
 
         <Panel title="Pulso do elenco" eyebrow="DISPONIBILIDADE" action="Ver elenco" onAction={() => onNavigate('squad')} className="squad-pulse">
-          <div className="pulse-hero"><div className="pulse-score"><strong>91</strong><span>/100</span></div><div><strong>Prontos para competir</strong><p>Moral acima da média e carga equilibrada.</p></div></div>
+          <div className="pulse-hero"><div className="pulse-score"><strong>{averageCondition}</strong><span>/100</span></div><div><strong>{players.length ? 'Prontos para competir' : 'Elenco ainda não cadastrado'}</strong><p>{players.length ? 'Moral acima da média e carga equilibrada.' : 'Adicione jogadores no Editor da Base.'}</p></div></div>
           <div className="pulse-stats">
-            <div><span><Users size={14} /> Disponíveis</span><strong>18<small>/20</small></strong><ProgressBar value={90} /></div>
-            <div><span><HeartPulse size={14} /> Condição média</span><strong>92<small>%</small></strong><ProgressBar value={92} tone="info" /></div>
+            <div><span><Users size={14} /> Disponíveis</span><strong>{availableCount}<small>/{players.length}</small></strong><ProgressBar value={players.length ? (availableCount / players.length) * 100 : 0} /></div>
+            <div><span><HeartPulse size={14} /> Condição média</span><strong>{averageCondition}<small>%</small></strong><ProgressBar value={averageCondition} tone="info" /></div>
           </div>
-          <div className="availability-row"><Badge tone="danger" dot>1 lesionado</Badge><Badge tone="warning" dot>1 suspenso</Badge><span>Último treino: recuperação</span></div>
+          <div className="availability-row"><Badge tone="danger" dot>{injuredCount} lesionado{injuredCount === 1 ? '' : 's'}</Badge><Badge tone="warning" dot>{suspendedCount} suspenso{suspendedCount === 1 ? '' : 's'}</Badge><span>Último treino: recuperação</span></div>
         </Panel>
 
         <Panel title="Financeiro" eyebrow="JULHO · PROJEÇÃO" action="Detalhes" onAction={() => onNavigate('finance')} className="finance-pulse">
