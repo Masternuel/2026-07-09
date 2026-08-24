@@ -1,3 +1,10 @@
+import {
+  coordinateGlobalFixtureCalendar,
+  GLOBAL_FIXTURE_PRIORITY,
+  MAX_FIXTURE_RESCHEDULE_DAYS,
+  MIN_FIXTURE_REST_DAYS,
+} from "./globalFixtureCalendar.mjs";
+
 const LEGACY_FIXTURE_CATALOG = Object.freeze({
   abertura: { homeSlot: 0, awaySlot: 1, fallbackAway: "SAN" },
   "rodada-2": { homeSlot: 1, awaySlot: 0, fallbackHome: "PAL" },
@@ -361,19 +368,228 @@ function scheduleTimestamp(value) {
   return validDate(value)?.getTime() ?? Number.MAX_SAFE_INTEGER;
 }
 
+function fixtureHasFixedDate(fixture) {
+  return fixture?.status === "completed"
+    || fixture?.fixedDate === true
+    || fixture?.dateLocked === true
+    || fixture?.scheduleLocked === true;
+}
+
+function completedLeagueFixtureKeys(room) {
+  const completed = new Set((room?.leagueMatchResults ?? [])
+    .map((result) => fixtureKey(result?.leagueFixtureId))
+    .filter(Boolean));
+  const completedManaged = new Set((room?.completedFixtureIds ?? []).map(fixtureKey));
+  for (const fixture of room?.fixtureSchedule ?? []) {
+    if (fixture?.leagueFixtureId && completedManaged.has(fixtureKey(fixture.fixtureId))) {
+      completed.add(fixtureKey(fixture.leagueFixtureId));
+    }
+  }
+  return completed;
+}
+
+function competitionFixtureKey(fixture) {
+  return fixtureKey(fixture?.competitionFixtureId ?? fixture?.id);
+}
+
+function competitionCalendarKey(fixture, competitionId = null) {
+  const ownerId = competitionId ?? fixture?.competitionId ?? fixture?.tournamentId;
+  return `competition:${fixtureKey(ownerId)}:${competitionFixtureKey(fixture)}`;
+}
+
+function competitionFixtureNotBefore(fixtures, fixture, minRestDays) {
+  if (fixtureHasFixedDate(fixture)) return null;
+  const latestDependency = (fixtures ?? []).reduce((latest, candidate) => {
+    if (competitionFixtureKey(candidate) === competitionFixtureKey(fixture)
+      || candidate?.status !== "completed") return latest;
+    const sharesClub = clubIdsEqual(candidate.homeClubId, fixture.homeClubId)
+      || clubIdsEqual(candidate.awayClubId, fixture.homeClubId)
+      || clubIdsEqual(candidate.homeClubId, fixture.awayClubId)
+      || clubIdsEqual(candidate.awayClubId, fixture.awayClubId);
+    if (!sharesClub) return latest;
+    return Math.max(latest, scheduleTimestamp(candidate.scheduledAt));
+  }, 0);
+  if (!latestDependency || latestDependency === Number.MAX_SAFE_INTEGER) return null;
+  return new Date(latestDependency + minRestDays * DAY_IN_MS).toISOString();
+}
+
+function sortCompetitionCalendar(competition) {
+  const byId = new Map((competition.fixtures ?? []).map((fixture) => [
+    competitionFixtureKey(fixture),
+    fixture,
+  ]));
+  competition.calendar = (competition.fixtures ?? [])
+    .slice()
+    .sort((left, right) => (
+      scheduleTimestamp(left.scheduledAt) - scheduleTimestamp(right.scheduledAt)
+      || Number(left.calendarRound ?? left.round ?? 0) - Number(right.calendarRound ?? right.round ?? 0)
+      || competitionFixtureKey(left).localeCompare(competitionFixtureKey(right), "pt-BR")
+    ))
+    .map((fixture) => fixture.competitionFixtureId ?? fixture.id)
+    .filter((id) => byId.has(fixtureKey(id)));
+}
+
+function applyCoordinatedFixtureDate(fixture, scheduled) {
+  if (!scheduled) return { ...fixture };
+  const { originalScheduledAt: _previousOriginal, ...base } = fixture;
+  const originalScheduledAt = scheduled.originalScheduledAt ?? fixture.scheduledAt;
+  return {
+    ...base,
+    scheduledAt: scheduled.scheduledAt,
+    ...(scheduled.scheduledAt !== originalScheduledAt ? { originalScheduledAt } : {}),
+  };
+}
+
+/**
+ * Reconciles every official fixture before the managed calendar is derived.
+ * League and competition sources remain authoritative and receive the same dates.
+ */
+export function coordinateRoomFixtureCalendar(
+  room,
+  leagueSchedule = createLeagueFixtureSchedule(room),
+  competitionSeason = room?.competitionSeason,
+  options = {},
+) {
+  const minRestDays = options.minRestDays ?? MIN_FIXTURE_REST_DAYS;
+  const completedLeague = completedLeagueFixtureKeys(room);
+  const completedManaged = new Set((room?.completedFixtureIds ?? []).map(fixtureKey));
+  const leagueEntries = (leagueSchedule ?? []).map((fixture) => {
+    const id = fixtureKey(fixture?.leagueFixtureId);
+    const completed = completedLeague.has(id);
+    return {
+      calendarId: `league:${id}`,
+      id: fixture?.leagueFixtureId,
+      leagueId: fixture?.leagueId,
+      kind: "league",
+      scheduledAt: fixture?.scheduledAt,
+      originalScheduledAt: fixture?.originalScheduledAt ?? fixture?.scheduledAt,
+      homeClubId: fixture?.homeClubId,
+      awayClubId: fixture?.awayClubId,
+      priority: completed || fixtureHasFixedDate(fixture)
+        ? GLOBAL_FIXTURE_PRIORITY.FIXED
+        : GLOBAL_FIXTURE_PRIORITY.LEAGUE,
+      locked: completed || fixtureHasFixedDate(fixture),
+      historical: completed,
+    };
+  });
+  const competitionSource = Array.isArray(competitionSeason?.competitions)
+    ? competitionSeason.competitions.flatMap((competition) => (
+      (competition.fixtures ?? []).map((fixture) => ({
+        fixture,
+        competitionId: competition.id,
+        competitionFixtures: competition.fixtures,
+      }))
+    ))
+    : (competitionSeason?.fixtures ?? []).map((fixture) => ({
+      fixture,
+      competitionId: fixture?.competitionId ?? fixture?.tournamentId,
+      competitionFixtures: competitionSeason.fixtures,
+    }));
+  const competitionEntries = competitionSource
+    .filter(({ fixture }) => fixture?.homeClubId && fixture?.awayClubId)
+    .map(({ fixture, competitionId, competitionFixtures }) => {
+      const id = competitionFixtureKey(fixture);
+      const locked = fixtureHasFixedDate(fixture) || completedManaged.has(id);
+      return {
+        calendarId: competitionCalendarKey(fixture, competitionId),
+        id: fixture?.competitionFixtureId ?? fixture?.id,
+        competitionId,
+        tournamentId: competitionId,
+        kind: "competition",
+        scheduledAt: fixture?.scheduledAt,
+        originalScheduledAt: fixture?.originalScheduledAt ?? fixture?.scheduledAt,
+        notBefore: competitionFixtureNotBefore(competitionFixtures, fixture, minRestDays),
+        homeClubId: fixture?.homeClubId,
+        awayClubId: fixture?.awayClubId,
+      priority: locked
+        ? GLOBAL_FIXTURE_PRIORITY.FIXED
+        : GLOBAL_FIXTURE_PRIORITY.COMPETITION,
+      locked,
+      historical: fixture?.status === "completed" || completedManaged.has(id),
+      };
+    });
+  const coordinated = coordinateGlobalFixtureCalendar(
+    [...leagueEntries, ...competitionEntries],
+    {
+      minRestDays,
+      maxRescheduleDays: options.maxRescheduleDays ?? MAX_FIXTURE_RESCHEDULE_DAYS,
+      allowHistoricalLockedConflicts: true,
+    },
+  );
+  const coordinatedById = new Map(coordinated.map((fixture) => [fixture.calendarId, fixture]));
+  const nextLeagueSchedule = (leagueSchedule ?? []).map((fixture) => applyCoordinatedFixtureDate(
+    fixture,
+    coordinatedById.get(`league:${fixtureKey(fixture.leagueFixtureId)}`),
+  ));
+
+  let nextCompetitionSeason = competitionSeason ?? null;
+  if (competitionSeason) {
+    nextCompetitionSeason = structuredClone(competitionSeason);
+    if (Array.isArray(nextCompetitionSeason.competitions)) {
+      for (const competition of nextCompetitionSeason.competitions) {
+        competition.fixtures = (competition.fixtures ?? []).map((fixture) => applyCoordinatedFixtureDate(
+          fixture,
+          coordinatedById.get(competitionCalendarKey(fixture, competition.id)),
+        ));
+        sortCompetitionCalendar(competition);
+      }
+      nextCompetitionSeason.fixtures = nextCompetitionSeason.competitions
+        .flatMap((competition) => competition.fixtures.map((fixture) => structuredClone(fixture)))
+        .sort((left, right) => (
+          scheduleTimestamp(left.scheduledAt) - scheduleTimestamp(right.scheduledAt)
+          || competitionFixtureKey(left).localeCompare(competitionFixtureKey(right), "pt-BR")
+        ));
+    } else {
+      nextCompetitionSeason.fixtures = (nextCompetitionSeason.fixtures ?? []).map((fixture) => (
+        applyCoordinatedFixtureDate(fixture, coordinatedById.get(competitionCalendarKey(fixture)))
+      )).sort((left, right) => (
+        scheduleTimestamp(left.scheduledAt) - scheduleTimestamp(right.scheduledAt)
+        || competitionFixtureKey(left).localeCompare(competitionFixtureKey(right), "pt-BR")
+      ));
+    }
+    nextCompetitionSeason.calendar = (nextCompetitionSeason.fixtures ?? [])
+      .map((fixture) => fixture.competitionFixtureId ?? fixture.id);
+    nextCompetitionSeason.completedFixtureIds = (nextCompetitionSeason.fixtures ?? [])
+      .filter((fixture) => fixture.status === "completed")
+      .map((fixture) => fixture.competitionFixtureId ?? fixture.id);
+  }
+
+  return {
+    leagueSchedule: nextLeagueSchedule,
+    competitionSeason: nextCompetitionSeason,
+    rescheduled: coordinated.filter((fixture) => fixture.rescheduled === true).map((fixture) => ({
+      id: fixture.id,
+      competitionId: fixture.competitionId ?? fixture.leagueId ?? null,
+      kind: fixture.kind,
+      homeClubId: fixture.homeClubId,
+      awayClubId: fixture.awayClubId,
+      scheduledAt: fixture.scheduledAt,
+      originalScheduledAt: fixture.originalScheduledAt,
+    })),
+  };
+}
+
 /** Managed calendar used by match flow. League IDs remain stable; custom
  * competition IDs come from competitionEngine and therefore survive rebuilds. */
 export function createUnifiedFixtureSchedule(
   room,
   leagueSchedule = createLeagueFixtureSchedule(room),
   competitionSeason = room?.competitionSeason,
+  options = {},
 ) {
-  const leagueFixtures = createFixtureSchedule(room, leagueSchedule);
-  const competitionFixtures = (competitionSeason?.fixtures ?? [])
+  const sources = options.sourcesCoordinated === true
+    ? { leagueSchedule, competitionSeason }
+    : coordinateRoomFixtureCalendar(room, leagueSchedule, competitionSeason, options);
+  const leagueFixtures = createFixtureSchedule(room, sources.leagueSchedule);
+  const competitionFixtures = (sources.competitionSeason?.fixtures ?? [])
     .filter((fixture) => fixture?.homeClubId && fixture?.awayClubId)
     .map((fixture) => hydrateCompetitionFixture(room, fixture))
     .filter((fixture) => fixture.managerIds.length > 0);
-  return [...leagueFixtures, ...competitionFixtures].sort((left, right) => (
+  return sortUnifiedFixtureSchedule([...leagueFixtures, ...competitionFixtures]);
+}
+
+function sortUnifiedFixtureSchedule(fixtures) {
+  return fixtures.sort((left, right) => (
     scheduleTimestamp(left.scheduledAt) - scheduleTimestamp(right.scheduledAt)
     || Number(left.round ?? 0) - Number(right.round ?? 0)
     || String(left.fixtureId).localeCompare(String(right.fixtureId), "pt-BR")
@@ -394,17 +610,33 @@ export function createFixtureSchedule(room, fullSchedule = createLeagueFixtureSc
   const managedByClub = new Map(managed.map((manager) => [clubKey(manager.clubId), manager]));
   const context = catalogContext(room);
   if (context) {
-    return [...fullSchedule]
-      .sort((left, right) => {
-        const dateDelta = (validDate(left.scheduledAt)?.getTime() ?? Number.MAX_SAFE_INTEGER)
-          - (validDate(right.scheduledAt)?.getTime() ?? Number.MAX_SAFE_INTEGER);
-        if (dateDelta !== 0) return dateDelta;
-        if (left.round !== right.round) return left.round - right.round;
-        return String(left.leagueFixtureId).localeCompare(String(right.leagueFixtureId), "pt-BR");
-      })
+    const existingByLeagueFixture = new Map((room.fixtureSchedule ?? [])
+      .filter((fixture) => fixture?.leagueFixtureId && fixture?.fixtureId)
+      .map((fixture) => [fixtureKey(fixture.leagueFixtureId), fixture.fixtureId]));
+    const reservedFixtureIds = new Set([...existingByLeagueFixture.values()].map(fixtureKey));
+    const usedFixtureIds = new Set();
+    let nextFixtureIndex = 0;
+    const stable = [...fullSchedule]
       .map((fixture) => hydrateLeagueFixture(room, fixture))
       .filter((fixture) => fixture.managerIds.length > 0)
-      .map((fixture, index) => ({ ...fixture, fixtureId: fixtureIdAt(index) }));
+      .map((fixture) => {
+        let fixtureId = existingByLeagueFixture.get(fixtureKey(fixture.leagueFixtureId));
+        if (!fixtureId || usedFixtureIds.has(fixtureKey(fixtureId))) {
+          do {
+            fixtureId = fixtureIdAt(nextFixtureIndex);
+            nextFixtureIndex += 1;
+          } while (usedFixtureIds.has(fixtureKey(fixtureId))
+            || reservedFixtureIds.has(fixtureKey(fixtureId)));
+        }
+        usedFixtureIds.add(fixtureKey(fixtureId));
+        return { ...fixture, fixtureId };
+      });
+    return stable.sort((left, right) => {
+      const dateDelta = scheduleTimestamp(left.scheduledAt) - scheduleTimestamp(right.scheduledAt);
+      if (dateDelta !== 0) return dateDelta;
+      if (left.round !== right.round) return left.round - right.round;
+      return String(left.leagueFixtureId).localeCompare(String(right.leagueFixtureId), "pt-BR");
+    });
   }
 
   const aiClubIds = AI_CLUB_IDS.filter((clubId) => !managedClubKeys.has(clubKey(clubId))).slice(0, 6);
@@ -479,31 +711,34 @@ function fixturePairKey(fixture) {
 
 function associatePreservedSchedule(room, fullSchedule) {
   const usedLeagueFixtures = new Set();
-  const preserved = (room.fixtureSchedule ?? []).map((fixture) => {
-    const leagueKey = clubKey(fixture.leagueId);
-    const pairKey = fixturePairKey(fixture);
-    const full = fullSchedule.find((candidate) => (
-      !usedLeagueFixtures.has(candidate.leagueFixtureId)
-      && fixturePairKey(candidate) === pairKey
-      && (!leagueKey || clubKey(candidate.leagueId) === leagueKey)
-    ));
-    if (!full) return { ...fixture };
-    usedLeagueFixtures.add(full.leagueFixtureId);
-    const hydratedFull = hydrateLeagueFixture(room, full);
-    const reversed = !clubIdsEqual(fixture.homeClubId, full.homeClubId);
-    return {
-      ...fixture,
-      leagueFixtureId: full.leagueFixtureId,
-      leagueFixtureReversed: reversed,
-      leagueId: full.leagueId,
-      competition: hydratedFull.competition,
-      round: full.round,
-      scheduledAt: full.scheduledAt ?? fixture.scheduledAt ?? null,
-      homeManagerId: fixture.homeManagerId ?? (reversed ? hydratedFull.awayManagerId : hydratedFull.homeManagerId),
-      awayManagerId: fixture.awayManagerId ?? (reversed ? hydratedFull.homeManagerId : hydratedFull.awayManagerId),
-      managerIds: hydratedFull.managerIds,
-    };
-  });
+  const preserved = (room.fixtureSchedule ?? [])
+    .filter((fixture) => !fixture?.competitionFixtureId && !fixture?.tournamentId)
+    .map((fixture) => {
+      const leagueKey = clubKey(fixture.leagueId);
+      const pairKey = fixturePairKey(fixture);
+      const full = fullSchedule.find((candidate) => (
+        !usedLeagueFixtures.has(candidate.leagueFixtureId)
+        && fixturePairKey(candidate) === pairKey
+        && (!leagueKey || clubKey(candidate.leagueId) === leagueKey)
+      ));
+      if (!full) return { ...fixture };
+      usedLeagueFixtures.add(full.leagueFixtureId);
+      const hydratedFull = hydrateLeagueFixture(room, full);
+      const reversed = !clubIdsEqual(fixture.homeClubId, full.homeClubId);
+      return {
+        ...fixture,
+        leagueFixtureId: full.leagueFixtureId,
+        leagueFixtureReversed: reversed,
+        leagueId: full.leagueId,
+        competition: hydratedFull.competition,
+        round: full.round,
+        scheduledAt: full.scheduledAt ?? fixture.scheduledAt ?? null,
+        originalScheduledAt: full.originalScheduledAt ?? full.scheduledAt ?? fixture.scheduledAt ?? null,
+        homeManagerId: fixture.homeManagerId ?? (reversed ? hydratedFull.awayManagerId : hydratedFull.homeManagerId),
+        awayManagerId: fixture.awayManagerId ?? (reversed ? hydratedFull.homeManagerId : hydratedFull.awayManagerId),
+        managerIds: hydratedFull.managerIds,
+      };
+    });
   const usedFixtureIds = new Set(preserved.map((fixture) => fixtureKey(fixture.fixtureId)));
   let nextFixtureIndex = preserved.length;
   const missingManagedFixtures = createFixtureSchedule(room, fullSchedule)
@@ -521,6 +756,24 @@ function associatePreservedSchedule(room, fullSchedule) {
       return { ...fixture, fixtureId };
     });
   return [...preserved, ...missingManagedFixtures];
+}
+
+function mergePreservedSchedule(room, leagueSchedule, competitionFixtures) {
+  const associated = associatePreservedSchedule(room, leagueSchedule);
+  const preservedIds = new Set((room.fixtureSchedule ?? [])
+    .filter((fixture) => !fixture?.competitionFixtureId && !fixture?.tournamentId)
+    .map((fixture) => fixtureKey(fixture.fixtureId)));
+  const completedIds = new Set((room.completedFixtureIds ?? []).map(fixtureKey));
+  const preserved = associated.filter((fixture) => preservedIds.has(fixtureKey(fixture.fixtureId)));
+  const missing = associated.filter((fixture) => !preservedIds.has(fixtureKey(fixture.fixtureId)));
+  return [
+    ...preserved.filter((fixture) => completedIds.has(fixtureKey(fixture.fixtureId))),
+    ...sortUnifiedFixtureSchedule([
+      ...preserved.filter((fixture) => !completedIds.has(fixtureKey(fixture.fixtureId))),
+      ...competitionFixtures,
+    ]),
+    ...missing,
+  ];
 }
 
 function nextUncompletedFixtureId(schedule, completedFixtureIds) {
@@ -551,20 +804,55 @@ function backfillPreservedLeagueResults(room, schedule) {
 }
 
 export function ensureFixtureSchedule(room) {
-  const expectedLeagueSchedule = createLeagueFixtureSchedule(room);
+  const generatedLeagueSchedule = createLeagueFixtureSchedule(room);
+  const storedLeagueById = new Map((room.leagueFixtureSchedule ?? []).map((fixture) => [
+    fixtureKey(fixture?.leagueFixtureId),
+    fixture,
+  ]));
+  const sourceLeagueSchedule = generatedLeagueSchedule.map((fixture) => {
+    const stored = storedLeagueById.get(fixtureKey(fixture.leagueFixtureId));
+    const samePair = stored
+      && clubIdsEqual(stored.homeClubId, fixture.homeClubId)
+      && clubIdsEqual(stored.awayClubId, fixture.awayClubId);
+    return samePair && validDate(stored.scheduledAt)
+      ? {
+        ...fixture,
+        scheduledAt: stored.scheduledAt,
+        originalScheduledAt: stored.originalScheduledAt ?? fixture.scheduledAt,
+      }
+      : fixture;
+  });
+  const coordinated = coordinateRoomFixtureCalendar(
+    room,
+    sourceLeagueSchedule,
+    room.competitionSeason,
+  );
+  const expectedLeagueSchedule = coordinated.leagueSchedule;
+  const expectedCompetitionSeason = coordinated.competitionSeason;
   const hasProgress = (room.completedFixtureIds ?? []).length > 0;
   const migrateV2 = Number(room.scheduleVersion ?? 0) < FIXTURE_SCHEDULE_VERSION
     && hasProgress
     && Array.isArray(room.fixtureSchedule)
     && room.fixtureSchedule.length > 0;
   const preserveV2 = migrateV2 || room.scheduleCompatibility === "v2-preserved";
+  const unified = createUnifiedFixtureSchedule(
+    room,
+    expectedLeagueSchedule,
+    expectedCompetitionSeason,
+    { sourcesCoordinated: true },
+  );
   const expected = preserveV2
-    ? associatePreservedSchedule(room, expectedLeagueSchedule)
-    : createUnifiedFixtureSchedule(room, expectedLeagueSchedule, room.competitionSeason);
+    ? mergePreservedSchedule(
+      room,
+      expectedLeagueSchedule,
+      unified.filter((fixture) => fixture.competitionFixtureId),
+    )
+    : unified;
   const authoritativeCurrent = nextUncompletedFixtureId(expected, room.completedFixtureIds);
   const scheduleIsCurrent = room.scheduleVersion === FIXTURE_SCHEDULE_VERSION
     && schedulesMatch(room.fixtureSchedule, expected)
-    && JSON.stringify(room.leagueFixtureSchedule ?? []) === JSON.stringify(expectedLeagueSchedule);
+    && JSON.stringify(room.leagueFixtureSchedule ?? []) === JSON.stringify(expectedLeagueSchedule)
+    && JSON.stringify(room.competitionSeason ?? null) === JSON.stringify(expectedCompetitionSeason);
   const currentIsAuthoritative = fixtureIdsEqual(room.currentFixtureId, authoritativeCurrent);
   const readinessIsCurrent = room.matchReadiness
     && fixtureIdsEqual(room.matchReadiness.fixtureId, authoritativeCurrent)
@@ -575,6 +863,7 @@ export function ensureFixtureSchedule(room) {
 
   room.fixtureSchedule = expected;
   room.leagueFixtureSchedule = expectedLeagueSchedule;
+  room.competitionSeason = expectedCompetitionSeason;
   room.leagueMatchResults ??= [];
   if (preserveV2) backfillPreservedLeagueResults(room, expected);
   room.lastCompletedRound ??= null;

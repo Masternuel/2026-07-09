@@ -3,6 +3,7 @@ import {
   createLeagueFixtureSchedule,
   createFixtureSchedule,
   createUnifiedFixtureSchedule,
+  coordinateRoomFixtureCalendar,
   ensureFixtureSchedule,
   FIXTURE_SCHEDULE_VERSION,
   fixtureIdsEqual,
@@ -1188,11 +1189,24 @@ function pendingManagedFixture(room) {
   ) ?? null;
 }
 
-function rebuildManagedSchedule(room) {
-  room.fixtureSchedule = createUnifiedFixtureSchedule(
+function coordinateOfficialSchedule(room) {
+  const coordinated = coordinateRoomFixtureCalendar(
     room,
     room.leagueFixtureSchedule ?? [],
     room.competitionSeason,
+  );
+  room.leagueFixtureSchedule = coordinated.leagueSchedule;
+  room.competitionSeason = coordinated.competitionSeason;
+  return coordinated;
+}
+
+function rebuildManagedSchedule(room) {
+  coordinateOfficialSchedule(room);
+  room.fixtureSchedule = createUnifiedFixtureSchedule(
+    room,
+    room.leagueFixtureSchedule,
+    room.competitionSeason,
+    { sourcesCoordinated: true },
   );
   const next = pendingManagedFixture(room);
   room.currentFixtureId = next?.fixtureId ?? null;
@@ -1214,6 +1228,7 @@ function recordCompetitionFixture(room, fixture, result, completedAt) {
 function simulateAvailableCompetitionAi(room, completedAt, aiRosters = new Map()) {
   if (!room.competitionSeason) return;
   for (let iteration = 0; iteration < 2_048; iteration += 1) {
+    coordinateOfficialSchedule(room);
     const pending = listPendingCompetitionFixtures(room.competitionSeason)
       .filter((fixture) => fixture.homeClubId && fixture.awayClubId);
     if (pending.length === 0) return;
@@ -2038,13 +2053,9 @@ export class RoomStore {
       room.careerState = initialCareerState(room, initialCareerRoster);
       room.competitionSeason = createRoomCompetitionSeason(room);
       room.leagueFixtureSchedule = createLeagueFixtureSchedule(room);
-      room.fixtureSchedule = createUnifiedFixtureSchedule(
-        room,
-        room.leagueFixtureSchedule,
-        room.competitionSeason,
-      );
-      assertScheduleSize(room);
       room.leagueMatchResults = [];
+      rebuildManagedSchedule(room);
+      assertScheduleSize(room);
       room.lastCompletedRound = null;
       for (const manager of room.managers) {
         const hasFixture = room.fixtureSchedule.some(
@@ -3632,11 +3643,7 @@ export class RoomStore {
             current.playerCompetitionStatsCoverage = [];
             current.competitionSeason = createRoomCompetitionSeason(current);
             current.leagueFixtureSchedule = createLeagueFixtureSchedule(current);
-            current.fixtureSchedule = createUnifiedFixtureSchedule(
-              current,
-              current.leagueFixtureSchedule,
-              current.competitionSeason,
-            );
+            rebuildManagedSchedule(current);
             current.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
             delete current.scheduleCompatibility;
             current.currentFixtureId = current.fixtureSchedule[0]?.fixtureId ?? null;
@@ -4092,9 +4099,17 @@ export class RoomStore {
       let scheduleIssue = null;
       if (candidate.status === "active") {
         competitionSeason = competitionSeason ?? createRoomCompetitionSeason(candidate);
-        candidate.competitionSeason = competitionSeason;
         leagueSchedule = createLeagueFixtureSchedule(candidate);
-        schedule = createUnifiedFixtureSchedule(candidate, leagueSchedule, competitionSeason);
+        const coordinated = coordinateRoomFixtureCalendar(candidate, leagueSchedule, competitionSeason);
+        leagueSchedule = coordinated.leagueSchedule;
+        competitionSeason = coordinated.competitionSeason;
+        candidate.competitionSeason = competitionSeason;
+        schedule = createUnifiedFixtureSchedule(
+          candidate,
+          leagueSchedule,
+          competitionSeason,
+          { sourcesCoordinated: true },
+        );
         const everyManagerHasFixture = candidate.managers.every((manager) => schedule.some(
           (fixture) => this.#clubIdsEqual(fixture.homeClubId, manager.clubId)
             || this.#clubIdsEqual(fixture.awayClubId, manager.clubId),
