@@ -10,8 +10,10 @@ import {
 } from "../services/catalogDatabase.mjs";
 import {
   catalogDatabaseDocument,
+  createGlobalCatalogGenerationFirestore,
   createScopedCatalogFirestore,
 } from "./catalogScope.mjs";
+import { commitCatalogGeneration } from "./catalogImportTransaction.mjs";
 
 const COLLECTIONS = Object.freeze({
   leagues: "brasfootLeagues",
@@ -300,13 +302,16 @@ export class CatalogStore {
   constructor({
     firestore = null,
     rootFirestore = firestore,
+    scopeFirestore = firestore,
     ownerId = null,
     now = () => new Date(),
   } = {}) {
     this.firestore = firestore;
     this.rootFirestore = rootFirestore;
+    this.scopeFirestore = scopeFirestore;
     this.ownerId = ownerId;
     this.now = now;
+    this.generationId = null;
   }
 
   get source() {
@@ -315,26 +320,38 @@ export class CatalogStore {
 
   forOwner(ownerId) {
     if (!this.rootFirestore) return this;
+    const scopeFirestore = createScopedCatalogFirestore(this.rootFirestore, ownerId);
     return new CatalogStore({
-      firestore: createScopedCatalogFirestore(this.rootFirestore, ownerId),
+      firestore: scopeFirestore,
       rootFirestore: this.rootFirestore,
+      scopeFirestore,
       ownerId: String(ownerId),
       now: this.now,
     });
   }
 
   async ensureInitialized() {
-    if (!this.ownerId || !this.rootFirestore) return this;
+    if (!this.rootFirestore) return this;
+    if (!this.ownerId) {
+      const current = await this.rootFirestore.collection("brasfootImports").doc("current").get();
+      const generationId = current.data()?.activeGenerationId;
+      this.firestore = generationId
+        ? createGlobalCatalogGenerationFirestore(this.rootFirestore, generationId)
+        : this.scopeFirestore;
+      return this;
+    }
     const metadataReference = catalogDatabaseDocument(this.rootFirestore, this.ownerId);
     const timestamp = this.now().toISOString();
     const initializationId = randomUUID();
     let shouldInitialize = false;
     let waitForInitialization = false;
+    let activeGenerationId = null;
     await this.rootFirestore.runTransaction(async (transaction) => {
       shouldInitialize = false;
       waitForInitialization = false;
       const metadata = await transaction.get(metadataReference);
       if (metadata.exists && metadata.data()?.initialized === true) {
+        activeGenerationId = metadata.data()?.activeGenerationId ?? null;
         if (metadata.data()?.status === "importing") {
           throw new CatalogStoreError(
             "A base esta sendo importada. Tente novamente em instantes",
@@ -374,7 +391,10 @@ export class CatalogStore {
         await new Promise((resolve) => setTimeout(resolve, CATALOG_INITIALIZATION_POLL_MS));
         const current = await metadataReference.get();
         const currentData = current.data();
-        if (currentData?.initialized === true && currentData?.status === "ready") return this;
+        if (currentData?.initialized === true && currentData?.status === "ready") {
+          this.#useGeneration(currentData.activeGenerationId ?? null);
+          return this;
+        }
         if (["initialization_failed", "import_failed"].includes(currentData?.status)
           || currentData?.status !== "initializing"
           || initializationLeaseExpired(currentData, this.now().toISOString())) {
@@ -387,7 +407,10 @@ export class CatalogStore {
         409,
       );
     }
-    if (!shouldInitialize) return this;
+    if (!shouldInitialize) {
+      this.#useGeneration(activeGenerationId);
+      return this;
+    }
 
     let heartbeatInFlight = false;
     const refreshInitializationHeartbeat = async () => {
@@ -412,8 +435,13 @@ export class CatalogStore {
     heartbeatTimer.unref?.();
 
     try {
+      const globalCurrent = await this.rootFirestore.collection("brasfootImports").doc("current").get();
+      const globalGenerationId = globalCurrent.data()?.activeGenerationId;
+      const globalCatalog = globalGenerationId
+        ? createGlobalCatalogGenerationFirestore(this.rootFirestore, globalGenerationId)
+        : this.rootFirestore;
       const snapshots = await Promise.all(CATALOG_DATABASE_ENTITIES.map((entity) => (
-        this.rootFirestore.collection(COLLECTIONS[entity]).get()
+        globalCatalog.collection(COLLECTIONS[entity]).get()
       )));
       await refreshInitializationHeartbeat();
       const operations = [];
@@ -490,6 +518,50 @@ export class CatalogStore {
     return this.#collection(entity);
   }
 
+  get importLogFirestore() {
+    return this.scopeFirestore;
+  }
+
+  async importBrasfootData({ data, runId, batchSize = 400, onProgress = async () => {} }) {
+    this.#assertAvailable();
+    if (!this.ownerId || !this.rootFirestore) {
+      throw new CatalogStoreError(
+        "Importacao Brasfoot transacional exige uma base pessoal",
+        "CATALOG_DATABASE_PERSONAL_REQUIRED",
+        409,
+      );
+    }
+    const result = await commitCatalogGeneration({
+      rootFirestore: this.rootFirestore,
+      metadataReference: catalogDatabaseDocument(this.rootFirestore, this.ownerId),
+      sourceFirestoreForGeneration: (generationId) => generationId
+        ? createScopedCatalogFirestore(this.rootFirestore, this.ownerId, generationId)
+        : this.scopeFirestore,
+      generationFirestoreForId: (generationId) => (
+        createScopedCatalogFirestore(this.rootFirestore, this.ownerId, generationId)
+      ),
+      collectionPlan: [
+        { collectionName: "brasfootClubs", records: data.clubs },
+        { collectionName: "brasfootPlayers", records: data.players },
+        { collectionName: "brasfootLeagues", records: data.leagues },
+        { collectionName: "brasfootCups", records: data.cups },
+        { collectionName: "tournaments", records: [] },
+      ],
+      runId,
+      batchSize,
+      now: this.now,
+      onProgress,
+      metadataCounts: (counts) => ({
+        clubs: counts.brasfootClubs ?? 0,
+        players: counts.brasfootPlayers ?? 0,
+        leagues: counts.brasfootLeagues ?? 0,
+        tournaments: counts.tournaments ?? 0,
+      }),
+    });
+    this.#useGeneration(result.generationId);
+    return result;
+  }
+
   async exportDatabase() {
     this.#assertAvailable();
     const snapshots = await Promise.all(CATALOG_DATABASE_ENTITIES.map((entity) => (
@@ -527,10 +599,17 @@ export class CatalogStore {
     let revision = 1;
     await this.rootFirestore.runTransaction(async (transaction) => {
       const metadata = await transaction.get(metadataReference);
-      if (metadata.data()?.status === "importing") {
+      if (metadata.data()?.status === "importing" || metadata.data()?.importOperation) {
         throw new CatalogStoreError(
           "Ja existe uma importacao em andamento nesta base",
           "CATALOG_DATABASE_IMPORT_IN_PROGRESS",
+          409,
+        );
+      }
+      if ((metadata.data()?.activeGenerationId ?? null) !== (this.generationId ?? null)) {
+        throw new CatalogStoreError(
+          "A base mudou; recarregue o Editor antes de importar",
+          "CATALOG_DATABASE_STALE",
           409,
         );
       }
@@ -602,6 +681,14 @@ export class CatalogStore {
       ]));
       await this.rootFirestore.runTransaction(async (transaction) => {
         const current = await transaction.get(metadataReference);
+        if (current.data()?.status !== "importing"
+          || Number(current.data()?.revision || 0) !== revision) {
+          throw new CatalogStoreError(
+            "A base mudou durante a importacao",
+            "CATALOG_DATABASE_IMPORT_CONFLICT",
+            409,
+          );
+        }
         transaction.set(metadataReference, {
           ...(current.exists ? current.data() : {}),
           status: "ready",
@@ -842,7 +929,7 @@ export class CatalogStore {
     }
     this.#assertRecordConsistency(entity, record);
 
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const current = await transaction.get(reference);
       if (current.exists) {
         throw new CatalogStoreError(
@@ -898,7 +985,7 @@ export class CatalogStore {
     const reference = collection.doc(id);
     let result;
 
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const current = await transaction.get(reference);
       if (!current.exists) throw notFoundError(entity, id);
       const existing = snapshotRecord(current, entity);
@@ -942,7 +1029,7 @@ export class CatalogStore {
     let result;
     let previousPath = null;
 
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const current = await transaction.get(reference);
       if (!current.exists) throw notFoundError(entity, id);
       const existing = snapshotRecord(current, entity);
@@ -972,7 +1059,7 @@ export class CatalogStore {
     let result;
     let previousPath = null;
 
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const current = await transaction.get(reference);
       if (!current.exists) throw notFoundError(entity, id);
       const existing = snapshotRecord(current, entity);
@@ -997,7 +1084,7 @@ export class CatalogStore {
     const reference = collection.doc(id);
 
     let previousPath = null;
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const current = await transaction.get(reference);
       if (!current.exists) throw notFoundError(entity, id);
       const mediaFields = MEDIA_FIELDS[entity];
@@ -1041,7 +1128,7 @@ export class CatalogStore {
     const references = ids.map((id) => collection.doc(id));
     const previousPaths = [];
 
-    await this.firestore.runTransaction(async (transaction) => {
+    await this.#runCatalogMutation(async (transaction) => {
       const documents = typeof transaction.getAll === "function"
         ? await transaction.getAll(...references)
         : await Promise.all(references.map((reference) => transaction.get(reference)));
@@ -1095,6 +1182,46 @@ export class CatalogStore {
 
   #assertAvailable() {
     if (!this.firestore) throw unavailableError();
+  }
+
+  async #runCatalogMutation(operation) {
+    if (!this.ownerId || !this.rootFirestore) {
+      return this.firestore.runTransaction(operation);
+    }
+    const metadataReference = catalogDatabaseDocument(this.rootFirestore, this.ownerId);
+    return this.rootFirestore.runTransaction(async (transaction) => {
+      const current = await transaction.get(metadataReference);
+      const metadata = current.data() ?? {};
+      if (metadata.importOperation || ["importing", "initializing"].includes(metadata.status)) {
+        throw new CatalogStoreError(
+          "A base esta em uma importacao exclusiva. Tente novamente em instantes",
+          "CATALOG_DATABASE_IMPORT_IN_PROGRESS",
+          409,
+        );
+      }
+      if ((metadata.activeGenerationId ?? null) !== (this.generationId ?? null)) {
+        throw new CatalogStoreError(
+          "A base mudou; recarregue o Editor",
+          "CATALOG_DATABASE_STALE",
+          409,
+        );
+      }
+      const result = await operation(transaction);
+      const updatedAt = this.now().toISOString();
+      transaction.set(metadataReference, {
+        ...metadata,
+        revision: Math.max(0, Number(metadata.revision) || 0) + 1,
+        updatedAt,
+      });
+      return result;
+    });
+  }
+
+  #useGeneration(generationId) {
+    this.generationId = generationId ?? null;
+    this.firestore = generationId
+      ? createScopedCatalogFirestore(this.rootFirestore, this.ownerId, generationId)
+      : this.scopeFirestore;
   }
 
   #collection(entity) {

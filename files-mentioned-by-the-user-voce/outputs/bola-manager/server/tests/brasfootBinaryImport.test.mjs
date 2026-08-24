@@ -7,6 +7,7 @@ import { mapBrasfootLeague, mapBrasfootTeam, planClubIds } from "../../scripts/l
 import {
   executeImportCommit, normalizeDataset, runImport, secureAssetPath, uploadBrasfootCrests,
 } from "../../scripts/import-brasfoot.mjs";
+import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
 
 function javaObject(className, fields) {
   return { $java: "object", $class: className, $fields: fields, $classData: [] };
@@ -29,42 +30,37 @@ function emptyReport(inputPath = "C:/Brasfoot") {
   };
 }
 
-function fakeDatabase({ failCollection = null } = {}) {
-  const documents = new Map();
+function failStagingBatch(database, collectionName, occurrence = 1) {
+  const originalBatch = database.batch.bind(database);
+  let matches = 0;
   let failed = false;
-  function reference(collectionName, id) {
-    const key = `${collectionName}/${id}`;
-    return {
-      collectionName,
-      id,
-      key,
-      async set(value, options = {}) {
-        const previous = options.merge ? documents.get(key) ?? {} : {};
-        documents.set(key, { ...previous, ...structuredClone(value) });
-      },
+  database.batch = () => {
+    const batch = originalBatch();
+    const paths = [];
+    const originalSet = batch.set.bind(batch);
+    batch.set = (reference, value, options) => {
+      paths.push(reference.path);
+      return originalSet(reference, value, options);
     };
-  }
-  return {
-    documents,
-    collection(collectionName) {
-      return { doc: (id) => reference(collectionName, id) };
-    },
-    batch() {
-      const operations = [];
-      return {
-        set(documentReference, value) {
-          operations.push([documentReference, value]);
-        },
-        async commit() {
-          if (!failed && operations.some(([item]) => item.collectionName === failCollection)) {
-            failed = true;
-            throw new Error(`falha em ${failCollection}`);
-          }
-          for (const [documentReference, value] of operations) await documentReference.set(value, { merge: true });
-        },
-      };
-    },
+    const originalCommit = batch.commit.bind(batch);
+    batch.commit = async () => {
+      if (!failed && paths.some((path) => path.includes(`/${collectionName}/`))) {
+        matches += 1;
+        if (matches === occurrence) {
+          failed = true;
+          throw new Error(`falha em ${collectionName}`);
+        }
+      }
+      return originalCommit();
+    };
+    return batch;
   };
+}
+
+function activeRecords(database, collectionName) {
+  const generationId = database.read("brasfootImports/current")?.activeGenerationId;
+  if (!generationId) return [];
+  return [...database.dump(`brasfootCatalogGenerations/${generationId}/${collectionName}`).values()];
 }
 
 test("mapeia clube, elenco senior e juniores com IDs estaveis", () => {
@@ -398,30 +394,45 @@ test("schema normalizado exige posicao canonica, reputacao inteira e completa li
 });
 
 test("commit registra progresso e conclusao em documento por execucao", async () => {
-  const database = fakeDatabase();
+  const database = createFakeFirestore({
+    initialDocuments: { "brasfootClubs/original": { id: "original", name: "Original" } },
+  });
   const report = emptyReport();
-  const data = { version: "teste", clubs: [], players: [], leagues: [], cups: [] };
+  const data = {
+    version: "teste",
+    clubs: [{ id: "club", name: "Clube", leagueId: "league" }],
+    players: [{ id: "player", name: "Atleta", clubId: "club" }],
+    leagues: [{ id: "league", name: "Liga" }],
+    cups: [{ id: "cup", name: "Copa" }],
+  };
   await executeImportCommit({
     database,
     data,
-    summary: { version: "teste", clubs: 0, players: 0, leagues: 0, cups: 0, playersWithoutClub: 0 },
+    summary: { version: "teste", clubs: 1, players: 1, leagues: 1, cups: 1, playersWithoutClub: 0 },
     parsedSource: { report, assetRoot: null },
     options: { batchSize: 2, skipAssets: true },
     runId: "run-completo",
     now: () => "2026-07-13T00:00:00.000Z",
   });
 
-  assert.equal(database.documents.get("brasfootImports/run-completo").status, "completed");
-  assert.equal(database.documents.get("brasfootImports/run-completo").progress.phase, "completed");
-  assert.equal(database.documents.get("brasfootImports/current").runId, "run-completo");
+  assert.equal(database.read("brasfootImports/run-completo").status, "completed");
+  assert.equal(database.read("brasfootImports/run-completo").progress.phase, "completed");
+  assert.equal(database.read("brasfootImports/current").runId, "run-completo");
+  assert.deepEqual(activeRecords(database, "brasfootClubs").map(({ id }) => id).sort(), ["club", "original"]);
+  assert.deepEqual(activeRecords(database, "brasfootPlayers").map(({ id }) => id), ["player"]);
+  assert.deepEqual(activeRecords(database, "brasfootLeagues").map(({ id }) => id), ["league"]);
+  assert.deepEqual(activeRecords(database, "brasfootCups").map(({ id }) => id), ["cup"]);
   assert.equal(report.commit.status, "completed");
 });
 
-test("commit falho marca execucao e remove somente assets enviados nela", async () => {
+test("falha no inicio nao altera a base e remove assets enviados", async () => {
   const root = await mkdtemp(join(tmpdir(), "brasfoot-cleanup-"));
   await mkdir(join(root, "teams", "escudos"), { recursive: true });
   await writeFile(join(root, "teams", "escudos", "club.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-  const database = fakeDatabase({ failCollection: "brasfootClubs" });
+  const database = createFakeFirestore({
+    initialDocuments: { "brasfootClubs/original": { id: "original", name: "Original" } },
+  });
+  failStagingBatch(database, "brasfootClubs");
   const removed = [];
   const report = emptyReport(root);
   const data = {
@@ -450,20 +461,29 @@ test("commit falho marca execucao e remove somente assets enviados nela", async 
   assert.deepEqual(removed, ["editor-media/clubs/run/club.png"]);
   assert.equal(report.assets.cleanedUp, 1);
   assert.equal(report.commit.status, "failed");
-  assert.equal(database.documents.get("brasfootImports/run-falho").status, "failed");
-  assert.equal(database.documents.has("brasfootImports/current"), false);
+  assert.equal(database.read("brasfootImports/run-falho").status, "failed");
+  assert.equal(database.has("brasfootImports/current"), false);
+  assert.deepEqual(database.read("brasfootClubs/original"), { id: "original", name: "Original" });
+  assert.equal(database.has("brasfootClubs/club"), false);
+  assert.equal(database.dump("brasfootCatalogGenerations").size, 0);
 });
 
-test("falha posterior preserva escudo de clube que ja foi gravado", async () => {
+test("falha no meio desfaz todo staging e todos os assets", async () => {
   const root = await mkdtemp(join(tmpdir(), "brasfoot-preserve-"));
   await mkdir(join(root, "teams", "escudos"), { recursive: true });
   await writeFile(join(root, "teams", "escudos", "club.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-  const database = fakeDatabase({ failCollection: "brasfootPlayers" });
+  const database = createFakeFirestore({
+    initialDocuments: { "brasfootClubs/original": { id: "original", name: "Original" } },
+  });
+  failStagingBatch(database, "brasfootClubs", 2);
   const removed = [];
   const report = emptyReport(root);
   const data = {
     version: "teste",
-    clubs: [{ id: "club", assets: { shield: "teams/escudos/club.png" } }],
+    clubs: [
+      { id: "club", assets: { shield: "teams/escudos/club.png" } },
+      { id: "club-2" },
+    ],
     players: [{ id: "player", clubId: "club" }],
     leagues: [], cups: [],
   };
@@ -471,25 +491,84 @@ test("falha posterior preserva escudo de clube que ja foi gravado", async () => 
     await assert.rejects(() => executeImportCommit({
       database,
       data,
-      summary: { version: "teste", clubs: 1, players: 1, leagues: 0, cups: 0, playersWithoutClub: 0 },
+      summary: { version: "teste", clubs: 2, players: 1, leagues: 0, cups: 0, playersWithoutClub: 0 },
       parsedSource: { report, assetRoot: root },
-      options: { batchSize: 2, skipAssets: false },
+      options: { batchSize: 1, skipAssets: false },
       mediaService: {
         async upload() { return { url: "https://storage/club.png", path: "editor-media/clubs/run/club.png" }; },
         async remove(path) { removed.push(path); },
       },
       runId: "run-parcial",
       now: () => "2026-07-13T00:00:00.000Z",
-    }), /falha em brasfootPlayers/);
+    }), /falha em brasfootClubs/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 
-  assert.deepEqual(removed, []);
-  assert.equal(report.assets.preserved, 1);
-  assert.equal(report.assets.cleanedUp, 0);
-  assert.equal(database.documents.get("brasfootClubs/club").crestImageUrl, "https://storage/club.png");
-  assert.equal(database.documents.get("brasfootImports/run-parcial").progress.assets.preserved, 1);
+  assert.deepEqual(removed, ["editor-media/clubs/run/club.png"]);
+  assert.equal(report.assets.preserved, 0);
+  assert.equal(report.assets.cleanedUp, 1);
+  assert.deepEqual(database.read("brasfootClubs/original"), { id: "original", name: "Original" });
+  assert.equal(database.has("brasfootImports/current"), false);
+  assert.equal(database.dump("brasfootCatalogGenerations").size, 0);
+});
+
+test("falha na ativacao final preserva integralmente a geracao anterior", async () => {
+  const database = createFakeFirestore({
+    initialDocuments: { "brasfootClubs/original": { id: "original", name: "Original" } },
+  });
+  const originalTransaction = database.runTransaction.bind(database);
+  let transactionCalls = 0;
+  database.runTransaction = async (operation, options) => {
+    transactionCalls += 1;
+    if (transactionCalls === 3) throw new Error("falha na ativacao final");
+    return originalTransaction(operation, options);
+  };
+  const report = emptyReport();
+  await assert.rejects(() => executeImportCommit({
+    database,
+    data: { version: "teste", clubs: [{ id: "club" }], players: [], leagues: [], cups: [] },
+    summary: { version: "teste", clubs: 1, players: 0, leagues: 0, cups: 0, playersWithoutClub: 0 },
+    parsedSource: { report, assetRoot: null },
+    options: { batchSize: 2, skipAssets: true },
+    runId: "run-final",
+    now: () => "2026-07-13T00:00:00.000Z",
+  }), /falha na ativacao final/);
+
+  assert.deepEqual(database.read("brasfootClubs/original"), { id: "original", name: "Original" });
+  assert.equal(database.has("brasfootClubs/club"), false);
+  assert.equal(database.has("brasfootImports/current"), false);
+  assert.equal(database.dump("brasfootCatalogGenerations").size, 0);
+});
+
+test("nova tentativa apos rollback conclui sem duplicatas ou residuos", async () => {
+  const database = createFakeFirestore({
+    initialDocuments: { "brasfootClubs/original": { id: "original", name: "Original" } },
+  });
+  failStagingBatch(database, "brasfootClubs");
+  const data = { version: "teste", clubs: [{ id: "club" }], players: [], leagues: [], cups: [] };
+  const summary = { version: "teste", clubs: 1, players: 0, leagues: 0, cups: 0, playersWithoutClub: 0 };
+  await assert.rejects(() => executeImportCommit({
+    database,
+    data,
+    summary,
+    parsedSource: { report: emptyReport(), assetRoot: null },
+    options: { batchSize: 1, skipAssets: true },
+    runId: "run-retry",
+    now: () => "2026-07-13T00:00:00.000Z",
+  }), /falha em brasfootClubs/);
+  await executeImportCommit({
+    database,
+    data,
+    summary,
+    parsedSource: { report: emptyReport(), assetRoot: null },
+    options: { batchSize: 1, skipAssets: true },
+    runId: "run-retry",
+    now: () => "2026-07-13T00:00:01.000Z",
+  });
+
+  assert.deepEqual(activeRecords(database, "brasfootClubs").map(({ id }) => id).sort(), ["club", "original"]);
+  assert.equal(database.dump("brasfootCatalogGenerations").size, 2);
 });
 
 test("runImport grava relatorio final mesmo quando a entrada falha", async () => {

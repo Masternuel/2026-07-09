@@ -270,6 +270,6 @@ eventos, quando presentes. Sem partida iniciada ou concluida, a resposta usa
 
 O Editor envia `.ban`, `.cfg` e `.png` por sessoes temporarias da base pessoal. O fluxo usa `POST /api/editor/brasfoot-import/sessions`, `PUT .../files`, `POST .../preview`, `POST .../commit` e `DELETE` para descarte. Cada sessao pertence ao UID que a criou, grava somente na base desse UID, expira em 30 minutos e aceita ate 200 arquivos, 32 MB por arquivo e 256 MB no total. O commit e bloqueado quando a previa possui erros, salvo confirmacao explicita de importacao parcial.
 
-As sessoes ficam no disco temporario do processo. Em producao, mantenha uma replica durante cada importacao ou configure afinidade de sessao antes de escalar horizontalmente. O commit registra uma execucao em `brasfootImports`, aplica merge idempotente e envia escudos somente quando solicitado e quando o Storage esta configurado.
+As sessoes ficam no disco temporario do processo. Em producao, mantenha uma replica durante cada upload ou configure afinidade de sessao antes de escalar horizontalmente. O commit monta uma geracao isolada, ativa tudo em uma unica transacao, aplica merge idempotente e compensa escudos enviados quando ocorre rollback.
 
 Como alternativa de automacao, `scripts/import-brasfoot.mjs` recebe JSON normalizado, `.ban`, `.cfg`, `teams` ou a raiz do Brasfoot. O leitor de Java Serialization e data-only e nao instancia classes. Consulte [o guia do importador](../scripts/BRASFOOT_IMPORT.md) para o modo CLI, limites e reconciliacao.

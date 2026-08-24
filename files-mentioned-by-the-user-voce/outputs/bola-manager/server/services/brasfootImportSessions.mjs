@@ -189,6 +189,7 @@ export class BrasfootImportSessionService {
     this.normalize = normalize;
     this.commitImport = commitImport;
     this.sessions = new Map();
+    this.ownerCommits = new Set();
     this.root = null;
     this.closed = false;
     this.cleanupTimer = null;
@@ -387,70 +388,88 @@ export class BrasfootImportSessionService {
   }
 
   async commit({ sessionId, ownerId, allowPartial = false, importAssets = false }) {
-    let completed = false;
-    const response = await this.#use(sessionId, ownerId, async (session) => {
-      const preview = session.preview;
-      if (!preview || preview.revision !== session.revision) {
-        throw sessionError(
-          "Gere uma pre-visualizacao valida antes de importar",
-          "BRASFOOT_IMPORT_PREVIEW_REQUIRED",
-          409,
-        );
-      }
-      const errorCount = preview.parsedSource.report.errors?.length ?? 0;
-      if (errorCount > 0 && allowPartial !== true) {
-        throw sessionError(
-          "A pre-visualizacao contem erros; confirme a importacao parcial para continuar",
-          "BRASFOOT_IMPORT_PARTIAL_CONFIRMATION_REQUIRED",
-          409,
-          { errors: errorCount },
-        );
-      }
-      const targetDatabase = this.databaseForOwner
-        ? await this.databaseForOwner(ownerId)
-        : this.database;
-      if (!targetDatabase) {
-        throw sessionError(
-          "Firestore indisponivel para importacao",
-          "BRASFOOT_IMPORT_FIRESTORE_UNAVAILABLE",
-          503,
-        );
-      }
-      const data = structuredClone(preview.data);
-      const parsedSource = {
-        report: structuredClone(preview.parsedSource.report),
-        assetRoot: preview.parsedSource.assetRoot,
-      };
-      const result = await this.commitImport({
-        database: targetDatabase,
-        data,
-        summary: structuredClone(preview.summary),
-        parsedSource,
-        options: {
-          allowPartial: allowPartial === true,
-          skipAssets: importAssets !== true,
-          batchSize: 400,
-        },
-        mediaService: importAssets === true ? this.mediaService : null,
-      });
-      completed = true;
-      return {
-        sessionId: session.id,
-        id: session.id,
-        runId: result.runId,
-        summary: structuredClone(preview.summary),
-        progress: result.progress,
-        report: compactReport(parsedSource.report),
-      };
-    });
-    if (completed) {
-      try {
-        await this.#remove(sessionId);
-      } catch (error) {
-        this.#logError(error);
-      }
+    const ownerKey = String(ownerId);
+    if (this.ownerCommits.has(ownerKey)) {
+      throw sessionError(
+        "Ja existe uma importacao Brasfoot em andamento nesta base",
+        "BRASFOOT_IMPORT_IN_PROGRESS",
+        409,
+      );
     }
-    return response;
+    this.ownerCommits.add(ownerKey);
+    let completed = false;
+    try {
+      const response = await this.#use(sessionId, ownerId, async (session) => {
+        const preview = session.preview;
+        if (!preview || preview.revision !== session.revision) {
+          throw sessionError(
+            "Gere uma pre-visualizacao valida antes de importar",
+            "BRASFOOT_IMPORT_PREVIEW_REQUIRED",
+            409,
+          );
+        }
+        const errorCount = preview.parsedSource.report.errors?.length ?? 0;
+        if (errorCount > 0 && allowPartial !== true) {
+          throw sessionError(
+            "A pre-visualizacao contem erros; confirme a importacao parcial para continuar",
+            "BRASFOOT_IMPORT_PARTIAL_CONFIRMATION_REQUIRED",
+            409,
+            { errors: errorCount },
+          );
+        }
+        const target = this.databaseForOwner
+          ? await this.databaseForOwner(ownerId)
+          : this.database;
+        const catalogStore = typeof target?.importBrasfootData === "function" ? target : null;
+        const targetDatabase = catalogStore?.importLogFirestore ?? catalogStore?.firestore ?? target;
+        if (!targetDatabase) {
+          throw sessionError(
+            "Firestore indisponivel para importacao",
+            "BRASFOOT_IMPORT_FIRESTORE_UNAVAILABLE",
+            503,
+          );
+        }
+        const data = structuredClone(preview.data);
+        const parsedSource = {
+          report: structuredClone(preview.parsedSource.report),
+          assetRoot: preview.parsedSource.assetRoot,
+        };
+        const result = await this.commitImport({
+          database: targetDatabase,
+          catalogStore,
+          data,
+          summary: structuredClone(preview.summary),
+          parsedSource,
+          options: {
+            allowPartial: allowPartial === true,
+            skipAssets: importAssets !== true,
+            batchSize: 400,
+          },
+          mediaService: importAssets === true ? this.mediaService : null,
+          runId: session.id,
+        });
+        completed = true;
+        return {
+          sessionId: session.id,
+          id: session.id,
+          runId: result.runId,
+          generationId: result.generationId,
+          summary: structuredClone(preview.summary),
+          progress: result.progress,
+          report: compactReport(parsedSource.report),
+        };
+      });
+      if (completed) {
+        try {
+          await this.#remove(sessionId);
+        } catch (error) {
+          this.#logError(error);
+        }
+      }
+      return response;
+    } finally {
+      this.ownerCommits.delete(ownerKey);
+    }
   }
 
   async #remove(sessionId) {

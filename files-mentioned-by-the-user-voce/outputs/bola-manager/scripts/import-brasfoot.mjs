@@ -7,6 +7,8 @@ import { z } from "zod";
 import { initializeFirebaseAdmin } from "../server/config.mjs";
 import { calculatePlayerOverall } from "../server/game/lineupStrength.mjs";
 import { createMediaService } from "../server/services/mediaService.mjs";
+import { commitCatalogGeneration } from "../server/store/catalogImportTransaction.mjs";
+import { createGlobalCatalogGenerationFirestore } from "../server/store/catalogScope.mjs";
 import { parseBrasfootSource } from "./lib/brasfoot-binary.mjs";
 
 const attributeSchema = z.record(z.coerce.number().finite()).default({});
@@ -272,20 +274,6 @@ function summarize(data) {
   };
 }
 
-async function commitCollection(database, collectionName, records, batchSize, onProgress = async () => {}) {
-  let committed = 0;
-  for (let offset = 0; offset < records.length; offset += batchSize) {
-    const batch = database.batch();
-    for (const record of records.slice(offset, offset + batchSize)) {
-      batch.set(database.collection(collectionName).doc(record.id), record, { merge: true });
-    }
-    await batch.commit();
-    committed += Math.min(batchSize, records.length - offset);
-    await onProgress(committed);
-  }
-  return committed;
-}
-
 export async function secureAssetPath(assetRoot, relativePath) {
   const root = resolve(assetRoot);
   const target = resolve(root, String(relativePath));
@@ -401,6 +389,7 @@ function compactReport(report) {
 
 export async function executeImportCommit({
   database,
+  catalogStore = null,
   data,
   summary,
   parsedSource,
@@ -428,6 +417,7 @@ export async function executeImportCommit({
     assets: { detected: data.clubs.filter((club) => club.assets?.shield).length, uploaded: 0, failed: 0, cleanedUp: 0 },
   };
   let uploadedMedia = [];
+  let activated = false;
   const startedAt = now();
   report.commit = { runId, status: "running", startedAt, progress };
 
@@ -476,52 +466,117 @@ export async function executeImportCommit({
       }
     }
 
-    for (const [name, collectionName, records] of collectionPlan) {
-      await persistProgress(`committing-${name}`);
-      await commitCollection(database, collectionName, records, batchSize, async (committed) => {
-        progress.collections[name].committed = committed;
-        await persistProgress(`committing-${name}`);
-      });
+    await persistProgress("staging");
+    const namesByCollection = new Map(collectionPlan.map(([name, collectionName]) => [collectionName, name]));
+    const atomicResult = catalogStore?.importBrasfootData
+      ? await catalogStore.importBrasfootData({
+        data,
+        runId,
+        batchSize,
+        onProgress: async (collectionName, committed) => {
+          const name = namesByCollection.get(collectionName);
+          if (!name) return;
+          progress.collections[name].committed = committed;
+          await persistProgress(`staging-${name}`);
+        },
+      })
+        : await (async () => {
+        return commitCatalogGeneration({
+          rootFirestore: database,
+          metadataReference: currentReference,
+          sourceFirestoreForGeneration: (generationId) => generationId
+            ? createGlobalCatalogGenerationFirestore(database, generationId)
+            : database,
+          generationFirestoreForId: (generationId) => (
+            createGlobalCatalogGenerationFirestore(database, generationId)
+          ),
+          collectionPlan: [
+            ...collectionPlan.map(([, collectionName, records]) => ({ collectionName, records })),
+            { collectionName: "tournaments", records: [] },
+          ],
+          runId,
+          batchSize,
+          now,
+          onProgress: async (collectionName, committed) => {
+            const name = namesByCollection.get(collectionName);
+            if (!name) return;
+            progress.collections[name].committed = committed;
+            await persistProgress(`staging-${name}`);
+          },
+        });
+      })();
+    activated = true;
+    if (atomicResult.idempotent && uploadedMedia.length > 0) {
+      await cleanupUploadedAssets(mediaService, uploadedMedia, report);
+      progress.assets.cleanedUp = report.assets.cleanedUp ?? 0;
+      progress.assets.cleanupFailed = report.assets.cleanupFailed ?? 0;
     }
 
     const completedAt = now();
     progress.phase = "completed";
-    report.commit = { runId, status: "completed", startedAt, completedAt, progress };
-    await runReference.set({
-      status: "completed",
-      completedAt,
-      updatedAt: completedAt,
-      progress,
-      report: compactReport(report),
-    }, { merge: true });
-    await currentReference.set({
+    report.commit = {
       runId,
       status: "completed",
-      version: data.version,
-      importedAt: completedAt,
-      summary,
-    });
-    return { runId, progress };
-  } catch (error) {
-    const committedClubIds = new Set(
-      data.clubs
-        .slice(0, progress.collections.clubs.committed)
-        .map((club) => String(club.id)),
-    );
-    const cleanupCandidates = uploadedMedia.filter((media) => !committedClubIds.has(String(media.recordId)));
-    const preservedMedia = uploadedMedia.length - cleanupCandidates.length;
-    report.assets.preserved = preservedMedia;
-    if (preservedMedia > 0) {
-      report.warnings.push({
-        code: "CREST_CLEANUP_SKIPPED_COMMITTED",
-        message: `${preservedMedia} escudo(s) foram preservados porque seus clubes ja estavam gravados`,
-      });
+      startedAt,
+      completedAt,
+      generationId: atomicResult.generationId,
+      progress,
+    };
+    try {
+      await runReference.set({
+        status: "completed",
+        completedAt,
+        updatedAt: completedAt,
+        generationId: atomicResult.generationId,
+        progress,
+        report: compactReport(report),
+      }, { merge: true });
+      await currentReference.set({
+        runId,
+        status: "completed",
+        version: data.version,
+        importedAt: completedAt,
+        summary,
+      }, { merge: true });
+    } catch (statusError) {
+      report.warnings.push({ code: "IMPORT_STATUS_WRITE_FAILED", message: statusError.message });
     }
-    await cleanupUploadedAssets(mediaService, cleanupCandidates, report);
+    return { runId, generationId: atomicResult.generationId, progress };
+  } catch (error) {
+    if (activated) throw error;
+    if (error?.code === "BRASFOOT_IMPORT_COMMIT_UNCERTAIN"
+      && error?.details?.stagingPreserved === true) {
+      const uncertainAt = now();
+      report.assets.preserved = uploadedMedia.length;
+      progress.phase = "uncertain";
+      progress.assets.preserved = uploadedMedia.length;
+      report.commit = {
+        runId,
+        status: "uncertain",
+        startedAt,
+        failedAt: uncertainAt,
+        error: error.message,
+        progress,
+      };
+      try {
+        await runReference.set({
+          status: "uncertain",
+          updatedAt: uncertainAt,
+          error: error.message,
+          progress,
+          report: compactReport(report),
+        }, { merge: true });
+      } catch (statusError) {
+        report.warnings.push({ code: "IMPORT_STATUS_WRITE_FAILED", message: statusError.message });
+      }
+      throw error;
+    }
+    report.assets.preserved = 0;
+    await cleanupUploadedAssets(mediaService, uploadedMedia, report);
     progress.phase = "failed";
     progress.assets.cleanedUp = report.assets.cleanedUp ?? 0;
     progress.assets.cleanupFailed = report.assets.cleanupFailed ?? 0;
-    progress.assets.preserved = preservedMedia;
+    progress.assets.preserved = 0;
     const failedAt = now();
     report.commit = {
       runId,

@@ -1,4 +1,6 @@
 const CATALOG_DATABASE_COLLECTION = "catalogDatabases";
+const CATALOG_GENERATIONS_COLLECTION = "generations";
+const GLOBAL_CATALOG_GENERATIONS_COLLECTION = "brasfootCatalogGenerations";
 
 function normalizedOwnerId(value) {
   const ownerId = String(value ?? "").trim();
@@ -16,21 +18,41 @@ export function catalogDatabaseDocument(firestore, ownerIdValue) {
   return firestore.collection(CATALOG_DATABASE_COLLECTION).doc(ownerId);
 }
 
-export function catalogCollectionPath(ownerIdValue, collectionNameValue) {
-  const ownerId = normalizedOwnerId(ownerIdValue);
-  const collectionName = String(collectionNameValue ?? "").trim();
+function normalizedCollectionName(value) {
+  const collectionName = String(value ?? "").trim();
   if (!collectionName || collectionName.includes("/")) {
     throw new Error("Colecao da base de dados invalida");
+  }
+  return collectionName;
+}
+
+function normalizedGenerationId(value) {
+  const generationId = String(value ?? "").trim();
+  if (!generationId || generationId.length > 128 || generationId.includes("/")) {
+    throw new Error("Geracao da base de dados invalida");
+  }
+  return generationId;
+}
+
+export function catalogCollectionPath(ownerIdValue, collectionNameValue, generationIdValue = null) {
+  const ownerId = normalizedOwnerId(ownerIdValue);
+  const collectionName = normalizedCollectionName(collectionNameValue);
+  if (generationIdValue !== null && generationIdValue !== undefined) {
+    const generationId = normalizedGenerationId(generationIdValue);
+    return `${CATALOG_DATABASE_COLLECTION}/${ownerId}/${CATALOG_GENERATIONS_COLLECTION}/${generationId}/${collectionName}`;
   }
   return `${CATALOG_DATABASE_COLLECTION}/${ownerId}/${collectionName}`;
 }
 
-export function createScopedCatalogFirestore(firestore, ownerIdValue) {
+export function createScopedCatalogFirestore(firestore, ownerIdValue, generationIdValue = null) {
   if (!firestore) return null;
   const ownerId = normalizedOwnerId(ownerIdValue);
+  const generationId = generationIdValue === null || generationIdValue === undefined
+    ? null
+    : normalizedGenerationId(generationIdValue);
   const proxy = {
     collection(collectionName) {
-      return firestore.collection(catalogCollectionPath(ownerId, collectionName));
+      return firestore.collection(catalogCollectionPath(ownerId, collectionName, generationId));
     },
     runTransaction(operation, ...options) {
       return firestore.runTransaction(operation, ...options);
@@ -42,6 +64,27 @@ export function createScopedCatalogFirestore(firestore, ownerIdValue) {
   if (typeof firestore.batch === "function") {
     proxy.batch = () => firestore.batch();
   }
+  return proxy;
+}
+
+export function createGlobalCatalogGenerationFirestore(firestore, generationIdValue) {
+  if (!firestore) return null;
+  const generationId = normalizedGenerationId(generationIdValue);
+  const proxy = {
+    collection(collectionNameValue) {
+      const collectionName = normalizedCollectionName(collectionNameValue);
+      return firestore.collection(
+        `${GLOBAL_CATALOG_GENERATIONS_COLLECTION}/${generationId}/${collectionName}`,
+      );
+    },
+    runTransaction(operation, ...options) {
+      return firestore.runTransaction(operation, ...options);
+    },
+  };
+  if (typeof firestore.getAll === "function") {
+    proxy.getAll = (...references) => firestore.getAll(...references);
+  }
+  if (typeof firestore.batch === "function") proxy.batch = () => firestore.batch();
   return proxy;
 }
 

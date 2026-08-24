@@ -95,11 +95,9 @@ O detector procura `teams/escudos`, `escudosMini`, `camisas`, `camisas2` e `cami
 
 ## Commit, falhas e reconciliacao
 
-Cada commit cria `brasfootImports/<runId>` com `running`, progresso por colecao/assets e, ao final, `completed` ou `failed`. `brasfootImports/current` so muda depois da conclusao. O relatorio local e regravado no `finally`, inclusive quando a execucao falha.
+Cada commit cria `brasfootImports/<runId>` com progresso e estado final. Os documentos sao montados em uma geracao isolada; uma unica transacao troca `activeGenerationId` somente depois de todos os lotes concluirem. Falhas mantem a geracao anterior ativa e removem o staging. Um lock transacional impede duas importacoes simultaneas da mesma base.
 
-Firestore nao oferece uma transacao unica para centenas de milhares de documentos e uploads no Storage. Portanto, a importacao e observavel e recuperavel, mas nao atomica: uma falha pode deixar batches de dados ja gravados. Escudos enviados pela execucao que falhou sao removidos em best effort e eventuais falhas de limpeza ficam no relatorio.
-
-Para reconciliar, preserve o relatorio, corrija a causa e execute novamente a mesma origem. IDs deterministas tornam o processo idempotente por documento e sobrescrevem o subconjunto parcial. Antes de promover a base, confirme que o novo run ficou `completed`; investigue `cleanupFailures` manualmente no Storage. O importador nao apaga documentos antigos que deixaram de existir na origem.
+Escudos sao externos ao Firestore e usam compensacao: todos os objetos enviados pela tentativa sao removidos se a ativacao falhar. Falhas de limpeza ficam em `cleanupFailures`. Repetir o mesmo `runId` depois de sucesso e idempotente; depois de rollback, a nova tentativa parte novamente da base ativa sem residuos persistidos.
 
 ## Limites
 

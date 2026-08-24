@@ -45,6 +45,7 @@ export async function createBolaManagerServer({
   const config = getServerConfig(env);
   const firebase = injectedFirebase ?? await initializeFirebaseAdmin(env);
   const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore: firebase.firestore });
+  await catalogStore?.ensureInitialized?.();
   const coachInterviewAi = injectedCoachInterviewAi ?? createCoachInterviewAiService({
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
@@ -83,7 +84,7 @@ export async function createBolaManagerServer({
   const mediaService = injectedMediaService ?? createMediaService({ env, bucket: firebase.bucket });
   const brasfootImportService = injectedBrasfootImportService ?? createBrasfootImportSessionService({
     database: firebase.firestore,
-    databaseForOwner: async (ownerId) => (await catalogForOwner(catalogStore, ownerId)).firestore,
+    databaseForOwner: async (ownerId) => catalogForOwner(catalogStore, ownerId),
     mediaService,
     logger,
   });
