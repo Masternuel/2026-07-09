@@ -20,15 +20,15 @@ const copy = {
   },
   clubs: {
     label: 'clube',
-    impact: 'A exclusão será bloqueada se houver jogadores vinculados a este clube.',
+    impact: 'A exclusão será bloqueada se houver jogadores ou torneios vinculados a este clube.',
   },
   players: {
     label: 'jogador',
-    impact: 'O jogador será removido definitivamente do catálogo global.',
+    impact: 'O jogador será removido definitivamente da sua base.',
   },
   tournaments: {
     label: 'torneio',
-    impact: 'O torneio personalizado e seu regulamento serão removidos do catálogo global.',
+    impact: 'O torneio personalizado e seu regulamento serão removidos da sua base.',
   },
 } satisfies Record<EditorEntity, { label: string; impact: string }>;
 

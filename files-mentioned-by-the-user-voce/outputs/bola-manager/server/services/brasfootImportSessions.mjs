@@ -165,6 +165,7 @@ function mebibytes(bytes) {
 export class BrasfootImportSessionService {
   constructor({
     database = null,
+    databaseForOwner = null,
     mediaService = null,
     logger = console,
     tempDirectory = tmpdir(),
@@ -177,6 +178,7 @@ export class BrasfootImportSessionService {
     scheduleCleanup = true,
   } = {}) {
     this.database = database;
+    this.databaseForOwner = databaseForOwner;
     this.mediaService = mediaService;
     this.logger = logger;
     this.tempDirectory = resolve(tempDirectory);
@@ -404,7 +406,10 @@ export class BrasfootImportSessionService {
           { errors: errorCount },
         );
       }
-      if (!this.database) {
+      const targetDatabase = this.databaseForOwner
+        ? await this.databaseForOwner(ownerId)
+        : this.database;
+      if (!targetDatabase) {
         throw sessionError(
           "Firestore indisponivel para importacao",
           "BRASFOOT_IMPORT_FIRESTORE_UNAVAILABLE",
@@ -417,7 +422,7 @@ export class BrasfootImportSessionService {
         assetRoot: preview.parsedSource.assetRoot,
       };
       const result = await this.commitImport({
-        database: this.database,
+        database: targetDatabase,
         data,
         summary: structuredClone(preview.summary),
         parsedSource,

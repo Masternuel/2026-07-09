@@ -1,13 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { BarChart3, Check, ChevronRight, Mic2, ShieldCheck } from 'lucide-react';
 import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
-import type { ClubChoice, MatchSideStatistics, ServerMatchFinished } from '../types';
+import { selectPressConferencePrompt } from '../data/pressConferenceQuestionBank';
+import type {
+  ClubChoice,
+  MatchSideStatistics,
+  PressConferenceAnswerInput,
+  PressConferenceSubmissionResponse,
+  ServerMatchFinished,
+} from '../types';
 
 interface PressConferenceViewProps {
   result: ServerMatchFinished | null;
   club: ClubChoice;
-  onComplete: () => void;
+  onSubmit?: (answers: PressConferenceAnswerInput[]) => Promise<PressConferenceSubmissionResponse | void>;
+  onComplete: (response?: PressConferenceSubmissionResponse) => void;
 }
 
 interface PressAnswer {
@@ -34,35 +42,76 @@ const EMPTY_STATS: MatchSideStatistics = {
   corners: 0,
 };
 
-const DEMO_RESULT: ServerMatchFinished = {
-  code: 'DEMO',
-  id: 'demo-match',
-  homeTeam: 'Aurora FC',
-  awayTeam: 'Santos',
-  score: [2, 1],
-  statistics: {
-    home: { possession: 57, shots: 16, shotsOnTarget: 7, fouls: 10, yellowCards: 1, redCards: 0, corners: 6 },
-    away: { possession: 43, shots: 10, shotsOnTarget: 4, fouls: 11, yellowCards: 2, redCards: 0, corners: 4 },
-  },
-  skipped: false,
-};
-
-function normalize(value: string) {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+function normalize(value: unknown) {
+  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
 }
 
-function buildQuestions(result: ServerMatchFinished | null, club: ClubChoice): PressQuestion[] {
+function finiteMetric(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : fallback;
+}
+
+function safeSideStatistics(value: unknown): MatchSideStatistics {
+  const record = value && typeof value === 'object' ? value as Partial<MatchSideStatistics> : {};
+  return {
+    possession: Math.min(100, finiteMetric(record.possession, EMPTY_STATS.possession)),
+    shots: finiteMetric(record.shots, EMPTY_STATS.shots),
+    shotsOnTarget: finiteMetric(record.shotsOnTarget, EMPTY_STATS.shotsOnTarget),
+    fouls: finiteMetric(record.fouls, EMPTY_STATS.fouls),
+    yellowCards: finiteMetric(record.yellowCards, EMPTY_STATS.yellowCards),
+    redCards: finiteMetric(record.redCards, EMPTY_STATS.redCards),
+    corners: finiteMetric(record.corners, EMPTY_STATS.corners),
+  };
+}
+
+function safeStatistics(value: unknown) {
+  const record = value && typeof value === 'object'
+    ? value as { home?: unknown; away?: unknown }
+    : {};
+  return {
+    home: safeSideStatistics(record.home),
+    away: safeSideStatistics(record.away),
+  };
+}
+
+function safeScore(value: unknown): [number, number] {
+  if (!Array.isArray(value) || value.length < 2) return [0, 0];
+  return [finiteMetric(value[0], 0), finiteMetric(value[1], 0)];
+}
+
+function safeTeamName(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+export function buildPressConferenceQuestions(result: ServerMatchFinished | null, club: ClubChoice): PressQuestion[] {
   const isAway = result ? normalize(result.awayTeam) === normalize(club.name) : false;
-  const ownScore = result ? result.score[isAway ? 1 : 0] : 0;
-  const rivalScore = result ? result.score[isAway ? 0 : 1] : 0;
-  const ownStats = result?.statistics[isAway ? 'away' : 'home'] ?? EMPTY_STATS;
-  const rivalStats = result?.statistics[isAway ? 'home' : 'away'] ?? EMPTY_STATS;
-  const rival = result ? (isAway ? result.homeTeam : result.awayTeam) : 'adversário';
-  const resultQuestion = ownScore > rivalScore
-    ? `Vitória por ${ownScore} a ${rivalScore} sobre o ${rival}. O que mais decidiu a partida?`
+  const score = safeScore(result?.score);
+  const statistics = safeStatistics(result?.statistics);
+  const ownScore = score[isAway ? 1 : 0];
+  const rivalScore = score[isAway ? 0 : 1];
+  const ownStats = statistics[isAway ? 'away' : 'home'];
+  const rivalStats = statistics[isAway ? 'home' : 'away'];
+  const rival = result
+    ? safeTeamName(isAway ? result.homeTeam : result.awayTeam, 'adversário')
+    : 'adversário';
+  const seed = `${result?.id ?? 'demo'}:${club.id ?? club.name}`;
+  const scoreline = ownScore > rivalScore
+    ? `uma vitória por ${ownScore} a ${rivalScore}`
     : ownScore < rivalScore
-      ? `Derrota por ${ownScore} a ${rivalScore} para o ${rival}. Como você explica o resultado?`
-      : `Empate em ${ownScore} a ${rivalScore} com o ${rival}. O resultado foi justo?`;
+      ? `uma derrota por ${ownScore} a ${rivalScore}`
+      : `um empate em ${ownScore} a ${rivalScore}`;
+  const sharedPromptValues = {
+    club: club.name,
+    rival,
+    scoreline,
+    possession: ownStats.possession,
+    rivalPossession: rivalStats.possession,
+    shots: ownStats.shots,
+    shotsOnTarget: ownStats.shotsOnTarget,
+    fouls: ownStats.fouls,
+    cards: ownStats.yellowCards + ownStats.redCards,
+  };
+  const resultQuestion = selectPressConferencePrompt('result', seed, sharedPromptValues);
   const resultAnswers: PressAnswer[] = ownScore > rivalScore ? [
     { id: 'result-confident', tone: 'Confiante', text: 'Controlamos os momentos decisivos e merecemos essa vitória.' },
     { id: 'result-praise', tone: 'Elogioso', text: 'O grupo executou o plano com coragem e muita disciplina.' },
@@ -77,11 +126,7 @@ function buildQuestions(result: ServerMatchFinished | null, club: ClubChoice): P
     { id: 'result-praise', tone: 'Elogioso', text: 'A equipe competiu até o fim e mostrou personalidade.' },
   ];
 
-  const possessionQuestion = ownStats.possession >= 55
-    ? `Seu time teve ${ownStats.possession}% de posse, contra ${rivalStats.possession}% do rival. Faltou transformar controle em mais gols?`
-    : ownStats.possession <= 45
-      ? `A equipe terminou com apenas ${ownStats.possession}% de posse. Jogar sem a bola fazia parte do plano?`
-      : `A posse ficou equilibrada em ${ownStats.possession}% a ${rivalStats.possession}%. Como avalia a disputa no meio-campo?`;
+  const possessionQuestion = selectPressConferencePrompt('possession', seed, sharedPromptValues);
   const possessionAnswers: PressAnswer[] = ownStats.possession >= 55 ? [
     { id: 'possession-confident', tone: 'Confiante', text: 'A posse teve propósito; mantivemos o adversário sob pressão.' },
     { id: 'possession-critical', tone: 'Crítico', text: 'Precisamos acelerar mais perto da área e criar chances melhores.' },
@@ -97,9 +142,7 @@ function buildQuestions(result: ServerMatchFinished | null, club: ClubChoice): P
   ];
 
   const totalCards = ownStats.yellowCards + ownStats.redCards;
-  const finalQuestion = totalCards > 0 || ownStats.fouls >= 10
-    ? `O ${club.name} cometeu ${ownStats.fouls} faltas e recebeu ${totalCards} cartão(ões). A intensidade passou do limite?`
-    : `Foram ${ownStats.shots} finalizações, ${ownStats.shotsOnTarget} no alvo. O ataque entregou o que você esperava?`;
+  const finalQuestion = selectPressConferencePrompt('performance', seed, sharedPromptValues);
   const finalAnswers: PressAnswer[] = totalCards > 0 || ownStats.fouls >= 10 ? [
     { id: 'discipline-neutral', tone: 'Neutro', text: 'A disputa foi forte, mas vamos analisar cada lance internamente.' },
     { id: 'discipline-critical', tone: 'Crítico', text: 'Precisamos competir com intensidade sem oferecer riscos desnecessários.' },
@@ -117,23 +160,61 @@ function buildQuestions(result: ServerMatchFinished | null, club: ClubChoice): P
   ];
 }
 
-export function PressConferenceView({ result, club, onComplete }: PressConferenceViewProps) {
-  const resolvedResult = result ?? DEMO_RESULT;
-  const questions = useMemo(() => buildQuestions(resolvedResult, club), [resolvedResult, club]);
+export function PressConferenceView({ result, club, onSubmit, onComplete }: PressConferenceViewProps) {
+  const questions = useMemo(() => result ? buildPressConferenceQuestions(result, club) : [], [result, club]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+  const [confirmedAnswers, setConfirmedAnswers] = useState<PressConferenceAnswerInput[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submitLock = useRef(false);
+  if (!result) {
+    return (
+      <main className="secondary-view press-conference-view view-enter">
+        <header className="press-conference-heading">
+          <div>
+            <p className="eyebrow">COLETIVA PÓS-JOGO</p>
+            <h1>Nenhuma coletiva pendente</h1>
+            <p>A coletiva aparecerá quando existir um resultado real ainda não respondido.</p>
+          </div>
+          <Button variant="secondary" onClick={() => onComplete()}>Voltar à central</Button>
+        </header>
+      </main>
+    );
+  }
+  const resolvedResult = result;
   const currentQuestion = questions[questionIndex];
   const isLastQuestion = questionIndex === questions.length - 1;
-  const score = resolvedResult.score;
+  const score = safeScore(resolvedResult.score);
+  const statistics = safeStatistics(resolvedResult.statistics);
+  const homeTeam = safeTeamName(resolvedResult.homeTeam, 'Mandante');
+  const awayTeam = safeTeamName(resolvedResult.awayTeam, 'Visitante');
 
-  function confirmAnswer() {
-    if (!selectedAnswer) return;
+  async function confirmAnswer() {
+    if (!selectedAnswer || submitting || submitLock.current) return;
+    const answer = { questionId: currentQuestion.id, answerId: selectedAnswer };
     if (isLastQuestion) {
-      onComplete();
+      const answers = [...confirmedAnswers, answer];
+      submitLock.current = true;
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        const response = await onSubmit?.(answers);
+        onComplete(response ?? undefined);
+      } catch (error: unknown) {
+        setSubmitError(error instanceof Error
+          ? error.message
+          : 'Não foi possível registrar a coletiva. Tente novamente.');
+      } finally {
+        submitLock.current = false;
+        setSubmitting(false);
+      }
       return;
     }
+    setConfirmedAnswers((current) => [...current, answer]);
     setQuestionIndex((current) => current + 1);
     setSelectedAnswer(null);
+    setSubmitError(null);
   }
 
   return (
@@ -149,7 +230,7 @@ export function PressConferenceView({ result, club, onComplete }: PressConferenc
 
       <section className="press-score-card" aria-label="Resumo da partida">
         <div className="press-score-team press-score-team--home">
-          <strong>{resolvedResult.homeTeam}</strong>
+          <strong>{homeTeam}</strong>
           <span>Mandante</span>
         </div>
         <div className="press-score-result">
@@ -159,16 +240,16 @@ export function PressConferenceView({ result, club, onComplete }: PressConferenc
           <small>Resultado final</small>
         </div>
         <div className="press-score-team press-score-team--away">
-          <strong>{resolvedResult.awayTeam}</strong>
+          <strong>{awayTeam}</strong>
           <span>Visitante</span>
         </div>
         <div className="press-score-meta">
-          <span><BarChart3 size={18} aria-hidden="true" /> {resolvedResult.statistics.home.shots} a {resolvedResult.statistics.away.shots} finalizações</span>
+          <span><BarChart3 size={18} aria-hidden="true" /> {statistics.home.shots} a {statistics.away.shots} finalizações</span>
           <span><ShieldCheck size={18} aria-hidden="true" /> Coletiva obrigatória</span>
         </div>
       </section>
 
-      <section className="press-interview" aria-labelledby="press-question-title">
+      <section className="press-interview" aria-labelledby="press-question-title" aria-busy={submitting}>
         <header className="press-interview-progress">
           <span>Pergunta {questionIndex + 1} de {questions.length}</span>
           <div aria-hidden="true">
@@ -195,6 +276,7 @@ export function PressConferenceView({ result, club, onComplete }: PressConferenc
                 name={`answer-${currentQuestion.id}`}
                 value={answer.id}
                 checked={selectedAnswer === answer.id}
+                disabled={submitting}
                 onChange={() => setSelectedAnswer(answer.id)}
               />
               <span className="press-answer-tone">{answer.tone}</span>
@@ -204,15 +286,22 @@ export function PressConferenceView({ result, club, onComplete }: PressConferenc
           ))}
         </fieldset>
 
+        {submitError && <p className="press-submit-error" role="alert">{submitError}</p>}
+
         <footer className="press-interview-actions">
-          <p>{selectedAnswer ? 'Resposta selecionada. Confirme para continuar.' : 'Escolha um tom e uma resposta.'}</p>
+          <p>{submitting
+            ? 'Registrando respostas e repercussões…'
+            : selectedAnswer
+              ? 'Resposta selecionada. Confirme para continuar.'
+              : 'Escolha um tom e uma resposta.'}</p>
           <Button
             variant="primary"
             icon={<ChevronRight size={18} aria-hidden="true" />}
-            disabled={!selectedAnswer}
-            onClick={confirmAnswer}
+            disabled={!selectedAnswer || submitting}
+            loading={submitting}
+            onClick={() => void confirmAnswer()}
           >
-            {isLastQuestion ? 'Encerrar coletiva' : 'Confirmar resposta'}
+            {submitting ? 'Enviando respostas…' : isLastQuestion ? 'Encerrar coletiva' : 'Confirmar resposta'}
           </Button>
         </footer>
       </section>

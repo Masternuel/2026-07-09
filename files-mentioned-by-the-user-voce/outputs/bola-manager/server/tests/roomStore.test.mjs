@@ -93,6 +93,207 @@ test("retorna snapshots e lista somente salas privadas do manager", async () => 
   assert.equal((await store.listRoomsForManager("intruso")).length, 0);
 });
 
+test("projecao inicial do viewer usa leitura parcial e omite estado pesado", async () => {
+  const source = {
+    id: "room-light",
+    code: "BOLA-L1TE",
+    name: "Sala leve",
+    ownerId: "manager-1",
+    managerIds: ["manager-1"],
+    managers: [{ id: "manager-1", name: "Emanuel", clubId: "AUR" }],
+    competitionCatalog: [{ id: "BR-A", clubs: [{ id: "AUR", name: "Aurora" }] }],
+    fixtureSchedule: [],
+    careerState: { players: [{ id: "p-1" }] },
+    marketState: { transactions: [{ id: "tx-1" }] },
+    coachEmploymentState: { negotiations: [{ id: "n-1" }] },
+    professionalLifecycleState: { notices: [{ id: "notice-1" }] },
+    professionalLeaveState: { leaves: [{ id: "leave-1" }] },
+    seasonHistory: [{ season: 1 }],
+    completedMatches: [{ id: "match-1" }],
+  };
+  let requested;
+  const persistence = {
+    async getPartial(code, options) {
+      requested = { code, options };
+      return structuredClone(source);
+    },
+    async get() {
+      throw new Error("leitura completa nao deveria ocorrer");
+    },
+  };
+  const store = new RoomStore({ persistence });
+
+  const room = await store.requireViewerRoom("bola-l1te", "manager-1");
+
+  assert.equal(requested.code, "BOLA-L1TE");
+  assert.deepEqual(requested.options.excludePaths, [
+    "careerState",
+    "marketState",
+    "coachEmploymentState",
+    "professionalLifecycleState",
+    "professionalLeaveState",
+    "seasonHistory",
+    "completedMatches",
+  ]);
+  assert.equal(room.competitionCatalog[0].id, "BR-A");
+  for (const path of requested.options.excludePaths) assert.equal(path in room, false);
+  assert.equal(source.careerState.players.length, 1, "a projecao nao altera o objeto persistido");
+});
+
+test("projecao inicial mantem seguranca e fallback para adapters antigos", async () => {
+  let reads = 0;
+  const persistence = {
+    async get(code) {
+      reads += 1;
+      return {
+        code,
+        ownerId: "manager-1",
+        managerIds: ["manager-1"],
+        managers: [{ id: "manager-1", clubId: "AUR" }],
+        careerState: { players: [{ id: "p-1" }] },
+        seasonHistory: [{ season: 1 }],
+        completedMatches: [{ id: "match-1" }],
+      };
+    },
+  };
+  const store = new RoomStore({ persistence });
+
+  const room = await store.requireViewerRoom("bola-old1", "manager-1");
+  assert.equal(room.code, "BOLA-OLD1");
+  assert.equal("careerState" in room, false);
+  assert.equal("seasonHistory" in room, false);
+  assert.equal("completedMatches" in room, false);
+  await assert.rejects(store.requireViewerRoom("BOLA-OLD1", "intruso"), {
+    code: "ROOM_NOT_FOUND",
+    status: 404,
+  });
+  assert.equal(reads, 2);
+});
+
+test("mutacoes simples usam secoes pontuais sem hidratar historicos pesados", async () => {
+  let source = {
+    id: "room-paths",
+    code: "BOLA-P4TH",
+    name: "Sala por secoes",
+    ownerId: "manager-1",
+    catalogOwnerId: "manager-1",
+    status: "waiting",
+    managerIds: ["manager-1"],
+    managers: [{
+      id: "manager-1",
+      name: "Emanuel",
+      clubId: "AUR",
+      ready: false,
+      joinedAt: "2026-07-09T19:00:00.000Z",
+    }],
+    activeLeagues: ["BR-A"],
+    seasonLength: 3,
+    maxManagers: 4,
+    createdAt: "2026-07-09T19:00:00.000Z",
+    updatedAt: "2026-07-09T19:00:00.000Z",
+    revision: 1,
+    version: 1,
+    currentFixtureId: null,
+    competitionCatalog: [{
+      id: "BR-A",
+      clubs: [{ id: "AUR", name: "Aurora" }, { id: "SAN", name: "Santos" }],
+    }],
+    lineups: [],
+    matchReadiness: { fixtureId: null, managerIds: ["manager-1"] },
+    seasonHistory: Array.from({ length: 10_000 }, (_, index) => ({ season: index + 1 })),
+    completedMatches: Array.from({ length: 10_000 }, (_, index) => ({ id: `match-${index}` })),
+  };
+  const metadataFields = [
+    "id", "code", "name", "ownerId", "catalogOwnerId", "status", "managerIds", "managers",
+    "activeLeagues", "seasonLength", "maxManagers", "createdAt", "updatedAt", "revision",
+    "version", "currentFixtureId",
+  ];
+  const mutationPaths = [];
+  const projectionRequests = [];
+  let fullMutations = 0;
+  const persistence = {
+    async mutate() {
+      fullMutations += 1;
+      throw new Error("mutacao completa nao deveria ocorrer");
+    },
+    async mutatePaths(code, paths, mutation) {
+      assert.equal(code, source.code);
+      mutationPaths.push([...paths]);
+      const current = {};
+      for (const field of metadataFields) current[field] = structuredClone(source[field]);
+      for (const path of paths) {
+        if (source[path] !== undefined) current[path] = structuredClone(source[path]);
+      }
+      assert.equal(current.seasonHistory, undefined);
+      assert.equal(current.completedMatches, undefined);
+      const next = mutation(current);
+      if (next !== undefined) source = { ...source, ...structuredClone(next) };
+      return structuredClone(next ?? current);
+    },
+    async getPartial(code, options) {
+      assert.equal(code, source.code);
+      projectionRequests.push([...options.excludePaths]);
+      const projection = structuredClone(source);
+      for (const path of options.excludePaths) delete projection[path];
+      return projection;
+    },
+  };
+  const store = new RoomStore({
+    persistence,
+    now: () => new Date("2026-07-09T20:00:00.000Z"),
+  });
+
+  const joined = await store.joinRoom(source.code, {
+    managerId: "manager-2",
+    managerName: "Joao",
+    clubId: "SAN",
+  });
+  const ready = await store.setReady(source.code, "manager-1", true);
+  const lineup = await store.saveLineup(source.code, "manager-1", "AUR", ["p-1"]);
+  source.matchReadiness = { fixtureId: null, managerIds: ["manager-2"] };
+  const cleared = await store.clearMatchReadiness(source.code);
+
+  assert.equal(fullMutations, 0);
+  assert.deepEqual(mutationPaths, [
+    ["competitionCatalog", "lineups"],
+    [],
+    ["lineups", "matchReadiness"],
+    ["matchReadiness"],
+  ]);
+  assert.equal(projectionRequests.length, 4);
+  assert.equal(joined.managers.length, 2);
+  assert.equal(ready.managers[0].ready, true);
+  assert.deepEqual(lineup.lineups[0].lineupIds, ["p-1"]);
+  assert.deepEqual(cleared.matchReadiness.managerIds, []);
+  assert.equal(cleared.revision, 5);
+  for (const room of [joined, ready, lineup, cleared]) {
+    assert.equal("seasonHistory" in room, false);
+    assert.equal("completedMatches" in room, false);
+  }
+});
+
+test("MemoryRoomPersistence oferece mesma projecao parcial sem alterar save", async () => {
+  const source = {
+    code: "BOLA-MEM1",
+    managerIds: ["manager-1"],
+    careerState: { players: [{ id: "p-1" }], contracts: [{ id: "c-1" }] },
+    marketState: { transactions: [{ id: "tx-1" }], finances: [{ clubId: "AUR" }] },
+    completedMatches: [{ id: "match-1" }],
+  };
+  const persistence = new MemoryRoomPersistence([source]);
+
+  const partial = await persistence.getPartial(source.code, {
+    excludePaths: ["careerState", "marketState.transactions", "completedMatches"],
+  });
+
+  assert.equal("careerState" in partial, false);
+  assert.equal("completedMatches" in partial, false);
+  assert.equal(partial.completedMatchCount, 1);
+  assert.equal(partial.seasonHistoryCount, 0);
+  assert.deepEqual(partial.marketState, { finances: [{ clubId: "AUR" }] });
+  assert.deepEqual(await persistence.get(source.code), source);
+});
+
 test("join de manager existente em sala ativa e resume somente leitura", async () => {
   const store = createStore();
   const room = await createRoom(store);
@@ -124,6 +325,8 @@ test("gera jogos contra IA e reinicia prontidao a cada rodada", async () => {
   const started = await store.startRoom(room.code, "manager-1");
 
   assert.equal(started.fixtureSchedule[0].fixtureId, "abertura");
+  assert.equal(started.fixtureSchedule[0].round, 1);
+  assert.equal(started.currentFixtureId, "abertura");
   assert.equal(started.scheduleVersion, FIXTURE_SCHEDULE_VERSION);
   assert.equal(started.fixtureSchedule[0].managerIds.length, 1);
   assert.equal(started.fixtureSchedule.some((fixture) => fixture.managerIds.length === 2), true);

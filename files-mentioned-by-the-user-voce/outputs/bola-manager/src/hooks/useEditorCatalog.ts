@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiRequest, apiUpload, type ApiCredentials } from '../lib/apiClient';
+import {
+  ApiError,
+  apiBinaryUpload,
+  apiBlobDownload,
+  apiRequest,
+  apiUpload,
+  type ApiBlobDownload,
+  type ApiCredentials,
+} from '../lib/apiClient';
 import type {
   EditorCatalog,
   EditorCatalogCounts,
@@ -15,6 +23,8 @@ import type {
   TournamentLegs,
   TournamentTiebreaker,
 } from '../types';
+import { calculatePlayerOverall } from '../utils/playerRating';
+import { isBrazilianCountry, normalizeBrazilianState, normalizeNationality } from '../utils/editorGeography';
 
 type EditorAccessState = 'checking' | 'granted' | 'denied' | 'error';
 
@@ -59,6 +69,15 @@ interface EditorMutationResponse {
   record?: EditorRecord;
 }
 
+export interface EditorBulkDeleteResult {
+  deleted: true;
+  ids: string[];
+  count: number;
+  mediaRemoved: boolean;
+  removedMediaCount: number;
+  failedMediaCount: number;
+}
+
 interface EditorMediaResponse extends EditorMutationResponse {
   media?: {
     entity: string;
@@ -71,9 +90,22 @@ interface EditorMediaResponse extends EditorMutationResponse {
   };
 }
 
+export interface EditorDatabaseImportSummary {
+  mode: 'merge';
+  imported: true;
+  counts: EditorCatalogCounts;
+  total: number;
+  revision: number;
+  mediaRemoved: boolean;
+  removedMediaCount: number;
+}
+
 const emptyCatalog: EditorCatalog = { leagues: [], clubs: [], players: [], tournaments: [] };
 const playerPositions: PlayerPosition[] = ['GOL', 'ZAG', 'LD', 'LE', 'VOL', 'MC', 'MEI', 'PD', 'PE', 'ATA'];
-const attributeKeys: Array<keyof EditorPlayerAttributes> = ['velocidade', 'chute', 'drible', 'nocao', 'defesa', 'passe', 'peBom', 'peRuim'];
+const attributeKeys: Array<keyof EditorPlayerAttributes> = [
+  'velocidade', 'chute', 'drible', 'nocao', 'defesa', 'passe', 'peBom', 'peRuim',
+  'forca', 'resistencia', 'impulsao', 'reflexos', 'posicionamentoGol', 'saidaGol', 'penaltis',
+];
 const tournamentFormats: TournamentFormat[] = ['league', 'knockout', 'groups_knockout'];
 const tournamentLegs: TournamentLegs[] = ['single', 'double'];
 const tournamentTiebreakers: TournamentTiebreaker[] = [
@@ -124,21 +156,32 @@ function normalizeRecord(entity: EditorEntity, value: unknown): EditorRecord {
       country: text(record.country, 'Brasil'),
       level: number(record.level, 1, 1, 20),
       division: text(record.division),
+      legs: tournamentLegs.includes(record.legs as TournamentLegs) ? record.legs as TournamentLegs : 'double',
     } satisfies EditorLeague;
   }
   if (entity === 'clubs') {
     const colors = Array.isArray(record.colors)
       ? record.colors.filter((color): color is string => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color))
       : [];
+    const country = text(record.country, 'Brasil');
     return {
       ...base,
       abbreviation: text(record.abbreviation, base.id.slice(0, 3).toUpperCase()),
       colors: colors.length ? colors : ['#c8ff3d'],
-      stadium: text(record.stadium),
+      darkThemeColor: typeof record.darkThemeColor === 'string' && /^#[0-9a-f]{6}$/i.test(record.darkThemeColor)
+        ? record.darkThemeColor
+        : null,
+      lightThemeColor: typeof record.lightThemeColor === 'string' && /^#[0-9a-f]{6}$/i.test(record.lightThemeColor)
+        ? record.lightThemeColor
+        : null,
+      stadium: text(record.stadium, 'A definir'),
+      stadiumCapacity: number(record.stadiumCapacity, 0, 0, 500_000),
       reputation: number(record.reputation, 10, 1, 20),
       division: text(record.division),
-      country: text(record.country, 'Brasil'),
-      state: typeof record.state === 'string' ? record.state : null,
+      country,
+      state: isBrazilianCountry(country)
+        ? normalizeBrazilianState(record.state)
+        : typeof record.state === 'string' ? record.state : null,
       city: typeof record.city === 'string' ? record.city : null,
       leagueId: typeof record.leagueId === 'string' ? record.leagueId : null,
       budget: number(record.budget, 0, 0, 2_000_000_000),
@@ -174,22 +217,26 @@ function normalizeRecord(entity: EditorEntity, value: unknown): EditorRecord {
     number(rawAttributes[key], key === 'peRuim' ? 6 : 10, 1, 20),
   ])) as unknown as EditorPlayerAttributes;
   const position = text(record.position).toUpperCase();
-  return {
+  const normalizedPlayer = {
     ...base,
     clubId: text(record.clubId),
     isStar: record.isStar === true,
     position: playerPositions.includes(position as PlayerPosition) ? position as PlayerPosition : 'MC',
     age: number(record.age, 24, 14, 60),
-    nationality: text(record.nationality, 'Brasil'),
+    nationality: normalizeNationality(record.nationality),
     shirtNumber: number(record.shirtNumber, 0, 0, 99),
-    overall: number(record.overall, 10, 1, 20),
+    overall: 10,
     attributes,
     avatarImageUrl: typeof record.avatarImageUrl === 'string' ? record.avatarImageUrl : null,
     avatarImagePath: typeof record.avatarImagePath === 'string' ? record.avatarImagePath : null,
   } satisfies EditorPlayer;
+  return {
+    ...normalizedPlayer,
+    overall: calculatePlayerOverall(normalizedPlayer),
+  } satisfies EditorPlayer;
 }
 
-function mutationPayload(entity: EditorEntity, input: EditorRecord, includeId: boolean): Record<string, unknown> {
+export function mutationPayload(entity: EditorEntity, input: EditorRecord, includeId: boolean): Record<string, unknown> {
   const record = normalizeRecord(entity, input);
   const id = includeId ? { id: record.id } : {};
   if (entity === 'leagues') {
@@ -203,7 +250,10 @@ function mutationPayload(entity: EditorEntity, input: EditorRecord, includeId: b
       name: club.name,
       abbreviation: club.abbreviation,
       colors: club.colors,
+      darkThemeColor: club.darkThemeColor,
+      lightThemeColor: club.lightThemeColor,
       stadium: club.stadium,
+      stadiumCapacity: club.stadiumCapacity,
       reputation: club.reputation,
       division: club.division,
       country: club.country,
@@ -241,7 +291,7 @@ function mutationPayload(entity: EditorEntity, input: EditorRecord, includeId: b
     age: player.age,
     nationality: player.nationality,
     shirtNumber: player.shirtNumber,
-    overall: player.overall,
+    overall: calculatePlayerOverall(player),
     attributes: player.attributes,
     avatarImageUrl: player.avatarImageUrl,
     avatarImagePath: player.avatarImagePath,
@@ -252,7 +302,7 @@ function mutationPayload(entity: EditorEntity, input: EditorRecord, includeId: b
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
   if (error instanceof DOMException && error.name === 'AbortError') return null;
-  return 'Não foi possível acessar o catálogo global.';
+  return 'Não foi possível acessar sua base de dados.';
 }
 
 function normalizeCatalog(payload: EditorCatalogResponse): EditorCatalog {
@@ -292,6 +342,7 @@ export function useEditorCatalog(credentials: ApiCredentials) {
   const [pageLoading, setPageLoading] = useState<Record<EditorEntity, boolean>>(emptyPageLoading);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
+  const [databaseAction, setDatabaseAction] = useState<'exporting' | 'importing' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [accessAttempt, setAccessAttempt] = useState(0);
@@ -307,7 +358,11 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     setLoading(true);
     setError(null);
     try {
-      const payload = await apiRequest<EditorCatalogResponse>(`/api/editor/catalog?limit=${pageLimit}`, credentials, { signal });
+      const payload = await apiRequest<EditorCatalogResponse>(
+        `/api/editor/catalog?limit=${pageLimit}`,
+        credentials,
+        { signal, timeoutMs: 60_000 },
+      );
       if (!mountedRef.current || signal?.aborted) return;
       const normalized = normalizeCatalog(payload);
       setCatalog(normalized);
@@ -503,6 +558,46 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     }
   }, [credentials]);
 
+  const deleteRecords = useCallback(async (entity: EditorEntity, ids: string[]) => {
+    setPending(true);
+    setError(null);
+    try {
+      const payload = await apiRequest<EditorBulkDeleteResult>(
+        `/api/editor/${entity}/bulk-delete`,
+        credentials,
+        { method: 'POST', body: { ids } },
+      );
+      const deletedIds = new Set(payload.ids);
+      setCatalog((current) => ({
+        ...current,
+        [entity]: current[entity].filter((record) => !deletedIds.has(record.id)),
+      }));
+      setPages((current) => ({
+        ...current,
+        [entity]: {
+          ...current[entity],
+          count: Math.max(0, current[entity].count - payload.count),
+          returned: Math.max(0, current[entity].returned - payload.count),
+          nextCursor: null,
+          hasMore: false,
+        },
+      }));
+      setTotals((current) => ({
+        ...current,
+        [entity]: Math.max(0, current[entity] - payload.count),
+      }));
+      setLastSyncedAt(new Date());
+      void loadPage(entity, pages[entity].filters, false).catch(() => {});
+      return payload;
+    } catch (nextError) {
+      const message = errorMessage(nextError);
+      if (message) setError(message);
+      throw nextError;
+    } finally {
+      setPending(false);
+    }
+  }, [credentials, loadPage, pages]);
+
   const uploadMedia = useCallback(async (
     entity: Exclude<EditorEntity, 'leagues'>,
     id: string,
@@ -548,6 +643,49 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     }
   }, [applyRecord, credentials]);
 
+  const exportDatabase = useCallback(async (): Promise<ApiBlobDownload> => {
+    setDatabaseAction('exporting');
+    setError(null);
+    try {
+      return await apiBlobDownload('/api/editor/database/export', credentials);
+    } catch (nextError) {
+      const message = errorMessage(nextError);
+      if (message) setError(message);
+      throw nextError;
+    } finally {
+      setDatabaseAction(null);
+    }
+  }, [credentials]);
+
+  const importDatabase = useCallback(async (
+    file: File,
+    onProgress?: (progress: number) => void,
+  ): Promise<EditorDatabaseImportSummary> => {
+    setDatabaseAction('importing');
+    setError(null);
+    try {
+      const payload = await apiBinaryUpload<EditorDatabaseImportSummary>(
+        '/api/editor/database/import?mode=merge',
+        credentials,
+        file,
+        {
+          method: 'POST',
+          contentType: 'application/octet-stream',
+          onProgress,
+          networkErrorCode: 'EDITOR_DATABASE_IMPORT_NETWORK_ERROR',
+        },
+      );
+      await loadCatalog();
+      return payload;
+    } catch (nextError) {
+      const message = errorMessage(nextError);
+      if (message) setError(message);
+      throw nextError;
+    } finally {
+      setDatabaseAction(null);
+    }
+  }, [credentials, loadCatalog]);
+
   const counts = useMemo<EditorCatalogCounts>(() => totals, [totals]);
 
   return {
@@ -559,6 +697,7 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     pageLoading,
     loading,
     pending,
+    databaseAction,
     error,
     lastSyncedAt,
     refresh,
@@ -569,7 +708,10 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     createRecord,
     updateRecord,
     deleteRecord,
+    deleteRecords,
     uploadMedia,
     removeMedia,
+    exportDatabase,
+    importDatabase,
   };
 }

@@ -11,3 +11,7 @@ npm-debug.log*
 /artifacts/
 /data/brasfoot-normalized.json
 /data/*.dat
+*-firebase-adminsdk-*.json
+*service-account*.json
+*.pem
+*.p12

@@ -87,27 +87,199 @@ test("mapeia clube, elenco senior e juniores com IDs estaveis", () => {
   assert.equal(result.club.id, "clube_teste_bra");
   assert.equal(result.club.reputation, 16);
   assert.equal(result.club.stadiumCapacity, 40_000);
+  assert.equal(result.club.state, "SP");
   assert.deepEqual(result.club.colors, ["#112233", "#ffffff"]);
   assert.equal(result.players.length, 2);
   assert.equal(result.players[0].position, "ATA");
+  assert.equal(result.players[0].shirtNumber, 9);
   assert.equal(result.players[0].starter, true);
+  assert.equal(result.players[0].overall, 12);
   assert.deepEqual(result.players[0].characteristics, ["Finalizacao", "Velocidade"]);
-  assert.deepEqual(result.players[0].attributes, { chute: 19, velocidade: 19 });
+  assert.deepEqual(result.players[0].attributes, { chute: 14, velocidade: 14 });
   assert.equal(result.players[0].brasfootRoster, "senior");
   assert.equal(result.players[1].position, "LE");
+  assert.equal(result.players[1].shirtNumber, 6);
   assert.equal(result.players[1].nationality, "ESP");
   assert.equal(result.players[1].brasfootRoster, "youth");
+});
+
+test("importa camisa explicita e gera camisas estaveis quando o BAN nao possui o campo", () => {
+  const player = (name, fields) => javaObject("e.g", {
+    a: name, b: false, c: 29, d: 24, f: 0, g: 7, h: 11, hash: 5, i: 0, j: false,
+    ...fields,
+  });
+  const roster = [
+    player("Goleiro titular", { e: 0 }),
+    player("Goleiro reserva", { e: 0 }),
+    player("Lateral direito", { e: 1, i: 0 }),
+    player("Lateral esquerdo", { e: 1, i: 1 }),
+    player("Zagueiro um", { e: 2 }),
+    player("Zagueiro dois", { e: 2 }),
+    player("Meia dez", { e: 3 }),
+    player("Centroavante", { e: 4, g: 9 }),
+    player("Ponta direita", { e: 4, i: 0 }),
+    player("Ponta esquerda", { e: 4, i: 1 }),
+    player("Camisa da origem", { e: 3, camisa: 77 }),
+  ];
+  const team = javaObject("e.t", {
+    a: 29, c: 18, d: "camisas", e: "Clube Camisas", l: javaList(roster), m: javaList([]),
+  });
+
+  const first = mapBrasfootTeam(team, { filenameStem: "clube_camisas" });
+  const second = mapBrasfootTeam(team, { filenameStem: "clube_camisas" });
+  const expected = [1, 12, 2, 6, 3, 4, 10, 9, 7, 11, 77];
+
+  assert.deepEqual(first.players.map(({ shirtNumber }) => shirtNumber), expected);
+  assert.deepEqual(second.players.map(({ shirtNumber }) => shirtNumber), expected);
+  assert.equal(new Set(expected).size, expected.length);
+
+  const normalized = normalizeDataset({
+    version: "camisas",
+    clubs: [first.club],
+    players: first.players,
+    leagues: [],
+    cups: [],
+  });
+  assert.deepEqual(normalized.players.map(({ shirtNumber }) => shirtNumber), expected);
+});
+
+test("converte estado numerico do Brasfoot em UF sem confundir clube estrangeiro", () => {
+  const acre = javaObject("e.t", {
+    a: 29, b: 0, c: 10, d: "acre", e: "Acre FC", l: javaList([]), m: javaList([]),
+  });
+  const minas = javaObject("e.t", {
+    a: 29, b: 10, c: 10, d: "minas", e: "Minas FC", l: javaList([]), m: javaList([]),
+  });
+  const england = javaObject("e.t", {
+    a: 97, b: 0, c: 10, d: "england", e: "England FC", l: javaList([]), m: javaList([]),
+  });
+
+  assert.equal(mapBrasfootTeam(acre, { filenameStem: "acre" }).club.state, "AC");
+  assert.equal(mapBrasfootTeam(minas, { filenameStem: "minas" }).club.state, "MG");
+  assert.equal(mapBrasfootTeam(england, { filenameStem: "england" }).club.state, null);
+});
+
+test("preserva sinais de goleiro e fisicos em atributos especificos", () => {
+  const goalkeeper = javaObject("e.g", {
+    a: "Goleiro Teste", b: false, c: 29, d: 25, e: 0, f: 1, g: 0, h: 2, i: 0, j: false,
+  });
+  const goalkeeperSetPieces = javaObject("e.g", {
+    a: "Goleiro Reserva", b: false, c: 29, d: 23, e: 0, f: 0, g: 1, h: 3, i: 0, j: false,
+  });
+  const physicalPlayer = javaObject("e.g", {
+    a: "Atleta Fisico", b: false, c: 29, d: 24, e: 4, f: 1, g: 5, h: 12, i: 0, j: false,
+  });
+  const team = javaObject("e.t", {
+    a: 29, b: 25, c: 20, d: "traits", e: "Clube Traits", f: "Arena", g: 20_000,
+    h: "Tecnico", valid: true,
+    l: javaList([goalkeeper, goalkeeperSetPieces, physicalPlayer]), m: javaList([]),
+  });
+
+  const result = mapBrasfootTeam(team, { filenameStem: "clube_traits" });
+  assert.deepEqual(result.players[0].attributes, {
+    defesa: 13,
+    nocao: 13,
+    posicionamentoGol: 12,
+    reflexos: 12,
+  });
+  assert.deepEqual(result.players[1].attributes, {
+    defesa: 11,
+    nocao: 11,
+    penaltis: 10,
+    saidaGol: 10,
+  });
+  assert.deepEqual(result.players[2].attributes, {
+    nocao: 12,
+    chute: 12,
+    impulsao: 12,
+    forca: 12,
+    resistencia: 12,
+  });
+
+  const normalized = normalizeDataset({
+    version: "traits",
+    clubs: [result.club],
+    players: result.players,
+    leagues: [],
+    cups: [],
+  });
+  assert.ok(normalized.players.every((player) => [
+    "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
+  ].every((key) => Number.isFinite(player.attributes[key]))));
+});
+
+test("cabeceio de zagueiro fortalece defesa sem criar chute de atacante", () => {
+  const defender = javaObject("e.g", {
+    a: "Zagueiro Teste", b: false, c: 29, d: 27, e: 2, f: 1, g: 10, h: 5, i: 0, j: false, hash: 5,
+  });
+  const team = javaObject("e.t", {
+    a: 29, c: 20, d: "zagueiro", e: "Clube Zagueiro", l: javaList([defender]), m: javaList([]),
+  });
+  const mapped = mapBrasfootTeam(team, { filenameStem: "clube_zagueiro" });
+  assert.equal(Object.hasOwn(mapped.players[0].attributes, "chute"), false);
+  assert.ok(mapped.players[0].attributes.defesa > mapped.players[0].overall);
+
+  const source = { version: "zag", clubs: [mapped.club], players: mapped.players, leagues: [], cups: [] };
+  const first = normalizeDataset(source).players[0];
+  const second = normalizeDataset(source).players[0];
+  assert.deepEqual(first.attributes, second.attributes);
+  assert.ok(first.attributes.defesa > first.attributes.chute);
+  assert.ok(first.attributes.nocao > first.attributes.drible);
+  assert.ok(first.attributes.chute <= Math.ceil(first.overall * 0.6));
+});
+
+test("estima forca variada sem saturar elencos fortes e limita clubes fracos", () => {
+  const player = (name, fields = {}) => javaObject("e.g", {
+    a: name, b: false, c: 29, d: 27, e: 3, f: 0, g: 4, h: 11, hash: 5, i: 0, j: false,
+    ...fields,
+  });
+  const strongPlayers = [
+    player("Reserva normal"),
+    player("Titular normal", { f: 1 }),
+    player("Reserva estrela", { b: true }),
+    player("Titular estrela", { b: true, f: 1 }),
+    player("Top mundial", { j: true }),
+    player("Top e estrela", { b: true, j: true }),
+    player("Top titular", { f: 1, j: true }),
+  ];
+  const strongTeam = javaObject("e.t", {
+    a: 29, c: 25, d: "forte", e: "Forte FC", l: javaList(strongPlayers), m: javaList([]),
+  });
+  const strong = mapBrasfootTeam(strongTeam, { filenameStem: "forte" }).players;
+
+  assert.deepEqual(strong.map(({ overall }) => overall), [11, 13, 14, 17, 17, 17, 20]);
+  assert.ok(new Set(strong.map(({ overall }) => overall)).size >= 5);
+  assert.equal(strong.find(({ name }) => name === "Top mundial").overall, 17);
+  assert.equal(strong.find(({ name }) => name === "Top e estrela").overall, 17);
+  assert.ok(strong.some(({ overall }) => overall < 20));
+
+  const weakTeam = javaObject("e.t", {
+    a: 29,
+    c: 1,
+    d: "fraco",
+    e: "Fraco FC",
+    l: javaList([
+      player("Fraco normal", { hash: 0 }),
+      player("Fraco top titular", { f: 1, j: true, hash: 10 }),
+    ]),
+    m: javaList([]),
+  });
+  const weak = mapBrasfootTeam(weakTeam, { filenameStem: "fraco" }).players;
+  assert.deepEqual(weak.map(({ overall }) => overall), [1, 2]);
+  assert.ok(weak.every(({ overall }) => overall >= 1 && overall <= 2));
 });
 
 test("mapeia configuracao nacional e preserva regras cruas", () => {
   const config = javaObject("est.ConfigLigaType", {
     pais: 29, divisao: 1, nome: "Brasileirao", nomeDivisao: "Serie A", nTimes: 20, nRebaixados: 4,
+    doisTurnos: true,
   });
   const league = mapBrasfootLeague(config, { countryCode: "BRA" });
 
   assert.equal(league.id, "BRA-1");
   assert.equal(league.name, "Brasileirao - Serie A");
   assert.equal(league.level, 1);
+  assert.equal(league.legs, "double");
   assert.equal(league.brasfootRaw.nTimes, 20);
   assert.equal(league.brasfootRaw.nRebaixados, 4);
 });
@@ -280,6 +452,44 @@ test("commit falho marca execucao e remove somente assets enviados nela", async 
   assert.equal(report.commit.status, "failed");
   assert.equal(database.documents.get("brasfootImports/run-falho").status, "failed");
   assert.equal(database.documents.has("brasfootImports/current"), false);
+});
+
+test("falha posterior preserva escudo de clube que ja foi gravado", async () => {
+  const root = await mkdtemp(join(tmpdir(), "brasfoot-preserve-"));
+  await mkdir(join(root, "teams", "escudos"), { recursive: true });
+  await writeFile(join(root, "teams", "escudos", "club.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const database = fakeDatabase({ failCollection: "brasfootPlayers" });
+  const removed = [];
+  const report = emptyReport(root);
+  const data = {
+    version: "teste",
+    clubs: [{ id: "club", assets: { shield: "teams/escudos/club.png" } }],
+    players: [{ id: "player", clubId: "club" }],
+    leagues: [], cups: [],
+  };
+  try {
+    await assert.rejects(() => executeImportCommit({
+      database,
+      data,
+      summary: { version: "teste", clubs: 1, players: 1, leagues: 0, cups: 0, playersWithoutClub: 0 },
+      parsedSource: { report, assetRoot: root },
+      options: { batchSize: 2, skipAssets: false },
+      mediaService: {
+        async upload() { return { url: "https://storage/club.png", path: "editor-media/clubs/run/club.png" }; },
+        async remove(path) { removed.push(path); },
+      },
+      runId: "run-parcial",
+      now: () => "2026-07-13T00:00:00.000Z",
+    }), /falha em brasfootPlayers/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(removed, []);
+  assert.equal(report.assets.preserved, 1);
+  assert.equal(report.assets.cleanedUp, 0);
+  assert.equal(database.documents.get("brasfootClubs/club").crestImageUrl, "https://storage/club.png");
+  assert.equal(database.documents.get("brasfootImports/run-parcial").progress.assets.preserved, 1);
 });
 
 test("runImport grava relatorio final mesmo quando a entrada falha", async () => {

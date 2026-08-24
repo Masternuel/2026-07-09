@@ -34,10 +34,30 @@ export const editorRecordIdSchema = z.union([z.string(), z.number()])
     .max(128)
     .refine((value) => !value.includes("/"), "ID nao pode conter /"));
 
+export const editorBulkDeleteSchema = z.object({
+  ids: z.array(editorRecordIdSchema)
+    .min(1, "Selecione ao menos um registro")
+    .max(100, "Selecione no maximo 100 registros por vez")
+    .superRefine((ids, context) => {
+      const seen = new Set();
+      ids.forEach((id, index) => {
+        if (seen.has(id)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "IDs duplicados nao sao permitidos",
+            path: [index],
+          });
+        }
+        seen.add(id);
+      });
+    }),
+}).strict();
+
 const requiredText = (maximum = 120) => z.string().trim().min(1).max(maximum);
 const nullableText = (maximum = 120) => z.union([z.string().trim().max(maximum), z.null()])
   .transform((value) => value === "" ? null : value);
 const colorSchema = z.string().regex(/^#[0-9a-f]{6}$/i, "Cor deve usar #RRGGBB");
+const nullableColorSchema = colorSchema.nullable();
 const nullableHttpUrl = z.union([
   z.literal(""),
   z.string().trim().max(2048).url()
@@ -61,13 +81,25 @@ const attributesSchema = z.object({
   passe: playerAttributeSchema,
   peBom: playerAttributeSchema,
   peRuim: playerAttributeSchema,
+  forca: playerAttributeSchema.default(10),
+  resistencia: playerAttributeSchema.default(10),
+  impulsao: playerAttributeSchema.default(10),
+  reflexos: playerAttributeSchema.default(10),
+  posicionamentoGol: playerAttributeSchema.default(10),
+  saidaGol: playerAttributeSchema.default(10),
+  penaltis: playerAttributeSchema.default(10),
 }).strict();
+
+const competitionLegsSchema = z.enum(["single", "double"]);
+const competitionPrizeMoneySchema = z.coerce.number().int().min(0).max(2_000_000_000);
 
 const leagueFields = {
   name: requiredText(),
   country: requiredText(60),
   level: z.coerce.number().int().min(1).max(20),
   division: requiredText(60),
+  legs: competitionLegsSchema,
+  prizeMoney: competitionPrizeMoneySchema,
   active: z.boolean(),
 };
 
@@ -75,7 +107,10 @@ const clubFields = {
   name: requiredText(),
   abbreviation: z.string().trim().max(8),
   colors: z.array(colorSchema).max(4),
+  darkThemeColor: nullableColorSchema,
+  lightThemeColor: nullableColorSchema,
   stadium: requiredText(),
+  stadiumCapacity: z.coerce.number().int().min(0).max(500_000),
   reputation: z.coerce.number().int().min(1).max(20),
   division: requiredText(60),
   country: requiredText(60),
@@ -104,7 +139,7 @@ const playerFields = {
 };
 
 export const tournamentFormatSchema = z.enum(["league", "knockout", "groups_knockout"]);
-export const tournamentLegsSchema = z.enum(["single", "double"]);
+export const tournamentLegsSchema = competitionLegsSchema;
 export const tournamentTiebreakerSchema = z.enum([
   "goal_difference",
   "goals_scored",
@@ -133,6 +168,7 @@ const tournamentFields = {
   teamIds: tournamentTeamIdsSchema,
   trophyImageUrl: nullableHttpUrl,
   trophyImagePath: mediaPathSchema("tournaments"),
+  prizeMoney: competitionPrizeMoneySchema,
   active: z.boolean(),
 };
 
@@ -221,6 +257,8 @@ export const editorCreateSchemas = {
     country: leagueFields.country.default("Brasil"),
     level: leagueFields.level.default(1),
     division: leagueFields.division.default("Primeira divisao"),
+    legs: leagueFields.legs.default("double"),
+    prizeMoney: leagueFields.prizeMoney.default(0),
     active: leagueFields.active.default(true),
   }).strict(),
   clubs: z.object({
@@ -228,7 +266,10 @@ export const editorCreateSchemas = {
     ...clubFields,
     abbreviation: clubFields.abbreviation.default(""),
     colors: clubFields.colors.default([]),
+    darkThemeColor: clubFields.darkThemeColor.optional().default(null),
+    lightThemeColor: clubFields.lightThemeColor.optional().default(null),
     stadium: clubFields.stadium.default("A definir"),
+    stadiumCapacity: clubFields.stadiumCapacity.default(0),
     reputation: clubFields.reputation.default(10),
     division: clubFields.division.default("Sem divisao"),
     country: clubFields.country.default("Brasil"),
@@ -262,6 +303,7 @@ export const editorCreateSchemas = {
     teamIds: tournamentFields.teamIds.default([]),
     trophyImageUrl: tournamentFields.trophyImageUrl.optional().default(null),
     trophyImagePath: tournamentFields.trophyImagePath.optional().default(null),
+    prizeMoney: tournamentFields.prizeMoney.default(0),
     active: tournamentFields.active.default(true),
   }).strict()),
 };

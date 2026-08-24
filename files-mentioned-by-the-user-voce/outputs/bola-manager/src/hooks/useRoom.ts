@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../lib/apiClient';
-import type { AckResponse, BolaSocket, Room, RoomCreatePayload } from '../types';
+import type { AckResponse, BolaSocket, Room, RoomCreatePayload, RoomFixture } from '../types';
+import { normalizeRoomSnapshot, normalizeRoomSnapshots } from '../utils/normalizeRoom';
 import { useAuth } from './useAuth';
 import type { SocketState } from './useSocket';
 
 type RoomAck = AckResponse<{ room: Room }>;
 type DeleteRoomAck = AckResponse<{ code: string }>;
+
+const ROOM_ACK_TIMEOUT_MS = 8_000;
+const ROOM_DELETE_ACK_TIMEOUT_MS = 30_000;
 
 const MISSING_SAVE_MESSAGE = 'Este save não existe mais no servidor e foi removido da sua lista.';
 
@@ -28,8 +32,10 @@ function sortRooms(rooms: Room[]): Room[] {
   return [...rooms].sort((left, right) => roomTimestamp(right) - roomTimestamp(left));
 }
 
-function normalizeRoomCode(code: string): string {
-  return code.trim().toUpperCase();
+function normalizeRoomCode(code: unknown): string {
+  if (typeof code === 'string') return code.trim().toUpperCase();
+  if (typeof code === 'number' && Number.isFinite(code)) return String(code);
+  return '';
 }
 
 function mergeRoomsByRevision(current: Room[], incoming: Room[], tombstones: Set<string>): Room[] {
@@ -54,23 +60,60 @@ function errorMessage(error: unknown): string {
 
 function waitForRoomAck(invoke: (callback: (response: RoomAck) => void) => void): Promise<Room> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), 8000);
+    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), ROOM_ACK_TIMEOUT_MS);
     invoke((response) => {
       window.clearTimeout(timer);
-      if (response.ok) resolve(response.room);
-      else reject(new RoomAckError(response.error.message, response.error.code));
+      if (response?.ok) {
+        const room = normalizeRoomSnapshot(response.room);
+        if (room) resolve(room);
+        else reject(new RoomAckError('O servidor retornou um save inválido.', 'ROOM_SNAPSHOT_INVALID'));
+      } else if (response?.error) reject(new RoomAckError(response.error.message, response.error.code));
+      else reject(new RoomAckError('O servidor retornou uma resposta inválida.', 'ROOM_ACK_INVALID'));
     });
   });
 }
 
 function waitForDeleteRoomAck(invoke: (callback: (response: DeleteRoomAck) => void) => void): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), 8000);
+    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), ROOM_DELETE_ACK_TIMEOUT_MS);
     invoke((response) => {
       window.clearTimeout(timer);
-      if (response.ok) resolve(response.code);
-      else reject(new RoomAckError(response.error.message, response.error.code));
+      if (response?.ok) {
+        const code = normalizeRoomCode(response.code);
+        if (code) resolve(code);
+        else reject(new RoomAckError('O servidor retornou um código de save inválido.', 'ROOM_CODE_INVALID'));
+      } else if (response?.error) reject(new RoomAckError(response.error.message, response.error.code));
+      else reject(new RoomAckError('O servidor retornou uma resposta inválida.', 'ROOM_ACK_INVALID'));
     });
+  });
+}
+
+const demoClubNames: Record<string, string> = {
+  AUR: 'Aurora FC',
+  SAN: 'Santos',
+  FLU: 'Fluminense',
+  BAH: 'Bahia',
+  PAL: 'Palmeiras',
+};
+
+function createOfflineFixtureSchedule(managerId: string, selectedClubId: string | null): RoomFixture[] {
+  const managedClubId = (selectedClubId || 'AUR').toLocaleUpperCase('pt-BR');
+  const managedTeam = demoClubNames[managedClubId] ?? managedClubId;
+  const opponents = ['SAN', 'FLU', 'BAH', 'PAL'].filter((clubId) => clubId !== managedClubId).slice(0, 3);
+  return opponents.map((opponentId, index) => {
+    const managerAtHome = index % 2 === 0;
+    return {
+      fixtureId: index === 0 ? 'abertura' : `rodada-${index + 1}`,
+      round: index + 1,
+      competition: 'Brasileirao',
+      homeClubId: managerAtHome ? managedClubId : opponentId,
+      awayClubId: managerAtHome ? opponentId : managedClubId,
+      homeTeam: managerAtHome ? managedTeam : demoClubNames[opponentId],
+      awayTeam: managerAtHome ? demoClubNames[opponentId] : managedTeam,
+      homeManagerId: managerAtHome ? managerId : null,
+      awayManagerId: managerAtHome ? null : managerId,
+      managerIds: [managerId],
+    };
   });
 }
 
@@ -88,6 +131,7 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
 
   const tombstoneRoom = useCallback((code: string) => {
     const normalizedCode = normalizeRoomCode(code);
+    if (!normalizedCode) return;
     if (!deletedRoomCodesRef.current.has(normalizedCode)) {
       deletedRoomCodesRef.current.add(normalizedCode);
       mutationGenerationRef.current += 1;
@@ -146,11 +190,15 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
     const requestGeneration = ++requestGenerationRef.current;
     const mutationGeneration = mutationGenerationRef.current;
     setLoading(true);
-    apiRequest<{ rooms: Room[] }>('/api/rooms', { identity, getIdToken }, { signal: controller.signal })
-      .then(({ rooms }) => {
+    apiRequest<unknown>('/api/rooms', { identity, getIdToken }, { signal: controller.signal })
+      .then((payload) => {
         if (controller.signal.aborted || requestGeneration !== requestGenerationRef.current) return;
         const tombstones = deletedRoomCodesRef.current;
-        const incoming = sortRooms(rooms.filter((candidate) => !tombstones.has(normalizeRoomCode(candidate.code))));
+        const records = payload && typeof payload === 'object' && 'rooms' in payload
+          ? (payload as { rooms?: unknown }).rooms
+          : [];
+        const incoming = sortRooms(normalizeRoomSnapshots(records)
+          .filter((candidate) => !tombstones.has(normalizeRoomCode(candidate.code))));
         const hasConcurrentMutation = identity.mode === 'demo'
           || mutationGenerationRef.current !== mutationGeneration;
 
@@ -185,9 +233,20 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
 
   useEffect(() => {
     if (!socket) return;
-    const onRoomState = (nextRoom: Room) => updateSelectedRoom(nextRoom);
-    const onRoomStarted = (nextRoom: Room) => updateSelectedRoom(nextRoom);
-    const onRoomDeleted = ({ code }: { code: string }) => tombstoneRoom(code);
+    const onRoomState = (value: unknown) => {
+      const nextRoom = normalizeRoomSnapshot(value);
+      if (nextRoom) updateSelectedRoom(nextRoom);
+    };
+    const onRoomStarted = (value: unknown) => {
+      const nextRoom = normalizeRoomSnapshot(value);
+      if (nextRoom) updateSelectedRoom(nextRoom);
+    };
+    const onRoomDeleted = (value: unknown) => {
+      const code = value && typeof value === 'object' && 'code' in value
+        ? normalizeRoomCode((value as { code?: unknown }).code)
+        : '';
+      if (code) tombstoneRoom(code);
+    };
     socket.on('room:state', onRoomState);
     socket.on('room:started', onRoomStarted);
     socket.on('room:deleted', onRoomDeleted);
@@ -206,12 +265,17 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
       return;
     }
     socket.emit('room:resume', { code }, (response) => {
-      if (response.ok) updateSelectedRoom(response.room);
-      else if (response.error.code === 'ROOM_NOT_FOUND') {
+      if (response?.ok) {
+        const nextRoom = normalizeRoomSnapshot(response.room);
+        if (nextRoom) updateSelectedRoom(nextRoom);
+        else setError('O servidor retornou um save inválido.');
+      } else if (response?.error?.code === 'ROOM_NOT_FOUND') {
         tombstoneRoom(code);
         setError(MISSING_SAVE_MESSAGE);
-      } else {
+      } else if (response?.error) {
         setError(response.error.message);
+      } else {
+        setError('O servidor retornou uma resposta inválida.');
       }
     });
   }, [socket, socketState, room?.code, tombstoneRoom, updateSelectedRoom]);
@@ -340,7 +404,21 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
     if (!room || !identity) throw new Error('Nenhuma sala selecionada.');
     if (!socket?.connected && identity.mode === 'demo') {
       const startedAt = new Date().toISOString();
-      return { ...room, status: 'active', startedAt, seasonStartedAt: room.seasonStartedAt ?? startedAt, revision: room.revision + 1 };
+      const manager = room.managers.find((candidate) => candidate.id === identity.uid) ?? room.managers[0];
+      const fixtureSchedule = createOfflineFixtureSchedule(identity.uid, manager?.clubId ?? null);
+      return {
+        ...room,
+        status: 'active',
+        startedAt,
+        seasonStartedAt: room.seasonStartedAt ?? startedAt,
+        revision: room.revision + 1,
+        scheduleVersion: 1,
+        fixtureSchedule,
+        currentFixtureId: fixtureSchedule[0]?.fixtureId ?? null,
+        matchReadiness: { fixtureId: fixtureSchedule[0]?.fixtureId ?? null, managerIds: [] },
+        completedFixtureIds: [],
+        completedMatches: [],
+      };
     }
     if (!socket?.connected) throw new Error('A conexão em tempo real foi interrompida.');
     return waitForRoomAck((acknowledge) => socket.emit('room:start', { code: room.code }, acknowledge));

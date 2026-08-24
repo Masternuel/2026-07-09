@@ -2,10 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 const DEFAULT_MODEL = "gemini-3.5-flash";
+const DEFAULT_FALLBACK_MODELS = ["gemini-3.1-flash-lite"];
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_CACHE_ENTRIES = 200;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 8;
+const DEFAULT_RETRIES_PER_MODEL = 1;
+const DEFAULT_RETRY_DELAY_MS = 150;
 
 const generatedCommentSchema = z.object({
   author: z.string().trim().min(1).max(60),
@@ -310,20 +313,75 @@ function cacheKey(input) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
+function normalizeModelList(value) {
+  const values = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return [...new Set(values.map((item) => String(item ?? "").trim()).filter(Boolean))];
+}
+
+function safeProviderCode(value, fallback = "UPSTREAM_ERROR") {
+  const normalized = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]+/gu, "_")
+    .slice(0, 64);
+  return normalized || fallback;
+}
+
+function providerError({ status = 0, code, model }) {
+  const error = new Error("Social AI provider unavailable");
+  error.name = "SocialAiProviderError";
+  error.status = Number.isInteger(status) ? status : 0;
+  error.code = safeProviderCode(code);
+  error.model = model;
+  return error;
+}
+
+function shouldRetrySameModel(error) {
+  if (error?.code === "TIMEOUT") return false;
+  const status = Number(error?.status ?? 0);
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function shouldTryNextModel(error) {
+  const status = Number(error?.status ?? 0);
+  return status === 0
+    || status === 404
+    || status === 408
+    || status === 409
+    || status === 429
+    || status >= 500;
+}
+
 export function createSocialAiService({
   apiKey,
   model = DEFAULT_MODEL,
+  fallbackModels = DEFAULT_FALLBACK_MODELS,
   fetchImpl = globalThis.fetch,
   logger = console,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
   maxCacheEntries = DEFAULT_MAX_CACHE_ENTRIES,
   maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS,
+  retriesPerModel = DEFAULT_RETRIES_PER_MODEL,
+  retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+  sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   now = () => Date.now(),
   idFactory = randomUUID,
 } = {}) {
   const normalizedKey = String(apiKey ?? "").trim();
   const normalizedModel = String(model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const requestedFallbackModels = normalizeModelList(fallbackModels);
+  const normalizedFallbackModels = (requestedFallbackModels.length
+    ? requestedFallbackModels
+    : DEFAULT_FALLBACK_MODELS)
+    .filter((candidate) => candidate !== normalizedModel);
+  const candidateModels = [normalizedModel, ...normalizedFallbackModels];
+  const retryLimit = Number.isInteger(retriesPerModel) && retriesPerModel >= 0
+    ? retriesPerModel
+    : DEFAULT_RETRIES_PER_MODEL;
+  const retryBaseDelay = Number.isFinite(retryDelayMs) && retryDelayMs >= 0
+    ? retryDelayMs
+    : DEFAULT_RETRY_DELAY_MS;
   const cacheLimit = Number.isInteger(maxCacheEntries) && maxCacheEntries > 0
     ? maxCacheEntries
     : DEFAULT_MAX_CACHE_ENTRIES;
@@ -333,43 +391,86 @@ export function createSocialAiService({
   const cache = new Map();
   const inFlight = new Map();
 
-  async function callGemini(input) {
+  async function callGemini(input, requestedModel) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchImpl(
-        "https://generativelanguage.googleapis.com/v1beta/interactions",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-goog-api-key": normalizedKey,
+      let response;
+      try {
+        response = await fetchImpl(
+          "https://generativelanguage.googleapis.com/v1beta/interactions",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-goog-api-key": normalizedKey,
+            },
+            body: JSON.stringify({
+              model: requestedModel,
+              input: JSON.stringify(input),
+              system_instruction: SYSTEM_INSTRUCTION,
+              store: false,
+              response_format: {
+                type: "text",
+                mime_type: "application/json",
+                schema: RESPONSE_SCHEMA,
+              },
+              generation_config: {
+                thinking_level: "low",
+                max_output_tokens: 900,
+              },
+            }),
+            signal: controller.signal,
           },
-          body: JSON.stringify({
-            model: normalizedModel,
-            input: JSON.stringify(input),
-            system_instruction: SYSTEM_INSTRUCTION,
-            store: false,
-            response_format: {
-              type: "text",
-              mime_type: "application/json",
-              schema: RESPONSE_SCHEMA,
-            },
-            generation_config: {
-              thinking_level: "low",
-              max_output_tokens: 900,
-            },
-          }),
-          signal: controller.signal,
-        },
-      );
-      if (!response.ok) throw new Error("Gemini request failed");
-      const payload = await response.json();
-      const parsed = JSON.parse(stripCodeFence(responseText(payload)));
-      return generatedBundleSchema.parse(parsed);
+        );
+      } catch (error) {
+        throw providerError({
+          status: error?.name === "AbortError" ? 408 : 0,
+          code: error?.name === "AbortError" ? "TIMEOUT" : "NETWORK_ERROR",
+          model: requestedModel,
+        });
+      }
+      if (!response.ok) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          // The response body is intentionally ignored; only a safe status/code reaches logs.
+        }
+        throw providerError({
+          status: Number.isInteger(response.status) ? response.status : 502,
+          code: payload?.error?.status ?? payload?.error?.code,
+          model: requestedModel,
+        });
+      }
+      try {
+        const payload = await response.json();
+        const parsed = JSON.parse(stripCodeFence(responseText(payload)));
+        return generatedBundleSchema.parse(parsed);
+      } catch {
+        throw providerError({ status: 502, code: "INVALID_RESPONSE", model: requestedModel });
+      }
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async function callGeminiWithFallback(input) {
+    let lastError = providerError({ code: "NO_MODEL_AVAILABLE", model: normalizedModel });
+    for (const requestedModel of candidateModels) {
+      for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
+        try {
+          return { bundle: await callGemini(input, requestedModel), model: requestedModel };
+        } catch (error) {
+          lastError = error;
+          if (attempt >= retryLimit || !shouldRetrySameModel(error)) break;
+          const delay = retryBaseDelay * (2 ** attempt);
+          if (delay > 0) await sleepImpl(delay);
+        }
+      }
+      if (!shouldTryNextModel(lastError)) break;
+    }
+    throw lastError;
   }
 
   async function generate(input) {
@@ -387,10 +488,10 @@ export function createSocialAiService({
     if (inFlight.has(key)) return inFlight.get(key);
     if (inFlight.size >= concurrencyLimit) return fallback();
 
-    const request = callGemini(input).then((bundle) => {
+    const request = callGeminiWithFallback(input).then(({ bundle, model: usedModel }) => {
       const value = {
         source: "gemini",
-        model: normalizedModel,
+        model: usedModel,
         cached: false,
         ...normalizeBundle(bundle, input, idFactory),
       };
@@ -400,8 +501,12 @@ export function createSocialAiService({
       while (cache.size >= cacheLimit) cache.delete(cache.keys().next().value);
       cache.set(key, { value, expiresAt: now() + cacheTtlMs });
       return value;
-    }).catch(() => {
-      logger.warn?.("Gemini indisponivel; usando fallback social.");
+    }).catch((error) => {
+      logger.warn?.("Gemini indisponivel; usando fallback social.", {
+        code: safeProviderCode(error?.code),
+        status: Number.isInteger(error?.status) && error.status > 0 ? error.status : null,
+        model: error?.model || normalizedModel,
+      });
       return fallback();
     }).finally(() => inFlight.delete(key));
     inFlight.set(key, request);
@@ -411,6 +516,7 @@ export function createSocialAiService({
   return {
     configured: Boolean(normalizedKey),
     model: normalizedModel,
+    fallbackModels: [...normalizedFallbackModels],
     generate,
     hasReusableResult(input) {
       const key = cacheKey(input);

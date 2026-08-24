@@ -25,9 +25,9 @@ npx firebase-tools use bola-manager
 npx firebase-tools deploy --only firestore:rules,firestore:indexes,storage
 ```
 
-As coleções `rooms` e `matches` são bloqueadas para acesso direto do cliente. O Firebase Admin ignora essas regras e mantém a autoridade do servidor. Usuários autenticados podem ler o catálogo Brasfoot importado e editar somente o próprio documento em `users/{uid}`.
+As coleções `rooms`, `matches` e as bases pessoais em `catalogDatabases/{uid}` são bloqueadas para acesso direto do cliente. O Firebase Admin ignora essas regras, valida o UID no backend e mantém a autoridade do servidor. O catálogo Brasfoot global permanece apenas como origem de migração para a primeira cópia pessoal.
 
-Ative tambem o Firebase Storage e anote o nome exato do bucket. `storage.rules` bloqueia uploads diretos: escudos, avatares e trofeus passam pela rota administrativa, que valida PNG/JPEG/WebP (ate 5 MB), gera o caminho e associa a URL ao registro do catalogo.
+Firebase Storage e opcional. Para evitar a exigencia de plano, use Cloudinary: escudos, avatares e trofeus continuam passando pela rota administrativa, que valida PNG/JPEG/WebP (ate 5 MB), assina o envio no backend e associa a URL ao catalogo. O Firebase continua cuidando de Auth e Firestore.
 
 ## 3. Credencial Firebase Admin local
 
@@ -54,9 +54,10 @@ Defina como secrets/variables:
 NODE_ENV=production
 CLIENT_ORIGIN=https://SEU-DOMINIO.vercel.app
 FIREBASE_PROJECT_ID=bola-manager
-FIREBASE_STORAGE_BUCKET=bola-manager.firebasestorage.app
 FIREBASE_CLIENT_EMAIL=...
 FIREBASE_PRIVATE_KEY=...
+MEDIA_STORAGE_PROVIDER=cloudinary
+CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
 ROOM_STORE=firestore
 ALLOW_DEMO_AUTH=false
 MATCH_EVENT_DELAY_MS=800

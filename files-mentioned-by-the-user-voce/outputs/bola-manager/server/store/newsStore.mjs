@@ -54,6 +54,22 @@ function mergeCommentsPreservingExisting(existing, incoming) {
   return preserved;
 }
 
+function replaceGeneratedTopLevelComments(existing, incoming) {
+  const replacements = cappedComments(incoming);
+  if (!replacements.length) return cappedComments(existing);
+  const replacedIds = new Set(cappedComments(existing)
+    .filter((comment) => comment.generated === true && !comment.parentCommentId)
+    .map((comment) => comment.id)
+    .filter(Boolean));
+  const replacementParentId = replacements[0]?.id ?? null;
+  const preserved = cappedComments(existing)
+    .filter((comment) => !(comment.generated === true && !comment.parentCommentId))
+    .map((comment) => replacedIds.has(comment.parentCommentId)
+      ? { ...comment, parentCommentId: replacementParentId }
+      : comment);
+  return cappedComments([...replacements, ...preserved]);
+}
+
 function editorialKeyFor(post) {
   return String(post?.editorialKey ?? post?.id ?? "editorial");
 }
@@ -69,6 +85,25 @@ function editorialIdFor(roomCode, editorialKey, post) {
     post?.body ?? "",
   ]);
   return `editorial-${createHash("sha256").update(content).digest("hex").slice(0, 32)}`;
+}
+
+function operationIdFor(roomCode, actorId, kind, requestId) {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([roomCode, actorId, kind, requestId]))
+    .digest("hex");
+  return `news-operation-${digest}`;
+}
+
+function operationFingerprint(payload) {
+  return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
+}
+
+function operationConflict() {
+  return new NewsStoreError(
+    "requestId ja utilizado por outra solicitacao",
+    "NEWS_REQUEST_CONFLICT",
+    409,
+  );
 }
 
 function mappedComments(commentsByPostId, editorialKey) {
@@ -94,6 +129,7 @@ export class NewsStore {
     this.now = now;
     this.idFactory = idFactory;
     this.memory = new Map();
+    this.operations = new Map();
   }
 
   get source() {
@@ -292,6 +328,311 @@ export class NewsStore {
       updated = { ...current, id: document.id, comments: mergedComments };
     });
     return snapshotPost(updated);
+  }
+
+  async replaceGeneratedComments({ roomCode, postId, comments, aiSource = "gemini" }) {
+    const replacements = cappedComments(comments);
+    if (!replacements.length) return this.get(roomCode, postId);
+
+    if (!this.firestore) {
+      const posts = this.memory.get(roomCode) ?? [];
+      const index = posts.findIndex((post) => post.id === postId);
+      if (index === -1) throw postNotFound();
+      const updated = {
+        ...posts[index],
+        comments: replaceGeneratedTopLevelComments(posts[index].comments, replacements),
+        aiSource,
+      };
+      posts[index] = updated;
+      return snapshotPost(updated);
+    }
+
+    const reference = this.firestore.collection("news").doc(postId);
+    let updated = null;
+    await this.firestore.runTransaction(async (transaction) => {
+      const document = await transaction.get(reference);
+      if (!document.exists) throw postNotFound();
+      const current = document.data();
+      if (current.roomCode !== roomCode) throw postNotFound();
+      const mergedComments = replaceGeneratedTopLevelComments(current.comments, replacements);
+      transaction.update(reference, { comments: mergedComments, aiSource });
+      updated = { ...current, id: document.id, comments: mergedComments, aiSource };
+    });
+    return snapshotPost(updated);
+  }
+
+  async getOperationResult({ roomCode, actorId, kind, requestId, payload }) {
+    if (!requestId) return null;
+    const id = operationIdFor(roomCode, actorId, kind, requestId);
+    const expectedFingerprint = operationFingerprint(payload);
+    let operation = null;
+    if (!this.firestore) {
+      operation = this.operations.get(id) ?? null;
+    } else {
+      const document = await this.firestore.collection("newsOperations").doc(id).get();
+      operation = document.exists ? document.data() : null;
+    }
+    if (!operation) return null;
+    if (operation.fingerprint !== expectedFingerprint) throw operationConflict();
+    return this.#materializeOperation(operation);
+  }
+
+  async createManagerPostWithOperation({
+    roomCode,
+    actorId,
+    requestId,
+    requestPayload,
+    authorName,
+    clubId,
+    body,
+    comments = [],
+    aiSource = "fallback",
+    teamComment = null,
+    generatedArticle = null,
+  }) {
+    if (!requestId) {
+      const post = await this.create({
+        roomCode,
+        authorId: actorId,
+        authorName,
+        clubId,
+        body,
+        comments,
+        aiSource,
+      });
+      const generatedPost = generatedArticle?.publish
+        ? await this.createEditorial({
+          roomCode,
+          clubId,
+          article: generatedArticle,
+          generatedFromPostId: post.id,
+          aiSource,
+        })
+        : null;
+      return { post, generatedPost, teamComment, comments: [], replayed: false };
+    }
+
+    const existing = await this.getOperationResult({
+      roomCode,
+      actorId,
+      kind: "publish",
+      requestId,
+      payload: requestPayload,
+    });
+    if (existing) return { ...existing, replayed: true };
+
+    const createdAt = this.now().toISOString();
+    const post = {
+      id: this.idFactory(),
+      roomCode,
+      authorId: actorId,
+      authorName,
+      clubId,
+      source: authorName,
+      sourceType: "manager",
+      headline: `Declaração de ${authorName}`,
+      body,
+      reactions: 0,
+      tag: "Sala",
+      createdAt,
+      comments: cappedComments(comments),
+      aiSource,
+    };
+    const generatedPost = generatedArticle?.publish ? {
+      id: this.idFactory(),
+      roomCode,
+      clubId,
+      source: generatedArticle.source ?? "Central da Bola",
+      sourceType: generatedArticle.sourceType ?? "imprensa",
+      headline: generatedArticle.headline ?? "Noticia da rodada",
+      body: generatedArticle.body ?? "",
+      reactions: Number.isFinite(generatedArticle.reactions)
+        ? Math.max(0, generatedArticle.reactions)
+        : 0,
+      tag: generatedArticle.tag ?? "Noticia",
+      createdAt,
+      generatedFromPostId: post.id,
+      comments: [],
+      aiSource,
+    } : null;
+    const operation = {
+      roomCode,
+      actorId,
+      kind: "publish",
+      fingerprint: operationFingerprint(requestPayload),
+      postId: post.id,
+      generatedPostId: generatedPost?.id ?? null,
+      commentIds: [],
+      teamComment,
+      createdAt,
+    };
+    const operationId = operationIdFor(roomCode, actorId, "publish", requestId);
+
+    if (!this.firestore) {
+      const raced = this.operations.get(operationId);
+      if (raced) {
+        if (raced.fingerprint !== operation.fingerprint) throw operationConflict();
+        return { ...(await this.#materializeOperation(raced)), replayed: true };
+      }
+      const current = this.memory.get(roomCode) ?? [];
+      this.memory.set(roomCode, [
+        ...(generatedPost ? [generatedPost] : []),
+        post,
+        ...current,
+      ].slice(0, 100));
+      this.operations.set(operationId, operation);
+      return { ...(await this.#materializeOperation(operation)), replayed: false };
+    }
+
+    const operationReference = this.firestore.collection("newsOperations").doc(operationId);
+    const postReference = this.firestore.collection("news").doc(post.id);
+    const generatedReference = generatedPost
+      ? this.firestore.collection("news").doc(generatedPost.id)
+      : null;
+    let committedOperation = operation;
+    let replayed = false;
+    await this.firestore.runTransaction(async (transaction) => {
+      const operationDocument = await transaction.get(operationReference);
+      if (operationDocument.exists) {
+        committedOperation = operationDocument.data();
+        if (committedOperation.fingerprint !== operation.fingerprint) throw operationConflict();
+        replayed = true;
+        return;
+      }
+      transaction.set(postReference, post);
+      if (generatedReference) transaction.set(generatedReference, generatedPost);
+      transaction.set(operationReference, operation);
+    });
+    return { ...(await this.#materializeOperation(committedOperation)), replayed };
+  }
+
+  async appendCommentsWithOperation({
+    roomCode,
+    postId,
+    actorId,
+    requestId,
+    requestPayload,
+    comments,
+    clubId,
+    generatedArticle = null,
+    generatedFromPostId = null,
+    aiSource = "fallback",
+    teamComment = null,
+  }) {
+    if (!requestId) {
+      const post = await this.appendComments({ roomCode, postId, comments });
+      const generatedPost = generatedArticle?.publish
+        ? await this.createEditorial({
+          roomCode,
+          clubId,
+          article: generatedArticle,
+          generatedFromPostId,
+          aiSource,
+        })
+        : null;
+      return { post, generatedPost, teamComment, comments, replayed: false };
+    }
+
+    const existing = await this.getOperationResult({
+      roomCode,
+      actorId,
+      kind: "reply",
+      requestId,
+      payload: requestPayload,
+    });
+    if (existing) return { ...existing, replayed: true };
+
+    const createdAt = this.now().toISOString();
+    const additions = cappedComments(comments);
+    const generatedPost = generatedArticle?.publish ? {
+      id: this.idFactory(),
+      roomCode,
+      clubId,
+      source: generatedArticle.source ?? "Central da Bola",
+      sourceType: generatedArticle.sourceType ?? "imprensa",
+      headline: generatedArticle.headline ?? "Noticia da rodada",
+      body: generatedArticle.body ?? "",
+      reactions: Number.isFinite(generatedArticle.reactions)
+        ? Math.max(0, generatedArticle.reactions)
+        : 0,
+      tag: generatedArticle.tag ?? "Noticia",
+      createdAt,
+      generatedFromPostId,
+      comments: [],
+      aiSource,
+    } : null;
+    const operation = {
+      roomCode,
+      actorId,
+      kind: "reply",
+      fingerprint: operationFingerprint(requestPayload),
+      postId,
+      generatedPostId: generatedPost?.id ?? null,
+      commentIds: additions.map((comment) => comment.id).filter(Boolean),
+      teamComment,
+      createdAt,
+    };
+    const operationId = operationIdFor(roomCode, actorId, "reply", requestId);
+
+    if (!this.firestore) {
+      const raced = this.operations.get(operationId);
+      if (raced) {
+        if (raced.fingerprint !== operation.fingerprint) throw operationConflict();
+        return { ...(await this.#materializeOperation(raced)), replayed: true };
+      }
+      const posts = this.memory.get(roomCode) ?? [];
+      const index = posts.findIndex((post) => post.id === postId);
+      if (index === -1) throw postNotFound();
+      posts[index] = {
+        ...posts[index],
+        comments: cappedComments([...(posts[index].comments ?? []), ...additions]),
+      };
+      if (generatedPost) posts.unshift(generatedPost);
+      this.memory.set(roomCode, posts.slice(0, 100));
+      this.operations.set(operationId, operation);
+      return { ...(await this.#materializeOperation(operation)), replayed: false };
+    }
+
+    const operationReference = this.firestore.collection("newsOperations").doc(operationId);
+    const postReference = this.firestore.collection("news").doc(postId);
+    const generatedReference = generatedPost
+      ? this.firestore.collection("news").doc(generatedPost.id)
+      : null;
+    let committedOperation = operation;
+    let replayed = false;
+    await this.firestore.runTransaction(async (transaction) => {
+      const operationDocument = await transaction.get(operationReference);
+      if (operationDocument.exists) {
+        committedOperation = operationDocument.data();
+        if (committedOperation.fingerprint !== operation.fingerprint) throw operationConflict();
+        replayed = true;
+        return;
+      }
+      const postDocument = await transaction.get(postReference);
+      if (!postDocument.exists || postDocument.data().roomCode !== roomCode) throw postNotFound();
+      const current = postDocument.data();
+      transaction.update(postReference, {
+        comments: cappedComments([...(current.comments ?? []), ...additions]),
+      });
+      if (generatedReference) transaction.set(generatedReference, generatedPost);
+      transaction.set(operationReference, operation);
+    });
+    return { ...(await this.#materializeOperation(committedOperation)), replayed };
+  }
+
+  async #materializeOperation(operation) {
+    const post = await this.get(operation.roomCode, operation.postId);
+    if (!post) throw postNotFound();
+    const generatedPost = operation.generatedPostId
+      ? await this.get(operation.roomCode, operation.generatedPostId)
+      : null;
+    const commentIds = new Set(operation.commentIds ?? []);
+    return {
+      post,
+      generatedPost,
+      teamComment: operation.teamComment ?? null,
+      comments: (post.comments ?? []).filter((comment) => commentIds.has(comment.id)),
+    };
   }
 
   async #persist(post) {

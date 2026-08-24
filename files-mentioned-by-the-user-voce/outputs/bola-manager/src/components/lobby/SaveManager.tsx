@@ -31,6 +31,8 @@ function formatRoomDate(room: Room) {
 
 function completedGames(room: Room) {
   return Math.max(
+    room.completedFixtureCount ?? 0,
+    room.completedMatchCount ?? 0,
     room.completedFixtureIds?.length ?? 0,
     room.completedMatches?.length ?? 0,
   );

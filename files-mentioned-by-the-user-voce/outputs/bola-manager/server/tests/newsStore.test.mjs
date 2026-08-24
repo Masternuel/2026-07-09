@@ -194,6 +194,35 @@ test("memoria anexa comentarios, limita total e retorna 404 tipado", async () =>
   );
 });
 
+test("substitui fallback gerado e preserva encadeamento humano", async () => {
+  const store = new NewsStore({ idFactory: () => "manager-fallback" });
+  await store.create({
+    roomCode: "BOLA-AAAA",
+    authorId: "manager-1",
+    authorName: "Manager",
+    clubId: "AUR",
+    body: "Vamos time!",
+    aiSource: "fallback",
+    comments: [
+      { id: "fallback-1", text: "Resposta generica.", generated: true, parentCommentId: null },
+      { id: "human-1", text: "Resposta humana.", generated: false, parentCommentId: "fallback-1" },
+      { id: "thread-1", text: "Continuidade.", generated: true, parentCommentId: "human-1" },
+    ],
+  });
+
+  const recovered = await store.replaceGeneratedComments({
+    roomCode: "BOLA-AAAA",
+    postId: "manager-fallback",
+    aiSource: "gemini",
+    comments: [{ id: "gemini-1", text: "Resposta recuperada.", generated: true, parentCommentId: null }],
+  });
+
+  assert.equal(recovered.aiSource, "gemini");
+  assert.deepEqual(recovered.comments.map((comment) => comment.id), ["gemini-1", "human-1", "thread-1"]);
+  assert.equal(recovered.comments[1].parentCommentId, "gemini-1");
+  assert.equal(recovered.comments[2].parentCommentId, "human-1");
+});
+
 test("Firestore usa transacao atomica e protege o escopo da sala", async () => {
   const documents = new Map();
   let transactionCount = 0;
@@ -392,4 +421,126 @@ test("syncEditorials usa transacao no Firestore e nao sobrescreve comentarios", 
     { id: "new", text: "Nova resposta." },
   ]);
   assert.deepEqual(documents.get(created.id).comments, repeated.comments);
+});
+
+test("Firestore preserva dedupe de publicacao e resposta entre instancias", async () => {
+  const collections = new Map([
+    ["news", new Map()],
+    ["newsOperations", new Map()],
+  ]);
+  const referenceFor = (collectionName, id) => ({
+    collectionName,
+    id,
+    async get() {
+      const documents = collections.get(collectionName);
+      return {
+        id,
+        exists: documents.has(id),
+        data: () => structuredClone(documents.get(id)),
+      };
+    },
+    async set(value) {
+      collections.get(collectionName).set(id, structuredClone(value));
+    },
+  });
+  const firestore = {
+    collection(name) {
+      return { doc: (id) => referenceFor(name, id) };
+    },
+    async runTransaction(operation) {
+      return operation({
+        async get(reference) {
+          return reference.get();
+        },
+        set(reference, value) {
+          collections.get(reference.collectionName).set(reference.id, structuredClone(value));
+        },
+        update(reference, changes) {
+          const documents = collections.get(reference.collectionName);
+          documents.set(reference.id, {
+            ...documents.get(reference.id),
+            ...structuredClone(changes),
+          });
+        },
+      });
+    },
+  };
+  const ids = ["manager-persisted", "article-persisted"];
+  const firstStore = new NewsStore({
+    firestore,
+    now: () => new Date("2026-07-12T17:00:00.000Z"),
+    idFactory: () => ids.shift(),
+  });
+  const publishInput = {
+    roomCode: "BOLA-AAAA",
+    actorId: "manager-a",
+    requestId: "publish-request-01",
+    requestPayload: { message: "Anunciamos um reforco." },
+    authorName: "Ana",
+    clubId: "AUR",
+    body: "Anunciamos um reforco.",
+    comments: [{ id: "generated-comment", text: "Boa contratacao." }],
+    teamComment: { id: "team-comment", text: "Mercado movimentado." },
+    generatedArticle: {
+      publish: true,
+      source: "Jornal",
+      sourceType: "imprensa",
+      headline: "Aurora anuncia reforco",
+      body: "Clube confirmou a chegada.",
+      tag: "Mercado",
+    },
+    aiSource: "gemini",
+  };
+
+  const created = await firstStore.createManagerPostWithOperation(publishInput);
+  assert.equal(created.replayed, false);
+  assert.equal(created.post.id, "manager-persisted");
+  assert.equal(created.generatedPost.id, "article-persisted");
+
+  const reloadedStore = new NewsStore({
+    firestore,
+    idFactory: () => { throw new Error("retry nao pode gerar novo id"); },
+  });
+  const repeated = await reloadedStore.createManagerPostWithOperation(publishInput);
+  assert.equal(repeated.replayed, true);
+  assert.equal(repeated.post.id, created.post.id);
+  assert.equal(repeated.generatedPost.id, created.generatedPost.id);
+  assert.deepEqual(repeated.teamComment, created.teamComment);
+  assert.equal(collections.get("news").size, 2);
+
+  const replyInput = {
+    roomCode: "BOLA-AAAA",
+    postId: created.post.id,
+    actorId: "manager-a",
+    requestId: "reply-request-0001",
+    requestPayload: {
+      postId: created.post.id,
+      parentCommentId: "generated-comment",
+      message: "Seguimos trabalhando.",
+    },
+    comments: [{
+      id: "manager-reply",
+      author: "Ana",
+      text: "Seguimos trabalhando.",
+      parentCommentId: "generated-comment",
+    }],
+    clubId: "AUR",
+  };
+  const reply = await reloadedStore.appendCommentsWithOperation(replyInput);
+  assert.equal(reply.replayed, false);
+  assert.equal(reply.comments.length, 1);
+
+  const afterReplyReload = new NewsStore({ firestore });
+  const repeatedReply = await afterReplyReload.appendCommentsWithOperation(replyInput);
+  assert.equal(repeatedReply.replayed, true);
+  assert.equal(repeatedReply.comments.length, 1);
+  assert.equal(repeatedReply.post.comments.filter((comment) => comment.id === "manager-reply").length, 1);
+
+  await assert.rejects(
+    afterReplyReload.appendCommentsWithOperation({
+      ...replyInput,
+      requestPayload: { ...replyInput.requestPayload, message: "Conteudo alterado." },
+    }),
+    { code: "NEWS_REQUEST_CONFLICT", status: 409 },
+  );
 });

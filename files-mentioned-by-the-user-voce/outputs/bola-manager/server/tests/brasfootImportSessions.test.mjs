@@ -108,7 +108,7 @@ test("sessao aplica TTL, rejeita arquivo vazio e limpa arquivos expirados", asyn
   }
 });
 
-test("rotas exigem Editor, mantem contrato flat, confirmam parcial e limpam sessao", async (context) => {
+test("rotas exigem Firebase, mantem contrato flat, confirmam parcial e limpam sessao", async (context) => {
   const parent = await mkdtemp(join(tmpdir(), "brasfoot-route-test-"));
   const ids = [SESSION_ONE, SESSION_TWO];
   const commits = [];
@@ -140,8 +140,9 @@ test("rotas exigem Editor, mantem contrato flat, confirmam parcial e limpam sess
 
   const unauthenticated = await jsonRequest(`${url}/api/editor/brasfoot-import/sessions`, null, "POST");
   assert.equal(unauthenticated.status, 401);
-  const forbidden = await jsonRequest(`${url}/api/editor/brasfoot-import/sessions`, "owner-token", "POST");
-  assert.equal(forbidden.status, 403);
+  const personalAccess = await jsonRequest(`${url}/api/editor/access`, "owner-token");
+  assert.equal(personalAccess.status, 200);
+  assert.deepEqual(await personalAccess.json(), { canEdit: true });
 
   const createdResponse = await jsonRequest(`${url}/api/editor/brasfoot-import/sessions`, "editor-token", "POST");
   assert.equal(createdResponse.status, 201);

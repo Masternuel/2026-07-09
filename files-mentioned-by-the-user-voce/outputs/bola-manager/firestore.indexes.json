@@ -25,5 +25,86 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "rooms",
+      "fieldPath": "roomStoragePayload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rooms",
+      "fieldPath": "storageCleanupRecipients",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rooms",
+      "fieldPath": "deletedOwnerId",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "roomPayloads",
+      "fieldPath": "roomStorageChunkPayload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "catalog",
+      "fieldPath": "payload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "catalog",
+      "fieldPath": "pageIds",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "catalog",
+      "fieldPath": "children",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "career",
+      "fieldPath": "payload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "career",
+      "fieldPath": "pageIds",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "career",
+      "fieldPath": "children",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pages",
+      "fieldPath": "payload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "sectionPages",
+      "fieldPath": "payload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "sectionPageIndexes",
+      "fieldPath": "pageIds",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "sectionPageIndexes",
+      "fieldPath": "children",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "maintenance",
+      "fieldPath": "targetPath",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "maintenance",
+      "fieldPath": "leaseId",
+      "indexes": []
+    }
+  ]
 }

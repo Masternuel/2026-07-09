@@ -85,7 +85,7 @@
 .press-score-result small {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: .12em;
   text-align: center;
@@ -152,7 +152,7 @@
   height: 50px;
   flex: 0 0 auto;
   place-items: center;
-  color: #101311;
+  color: var(--on-accent);
   background: var(--accent);
 }
 
@@ -206,7 +206,7 @@
 
 .press-answer.is-selected {
   color: var(--ink);
-  border-color: rgba(200,255,61,.4);
+  border-color: var(--team-line-strong);
   border-left-color: var(--accent);
   background: var(--accent-dim);
 }
@@ -222,9 +222,9 @@
   width: max-content;
   padding: 5px 8px;
   color: var(--accent);
-  border: 1px solid rgba(200,255,61,.22);
+  border: 1px solid var(--team-line);
   border-radius: 2px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
@@ -239,7 +239,7 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  color: #101311;
+  color: var(--on-accent);
   border-radius: 50%;
   background: var(--accent);
   opacity: 0;
@@ -248,6 +248,16 @@
 }
 
 .press-answer.is-selected .press-answer-check { opacity: 1; transform: scale(1); }
+
+.press-submit-error {
+  margin: 0 32px 18px;
+  padding: 12px 14px;
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  font-size: 13px;
+}
 
 .press-interview-actions {
   display: flex;
@@ -271,6 +281,7 @@
   .press-score-team strong { white-space: normal; }
   .press-score-meta { gap: 14px; padding: 10px 14px; flex-wrap: wrap; }
   .press-interview-progress, .press-journalist, .press-interview > h2, .press-answers, .press-interview-actions { padding-inline: 20px; }
+  .press-submit-error { margin-inline: 20px; }
   .press-answer { grid-template-columns: 1fr; gap: 8px; }
 }
 

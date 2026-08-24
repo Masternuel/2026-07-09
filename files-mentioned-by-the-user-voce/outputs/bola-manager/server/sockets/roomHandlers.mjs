@@ -25,6 +25,7 @@ function assertRoomAvailable(code, deletingRooms, deletedRooms) {
 export function registerRoomHandlers(io, socket, {
   store,
   matchSessions,
+  matchSessionStore,
   deletingRooms,
   deletedRooms,
 }) {
@@ -66,7 +67,7 @@ export function registerRoomHandlers(io, socket, {
   const resume = async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
-    const room = await store.requireMembership(code, user.uid);
+    const room = await store.requireViewerRoom(code, user.uid);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
     socket.emit("room:state", roomForViewer(room, user.uid));
@@ -103,17 +104,15 @@ export function registerRoomHandlers(io, socket, {
 
   registerSafe(socket, "room:delete", async (payload) => {
     const code = parseOrThrow(roomCodeSchema, payload.code);
-    await store.requireOwnership(code, user.uid);
-    if (deletedRooms.has(code)) throw roomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+    await store.requireDeleteOwnership(code, user.uid);
     if (deletingRooms.has(code)) {
       throw roomError("A temporada ja esta sendo excluida", "ROOM_DELETE_IN_PROGRESS");
     }
-    if (matchSessions.has(code)) {
-      throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
-    }
-
     deletingRooms.add(code);
     try {
+      if (matchSessions.has(code) || await matchSessionStore.has(code)) {
+        throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
+      }
       const deletedRoom = await store.deleteRoom(code, user.uid);
       deletedRooms.add(code);
       const deleted = { code };

@@ -1,18 +1,18 @@
 .tactics-heading { margin-bottom: 14px; }
 .tactics-workspace { display: grid; align-items: start; gap: 10px; grid-template-columns: minmax(650px, 1.35fr) minmax(340px, .65fr); }
 .formation-board, .tactic-controls { min-width: 0; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--panel); }
-.formation-toolbar { display: flex; min-height: 58px; align-items: center; gap: 16px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.formation-toolbar { display: flex; min-height: 68px; align-items: center; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .formation-select { position: relative; display: flex; min-width: 230px; flex-direction: column; }
-.formation-select > span, .mentality-switch > span { margin-bottom: 4px; color: var(--muted); font-size: 7px; font-weight: 600; letter-spacing: .1em; }
-.formation-select select { height: 29px; padding: 0 27px 0 8px; color: var(--ink); appearance: none; border: 1px solid var(--line); background: #111315; font-size: 9px; }
-.formation-select > svg { position: absolute; right: 8px; bottom: 7px; color: var(--muted); pointer-events: none; }
+.formation-select > span, .mentality-switch > span { margin-bottom: 5px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .1em; }
+.formation-select select { height: 36px; padding: 0 32px 0 10px; color: var(--ink); appearance: none; border: 1px solid var(--line); background: #111315; font-size: 12px; }
+.formation-select > svg { position: absolute; right: 10px; bottom: 11px; color: var(--muted); pointer-events: none; }
 .mentality-switch { display: flex; flex: 1; align-items: end; }
-.mentality-switch > span { align-self: center; margin: 14px 10px 0 0; white-space: nowrap; }
-.mentality-switch button { height: 29px; flex: 1; padding: 0 6px; color: var(--muted); border: 1px solid var(--line); border-right: 0; background: #111315; font-size: 8px; }
+.mentality-switch > span { align-self: center; margin: 17px 10px 0 0; white-space: nowrap; }
+.mentality-switch button { height: 36px; flex: 1; padding: 0 7px; color: var(--muted); border: 1px solid var(--line); border-right: 0; background: #111315; font-size: 12px; }
 .mentality-switch button:last-child { border-right: 1px solid var(--line); }
-.mentality-switch button[aria-pressed="true"] { color: #111; border-color: var(--accent); background: var(--accent); }
+.mentality-switch button[aria-pressed="true"] { color: var(--on-accent); border-color: var(--accent); background: var(--accent); }
 .field-stage { position: relative; padding: 21px 28px 10px; background: #121512; }
-.field-stage__label { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--muted); font-size: 7px; letter-spacing: .08em; }
+.field-stage__label { display: flex; justify-content: space-between; margin-bottom: 8px; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
 .field-stage__label span { display: flex; align-items: center; gap: 5px; }
 .field-stage__label span:first-child { color: var(--accent); }
 .field-stage__label--bottom { margin: 7px 0 0; }
@@ -30,82 +30,110 @@
 .pitch-player { position: absolute; z-index: 3; display: flex; width: 76px; align-items: center; flex-direction: column; border: 0; background: transparent; transform: translate(-50%, -50%); transition: transform 150ms ease, opacity 150ms ease; }
 .pitch-player:hover, .pitch-player.selected { transform: translate(-50%, -50%) scale(1.07); }
 .pitch-player.dragging { opacity: .35; }
-.pitch-player__disc { display: grid; width: 33px; height: 33px; place-items: center; color: #111; border: 2px solid #d9ff77; border-radius: 50%; background: var(--accent); box-shadow: 0 3px 0 #5a721c, 0 4px 12px rgba(0,0,0,.35); font-size: 10px; font-weight: 700; }
-.pitch-player.selected .pitch-player__disc { box-shadow: 0 0 0 4px rgba(200,255,61,.25), 0 3px 0 #5a721c; }
-.pitch-player__name { display: flex; max-width: 75px; align-items: center; gap: 3px; margin-top: 4px; padding: 2px 4px; color: white; background: rgba(10,12,10,.78); font-size: 8px; font-weight: 600; white-space: nowrap; }
+.pitch-player.drop-target { transform: translate(-50%, -50%) scale(1.12); }
+.pitch-player.drop-target .pitch-player__disc { outline: 3px solid var(--team-line); outline-offset: 3px; }
+.pitch-player__disc { display: grid; width: 36px; height: 36px; place-items: center; color: var(--on-accent); border: 2px solid var(--accent-hover); border-radius: 50%; background: var(--accent); box-shadow: 0 3px 0 var(--accent-deep), 0 4px 12px rgba(0,0,0,.35); font-size: 12px; font-weight: 700; }
+.pitch-player.selected .pitch-player__disc { box-shadow: 0 0 0 4px var(--team-line), 0 3px 0 var(--accent-deep); }
+.pitch-player__name { display: flex; max-width: 82px; align-items: center; gap: 3px; margin-top: 4px; padding: 3px 5px; color: white; background: rgba(10,12,10,.82); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pitch-player__name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pitch-player__name .star-player-mark { width: 11px; height: 11px; }
 .pitch-player__name .star-player-mark svg { width: 10px; height: 10px; }
-.pitch-player__role { margin-top: 2px; color: rgba(255,255,255,.6); font-size: 6px; }
+.pitch-player__role { margin-top: 2px; color: rgba(255,255,255,.72); font-size: 12px; }
 .tactics-field--compact { min-height: 230px; background-size: 50% 100%, 100% 76px; }
 .tactics-field--compact .pitch-player { width: 52px; }
-.tactics-field--compact .pitch-player__disc { width: 22px; height: 22px; border-width: 1px; box-shadow: 0 2px 0 #5a721c; font-size: 7px; }
-.tactics-field--compact .pitch-player__name { max-width: 50px; margin-top: 2px; font-size: 6px; }
+.tactics-field--compact .pitch-player__disc { width: 22px; height: 22px; border-width: 1px; box-shadow: 0 2px 0 #5a721c; font-size: 12px; }
+.tactics-field--compact .pitch-player__name { max-width: 50px; margin-top: 2px; font-size: 12px; }
 .bench { border-top: 1px solid var(--line); }
-.bench > header { display: flex; min-height: 37px; align-items: center; justify-content: space-between; padding: 0 12px; color: var(--muted); font-size: 7px; letter-spacing: .08em; }
+.bench > header { display: flex; min-height: 43px; align-items: center; justify-content: space-between; padding: 0 12px; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
 .bench > header > span { display: flex; align-items: center; gap: 5px; }
-.bench-list { display: grid; padding: 0 8px 8px; grid-template-columns: repeat(7, 1fr); }
-.bench-list button { display: grid; min-width: 0; min-height: 52px; align-items: center; gap: 5px; padding: 5px; grid-template-columns: 10px 22px 1fr auto; text-align: left; color: var(--muted); border: 1px solid var(--line-soft); border-right: 0; background: #131518; }
-.bench-list button:last-child { border-right: 1px solid var(--line-soft); }
+.bench-list { display: grid; gap: 6px; padding: 0 8px 8px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.bench-list button { display: grid; min-width: 0; min-height: 60px; align-items: center; gap: 6px; padding: 6px; grid-template-columns: 10px 24px 1fr auto; text-align: left; color: var(--muted); border: 1px solid var(--line-soft); background: #131518; }
+.bench-list button[draggable="true"] { cursor: grab; }
+.bench-list button[draggable="true"]:active { cursor: grabbing; }
 .bench-list button:hover { background: var(--raised); }
-.bench-number { display: grid; width: 21px; height: 23px; place-items: center; color: var(--accent); border: 1px solid rgba(200,255,61,.14); font-size: 8px; }
+.bench-number { display: grid; width: 24px; height: 27px; place-items: center; color: var(--accent); border: 1px solid var(--team-line-soft); font-size: 12px; }
 .bench-list button > span:nth-child(3) { display: flex; min-width: 0; flex-direction: column; }
 .bench-player__name { display: flex; min-width: 0; align-items: center; gap: 4px; }
 .bench-player__name > strong { min-width: 0; }
-.bench-list button > span:nth-child(3) strong { overflow: hidden; color: var(--ink-soft); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.bench-list button > span:nth-child(3) small { margin-top: 2px; font-size: 6px; }
-.bench-list button > strong { color: var(--ink); font-size: 8px; }
+.bench-list button > span:nth-child(3) strong { overflow: hidden; color: var(--ink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.bench-list button > span:nth-child(3) small { overflow: hidden; margin-top: 2px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.bench-list button > strong { color: var(--ink); font-size: 12px; }
 
 .tactic-controls { position: sticky; top: 70px; }
 .tactic-score { display: grid; min-height: 92px; align-items: center; padding: 12px 15px; grid-template-columns: 115px 1fr; border-bottom: 1px solid var(--line); }
-.tactic-score > div span { display: block; color: var(--muted); font-size: 7px; letter-spacing: .08em; }
+.tactic-score > div span { display: block; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
 .tactic-score > div strong { color: var(--accent); font-size: 30px; letter-spacing: -.06em; }
-.tactic-score > div small { color: var(--muted); font-size: 8px; }
+.tactic-score > div small { color: var(--muted); font-size: 12px; }
 .tactic-score dl { display: grid; gap: 6px; margin: 0; }
-.tactic-score dl > div { display: flex; justify-content: space-between; color: var(--muted); font-size: 8px; }
+.tactic-score dl > div { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .tactic-score dd { margin: 0; color: var(--ink); font-weight: 600; }
 .control-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
-.control-tabs button { height: 38px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: #131518; font-size: 8px; font-weight: 600; text-transform: uppercase; }
+.control-tabs button { height: 44px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: #131518; font-size: 12px; font-weight: 600; text-transform: uppercase; }
 .control-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .instructions-panel { padding: 5px 13px 10px; }
 .instruction-control { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
-.instruction-control > label { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; color: var(--ink-soft); font-size: 8px; font-weight: 600; }
+.instruction-control > label { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--ink-soft); font-size: 12px; font-weight: 600; }
 .instruction-control > label svg { color: var(--muted); }
 .instruction-options { display: flex; }
-.instruction-options button { min-height: 26px; flex: 1; padding: 0 4px; color: var(--muted); border: 1px solid var(--line); border-right: 0; background: #111315; font-size: 7px; }
+.instruction-options button { min-height: 32px; flex: 1; padding: 3px 5px; color: var(--muted); border: 1px solid var(--line); border-right: 0; background: #111315; font-size: 12px; line-height: 1.2; }
 .instruction-options button:last-child { border-right: 1px solid var(--line); }
-.instruction-options button[aria-pressed="true"] { color: var(--accent); border-color: rgba(200,255,61,.3); background: rgba(200,255,61,.06); }
+.instruction-options button[aria-pressed="true"] { color: var(--accent); border-color: var(--team-line); background: var(--team-surface-strong); }
 .secret-tactic { display: flex; align-items: center; justify-content: space-between; margin: 0 13px 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
 .secret-tactic > span { display: flex; align-items: center; gap: 7px; }
 .secret-tactic > span > svg { color: var(--accent); }
 .secret-tactic > span > span { display: flex; flex-direction: column; }
-.secret-tactic strong { font-size: 8px; }
-.secret-tactic small { margin-top: 2px; color: var(--muted); font-size: 7px; }
+.secret-tactic strong { font-size: 12px; }
+.secret-tactic small { margin-top: 3px; color: var(--muted); font-size: 12px; }
 .secret-tactic input { display: none; }
 .secret-tactic > i, .toggle { position: relative; width: 30px; height: 16px; border: 0; border-radius: 10px; background: #2a2e33; transition: background 150ms ease; }
 .secret-tactic > i::after, .toggle i { position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: #8b9096; content: ""; transition: all 150ms ease; }
-.secret-tactic input:checked + i, .toggle[aria-checked="true"] { background: rgba(200,255,61,.28); }
+.secret-tactic input:checked + i, .toggle[aria-checked="true"] { background: var(--team-line); }
 .secret-tactic input:checked + i::after, .toggle[aria-checked="true"] i { left: 17px; background: var(--accent); }
-.assistant-note { display: flex; gap: 8px; margin: 10px 13px 13px; padding: 10px; color: var(--accent); border-left: 2px solid var(--accent); background: rgba(200,255,61,.045); }
+.assistant-note { display: flex; gap: 8px; margin: 10px 13px 13px; padding: 10px; color: var(--accent); border-left: 2px solid var(--accent); background: var(--team-surface); }
 .assistant-note > div { color: var(--ink-soft); }
-.assistant-note strong { font-size: 8px; }
-.assistant-note p { margin-top: 3px; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.assistant-note strong { font-size: 12px; }
+.assistant-note p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.tactic-validation { display: grid; gap: 3px; margin: 10px 13px 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--warning) 50%, var(--line)); color: var(--warning); background: color-mix(in srgb, var(--warning) 7%, transparent); }
+.tactic-validation strong { font-size: 12px; text-transform: uppercase; }
+.tactic-validation span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.opponent-study { align-items: flex-start; }
+.opponent-study > div { min-width: 0; flex: 1; }
+.opponent-study__depth { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: 8px; }
+.opponent-study__depth button { min-height: 28px; padding: 3px 5px; border: 1px solid var(--line); color: var(--muted); background: transparent; font-size: 12px; }
+.opponent-study__depth button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--team-surface); }
+.opponent-study__error { color: var(--danger) !important; }
+.opponent-study__section { display: grid; gap: 3px; margin-top: 9px; }
+.opponent-study__section > b { color: var(--ink); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.opponent-study__section > span,
+.opponent-study__section li { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.opponent-study__section ul { display: grid; gap: 3px; margin: 0; padding-left: 17px; }
+.opponent-study__sectors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin-top: 9px; }
+.opponent-study__sectors span { padding: 5px 6px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.opponent-study__sectors span[data-level="strong"] { border-color: color-mix(in srgb, var(--positive) 45%, var(--line)); color: var(--positive); }
+.opponent-study__sectors span[data-level="vulnerable"] { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); }
+.bench-list button:disabled,
+.bench-list button[aria-disabled="true"] { cursor: default; opacity: .48; }
 .individual-panel, .setpiece-panel { min-height: 420px; padding: 14px; }
-.individual-panel > p, .setpiece-panel > p { color: var(--muted); font-size: 8px; line-height: 1.5; }
-.selected-player-instruction { display: flex; align-items: center; gap: 8px; margin: 13px 0; padding: 9px; border: 1px solid rgba(200,255,61,.2); background: rgba(200,255,61,.04); }
+.individual-panel > p, .setpiece-panel > p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.selected-player-instruction { display: flex; align-items: center; gap: 8px; margin: 13px 0; padding: 9px; border: 1px solid var(--team-line-soft); background: var(--team-surface); }
 .selected-player-instruction > span:last-child { display: flex; flex-direction: column; }
-.selected-player-instruction strong { font-size: 9px; }
-.selected-player-instruction small { color: var(--muted); font-size: 7px; }
+.selected-player-instruction strong { font-size: 12px; }
+.selected-player-instruction small { color: var(--muted); font-size: 12px; }
 .empty-instruction { display: flex; min-height: 100px; align-items: center; justify-content: center; margin: 13px 0; flex-direction: column; color: var(--muted); border: 1px dashed var(--line); }
-.empty-instruction strong { margin-top: 6px; color: var(--ink-soft); font-size: 9px; }
-.empty-instruction span { margin-top: 2px; font-size: 7px; }
-.individual-panel label { margin-top: 10px; }
+.empty-instruction strong { margin-top: 6px; color: var(--ink-soft); font-size: 12px; }
+.empty-instruction span { margin-top: 3px; font-size: 12px; }
+.individual-panel label { display: flex; margin-top: 12px; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
+.individual-panel select, .setpiece-control select { width: 100%; height: 38px; padding: 0 10px; color: var(--ink); border: 1px solid var(--line); border-radius: 2px; background: #111315; font-size: 12px; }
+.individual-panel select:disabled { cursor: not-allowed; opacity: .45; }
 .setpiece-panel { text-align: center; }
 .setpiece-panel > svg { margin-top: 15px; color: var(--accent); }
-.setpiece-panel h3 { margin-top: 8px; font-size: 13px; }
+.setpiece-panel h3 { margin-top: 8px; font-size: 15px; }
 .setpiece-panel > p { margin: 5px auto 18px; }
 .setpiece-panel > button { display: flex; width: 100%; min-height: 52px; align-items: center; justify-content: space-between; padding: 0 10px; text-align: left; border: 1px solid var(--line); border-bottom: 0; background: #131518; }
 .setpiece-panel > button:last-child { border-bottom: 1px solid var(--line); }
 .setpiece-panel > button > span { display: flex; flex-direction: column; }
-.setpiece-panel strong { font-size: 8px; }
-.setpiece-panel small { margin-top: 2px; color: var(--muted); font-size: 7px; }
+.setpiece-panel strong { font-size: 12px; }
+.setpiece-panel small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.setpiece-control { display: grid; gap: 9px; margin: 0 0 10px; padding: 10px; text-align: left; border: 1px solid var(--line); }
+.setpiece-control legend { padding: 0 5px; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.setpiece-control label { display: grid; align-items: center; gap: 8px; grid-template-columns: 64px 1fr; color: var(--muted); font-size: 12px; }

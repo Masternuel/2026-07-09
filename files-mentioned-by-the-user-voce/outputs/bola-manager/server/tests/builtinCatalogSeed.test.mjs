@@ -24,6 +24,14 @@ test("base interna converte atributos visuais para escala 1-20 e preserva estrel
 
   assert.equal(igor.attributes.velocidade, 16);
   assert.equal(igor.attributes.passe, 20);
+  assert.equal(igor.attributes.forca, 10);
+  assert.equal(igor.attributes.resistencia, 10);
+  assert.equal(igor.attributes.impulsao, 10);
+  assert.equal(igor.attributes.reflexos, 10);
+  assert.equal(igor.attributes.posicionamentoGol, 10);
+  assert.equal(igor.attributes.saidaGol, 10);
+  assert.equal(igor.attributes.penaltis, 10);
+  assert.equal(igor.overall, 17);
   assert.equal(igor.isStar, true);
   assert.equal(felipe.isStar, true);
   assert.ok(players.every(({ attributes, overall }) => (

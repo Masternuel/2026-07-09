@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.6"
+  },
   "scripts": {
     "dev": "concurrently -n WEB,SERVER -c green,cyan \"npm:dev:client\" \"npm:server:dev\"",
     "dev:client": "vite --configLoader runner",
@@ -11,7 +14,7 @@
     "build": "tsc -b && vite build --configLoader runner",
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview",
-    "test:server": "node --test server/tests/*.test.mjs",
+    "test:server": "node --test --test-concurrency=1 server/tests/*.test.mjs",
     "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json",
     "seed:builtin": "node scripts/seed-builtin-catalog.mjs --dry-run"
   },

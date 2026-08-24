@@ -1,35 +1,79 @@
 import { useMemo, useState } from 'react';
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Dumbbell, Plane, Swords, Trophy } from 'lucide-react';
+import {
+  BriefcaseBusiness,
+  Building2,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Swords,
+  Trophy,
+  UserRoundCheck,
+} from 'lucide-react';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
 import { ClubMark } from '../../components/shared/ClubMark';
-import { upcomingFixtures } from '../../data/demoData';
 import type { Room, RoomFixture, RouteKey } from '../../types';
+import {
+  buildCalendarSchedule,
+  type CalendarItem,
+  type CalendarItemKind,
+  validCalendarDate,
+} from './calendarItems';
 
 interface CalendarViewProps {
   room: Room | null;
+  managerClubId: string | null;
   onNavigate?: (route: RouteKey) => void;
 }
 
 interface DisplayFixture {
-  key: string;
   home: string;
   away: string;
   homeCode: string;
   awayCode: string;
-  competition: string;
+  homeColor?: string;
+  awayColor?: string;
+  homeDarkThemeColor?: string | null;
+  homeLightThemeColor?: string | null;
+  awayDarkThemeColor?: string | null;
+  awayLightThemeColor?: string | null;
+  homeCrestImageUrl?: string | null;
+  awayCrestImageUrl?: string | null;
   detail: string;
   date: string;
+  datePrimary: string;
+  dateSecondary: string;
   time: string;
+  scheduledAt: string | null;
 }
 
-const monthDays = Array.from({ length: 35 }, (_, index) => {
-  const day = index - 1;
-  return day > 0 && day <= 31 ? day : null;
+const utcDateOptions = { timeZone: 'UTC' } as const;
+const dateFormatter = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', ...utcDateOptions });
+const dayFormatter = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', ...utcDateOptions });
+const shortMonthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'short', ...utcDateOptions });
+const timeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  ...utcDateOptions,
 });
+const monthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', ...utcDateOptions });
 
-function normalizeFixtureId(fixtureId: string | null | undefined) {
-  return String(fixtureId ?? '').trim().toLocaleLowerCase('pt-BR');
+function formattedDate(date: Date) {
+  return dateFormatter.format(date).replace('.', '').toLocaleUpperCase('pt-BR');
+}
+
+function monthCells(date: Date) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const first = new Date(Date.UTC(year, month, 1));
+  const leading = (first.getUTCDay() + 6) % 7;
+  const total = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const count = Math.ceil((leading + total) / 7) * 7;
+  return Array.from({ length: count }, (_, index) => {
+    const day = index - leading + 1;
+    return day > 0 && day <= total ? day : null;
+  });
 }
 
 function roomFixtureToDisplay(fixture: RoomFixture): DisplayFixture {
@@ -39,81 +83,146 @@ function roomFixtureToDisplay(fixture: RoomFixture): DisplayFixture {
     .replace(/[^A-Za-z0-9]/g, '')
     .slice(0, 3)
     .toUpperCase();
+  const stadiumName = fixture.homeStadium?.trim() || 'Estádio a definir';
+  const numericCapacity = Number(fixture.homeStadiumCapacity);
+  const venue = Number.isFinite(numericCapacity) && numericCapacity > 0
+    ? `${stadiumName} · ${new Intl.NumberFormat('pt-BR').format(Math.trunc(numericCapacity))}`
+    : stadiumName;
+  const kickoff = validCalendarDate(fixture.scheduledAt);
   return {
-    key: fixture.fixtureId,
     home: fixture.homeTeam,
     away: fixture.awayTeam,
-    homeCode: compactCode(fixture.homeTeam),
-    awayCode: compactCode(fixture.awayTeam),
-    competition: fixture.competition,
-    detail: `${fixture.competition} · Rodada ${fixture.round} · Mandante: ${fixture.homeTeam}`,
-    date: `R${fixture.round}`,
-    time: 'A definir',
+    homeCode: fixture.homeCode || compactCode(fixture.homeTeam),
+    awayCode: fixture.awayCode || compactCode(fixture.awayTeam),
+    homeColor: fixture.homeColor,
+    awayColor: fixture.awayColor,
+    homeDarkThemeColor: fixture.homeDarkThemeColor,
+    homeLightThemeColor: fixture.homeLightThemeColor,
+    awayDarkThemeColor: fixture.awayDarkThemeColor,
+    awayLightThemeColor: fixture.awayLightThemeColor,
+    homeCrestImageUrl: fixture.homeCrestImageUrl,
+    awayCrestImageUrl: fixture.awayCrestImageUrl,
+    detail: `${fixture.competition} · Rodada ${fixture.round} · ${venue}`,
+    date: kickoff ? formattedDate(kickoff) : `Rodada ${fixture.round}`,
+    datePrimary: kickoff ? dayFormatter.format(kickoff) : `R${fixture.round}`,
+    dateSecondary: kickoff
+      ? shortMonthFormatter.format(kickoff).replace('.', '').toLocaleUpperCase('pt-BR')
+      : 'A DEFINIR',
+    time: kickoff ? timeFormatter.format(kickoff) : 'A definir',
+    scheduledAt: kickoff?.toISOString() ?? null,
   };
 }
 
-function demoFixtureToDisplay(fixture: (typeof upcomingFixtures)[number]): DisplayFixture {
-  return {
-    key: `${fixture.date}-${fixture.home}-${fixture.away}`,
-    home: fixture.home,
-    away: fixture.away,
-    homeCode: fixture.home.slice(0, 3).toUpperCase(),
-    awayCode: fixture.away.slice(0, 3).toUpperCase(),
-    competition: fixture.competition,
-    detail: `${fixture.competition} · ${fixture.venue}`,
-    date: fixture.date,
-    time: fixture.time,
-  };
+function commitmentLabel(kind: CalendarItemKind) {
+  switch (kind) {
+    case 'fixture': return 'Jogo';
+    case 'facility-project': return 'Obra';
+    case 'staff-contract': return 'Contrato';
+    case 'lifecycle': return 'Carreira';
+  }
 }
 
-export function CalendarView({ room, onNavigate }: CalendarViewProps) {
+function commitmentTiming(kind: CalendarItemKind) {
+  switch (kind) {
+    case 'fixture': return '';
+    case 'facility-project': return 'Conclusão prevista';
+    case 'staff-contract': return 'Vencimento';
+    case 'lifecycle': return 'Data efetiva';
+  }
+}
+
+function commitmentIcon(kind: CalendarItemKind) {
+  switch (kind) {
+    case 'fixture': return <Trophy size={17} />;
+    case 'facility-project': return <Building2 size={17} />;
+    case 'staff-contract': return <BriefcaseBusiness size={17} />;
+    case 'lifecycle': return <UserRoundCheck size={17} />;
+  }
+}
+
+function emptyCopy(room: Room | null, hasCommitments: boolean) {
+  if (!room) {
+    return { title: 'Carregando calendário', detail: 'Aguardando o estado atual da sala.' };
+  }
+  if (room.scheduleIssue?.message) {
+    return { title: 'Calendário indisponível', detail: room.scheduleIssue.message };
+  }
+  if (room.status === 'waiting') {
+    return { title: 'Temporada ainda não iniciada', detail: 'As partidas serão publicadas quando a sala começar.' };
+  }
+  if (hasCommitments) {
+    return { title: 'Nenhuma partida pendente', detail: 'Os demais compromissos confirmados seguem na agenda.' };
+  }
+  return { title: 'Nenhum compromisso pendente', detail: 'Não há eventos confirmados no estado atual do save.' };
+}
+
+export function CalendarView({ room, managerClubId, onNavigate }: CalendarViewProps) {
   const [view, setView] = useState<'agenda' | 'month'>('agenda');
-  const schedule = useMemo(() => {
-    const fixtures = room?.fixtureSchedule ?? [];
-    const completed = new Set((room?.completedFixtureIds ?? []).map(normalizeFixtureId));
-    const pendingFixtures = fixtures.filter((fixture) => !completed.has(normalizeFixtureId(fixture.fixtureId)));
-    const current = pendingFixtures.find((fixture) => normalizeFixtureId(fixture.fixtureId) === normalizeFixtureId(room?.currentFixtureId))
-      ?? pendingFixtures[0]
-      ?? null;
-    const upcoming = pendingFixtures.filter((fixture) => normalizeFixtureId(fixture.fixtureId) !== normalizeFixtureId(current?.fixtureId));
-    return { hasRealSchedule: fixtures.length > 0, current, upcoming };
-  }, [room]);
-
-  const featuredFixture = schedule.current
-    ? roomFixtureToDisplay(schedule.current)
-    : room || schedule.hasRealSchedule ? null : demoFixtureToDisplay(upcomingFixtures[0]);
-  const followingFixtures = schedule.hasRealSchedule
-    ? schedule.upcoming.slice(0, 3).map(roomFixtureToDisplay)
-    : room ? [] : upcomingFixtures.slice(1).map(demoFixtureToDisplay);
-  const gameCount = schedule.hasRealSchedule
-    ? (schedule.current ? 1 : 0) + schedule.upcoming.length
-    : (featuredFixture ? 1 : 0) + followingFixtures.length;
+  const [monthOffset, setMonthOffset] = useState(0);
+  const schedule = useMemo(() => buildCalendarSchedule(room, managerClubId), [managerClubId, room]);
+  const featuredItem = schedule.currentFixture;
+  const featuredFixture = featuredItem ? roomFixtureToDisplay(featuredItem.fixture) : null;
+  const saveDate = validCalendarDate(room?.clubCareerState?.currentDate);
+  const today = saveDate ?? validCalendarDate(room?.seasonStartedAt) ?? new Date();
+  const firstDatedItem = schedule.items.find((item) => validCalendarDate(item.scheduledAt));
+  const baseMonth = saveDate
+    ?? validCalendarDate(firstDatedItem?.scheduledAt)
+    ?? validCalendarDate(room?.seasonStartedAt)
+    ?? new Date();
+  const displayedMonth = new Date(Date.UTC(
+    baseMonth.getUTCFullYear(),
+    baseMonth.getUTCMonth() + monthOffset,
+    1,
+  ));
+  const days = monthCells(displayedMonth);
+  const itemsByDay = new Map<number, CalendarItem[]>();
+  for (const item of schedule.items) {
+    const date = validCalendarDate(item.scheduledAt);
+    if (!date || date.getUTCFullYear() !== displayedMonth.getUTCFullYear() || date.getUTCMonth() !== displayedMonth.getUTCMonth()) {
+      continue;
+    }
+    const day = date.getUTCDate();
+    itemsByDay.set(day, [...(itemsByDay.get(day) ?? []), item]);
+  }
+  const emptyState = emptyCopy(room, schedule.items.length > 0);
+  const counts = schedule.items.reduce<Record<CalendarItemKind, number>>((result, item) => {
+    result[item.kind] += 1;
+    return result;
+  }, { fixture: 0, 'facility-project': 0, 'staff-contract': 0, lifecycle: 0 });
+  const unscheduledGames = schedule.fixtures.filter((item) => !item.scheduledAt).length;
 
   return (
     <main className="secondary-view view-enter">
       <div className="view-heading">
-        <div><p className="eyebrow">TEMPORADA 2026</p><h1>Calendário</h1><p>Partidas, treinos, viagens e compromissos da equipe.</p></div>
+        <div>
+          <p className="eyebrow">TEMPORADA {room?.seasonYear ?? '—'}</p>
+          <h1>Calendário</h1>
+          <p>Partidas e compromissos confirmados do clube.</p>
+        </div>
         <div className="view-heading__actions">
           <div className="compact-tabs">
             <button aria-selected={view === 'agenda'} onClick={() => setView('agenda')}>Agenda</button>
             <button aria-selected={view === 'month'} onClick={() => setView('month')}>Mês</button>
           </div>
-          <Button variant="secondary" icon={<CalendarDays size={15} />}>Sincronizar</Button>
         </div>
       </div>
 
       <section className="calendar-shell">
         <header className="month-nav">
-          <button className="icon-button"><ChevronLeft size={16} /></button>
-          <div><p className="eyebrow">MÊS ATUAL</p><h2>Julho de 2026</h2></div>
-          <button className="icon-button"><ChevronRight size={16} /></button>
-          <span>Hoje · 16 jul</span>
+          <button className="icon-button" aria-label="Mês anterior" onClick={() => setMonthOffset((offset) => offset - 1)}><ChevronLeft size={16} /></button>
+          <div><p className="eyebrow">MÊS DA AGENDA</p><h2>{monthFormatter.format(displayedMonth)}</h2></div>
+          <button className="icon-button" aria-label="Próximo mês" onClick={() => setMonthOffset((offset) => offset + 1)}><ChevronRight size={16} /></button>
+          <span>Hoje · {formattedDate(today)}</span>
         </header>
 
         {view === 'agenda' ? (
           <div className="agenda-layout">
             <div className="agenda-list">
-              <div className="agenda-date"><span>ATUAL</span><strong>{featuredFixture?.date.replace(/\D/g, '') || '—'}</strong><small>ROD</small></div>
+              <div className="agenda-date">
+                <span>{featuredFixture ? 'PRÓXIMO' : 'AGENDA'}</span>
+                <strong>{featuredFixture?.datePrimary ?? '—'}</strong>
+                <small>{featuredFixture?.dateSecondary ?? 'SEM JOGO'}</small>
+              </div>
               {featuredFixture ? (
                 <article className="agenda-featured">
                   <div className="agenda-line"><i /><span>{featuredFixture.time}</span></div>
@@ -122,9 +231,9 @@ export function CalendarView({ room, onNavigate }: CalendarViewProps) {
                     <h3>{featuredFixture.home} <span>×</span> {featuredFixture.away}</h3>
                     <p>{featuredFixture.detail}</p>
                     <div className="agenda-clubs">
-                      <ClubMark code={featuredFixture.homeCode} size="sm" />
-                      <span>Preparação em andamento</span>
-                      <ClubMark code={featuredFixture.awayCode} color="#ddd" size="sm" />
+                      <ClubMark code={featuredFixture.homeCode} color={featuredFixture.homeColor} darkThemeColor={featuredFixture.homeDarkThemeColor} lightThemeColor={featuredFixture.homeLightThemeColor} imageUrl={featuredFixture.homeCrestImageUrl} size="sm" />
+                      <span>{featuredFixture.scheduledAt ? 'Partida agendada' : 'Data ainda não definida'}</span>
+                      <ClubMark code={featuredFixture.awayCode} color={featuredFixture.awayColor || '#ddd'} darkThemeColor={featuredFixture.awayDarkThemeColor} lightThemeColor={featuredFixture.awayLightThemeColor} imageUrl={featuredFixture.awayCrestImageUrl} size="sm" />
                     </div>
                   </div>
                   <Button
@@ -139,35 +248,68 @@ export function CalendarView({ room, onNavigate }: CalendarViewProps) {
               ) : (
                 <article className="agenda-item">
                   <span className="agenda-icon"><Check size={17} /></span>
-                  <div>
-                    <strong>{room && !schedule.hasRealSchedule ? 'Calendário sendo atualizado' : 'Temporada concluída'}</strong>
-                    <p>{room && !schedule.hasRealSchedule ? 'Confirme a próxima partida para migrar este save antigo.' : 'Não existem partidas pendentes nesta sala.'}</p>
-                  </div>
+                  <div><strong>{emptyState.title}</strong><p>{emptyState.detail}</p></div>
                 </article>
               )}
 
-              <div className="agenda-date"><span>DEPOIS</span><strong>+</strong><small>AGENDA</small></div>
-              <article className="agenda-item"><span className="agenda-icon"><Dumbbell size={17} /></span><div><strong>Recuperação pós-jogo</strong><p>CT do clube · Grupo principal</p></div><time>10:00</time></article>
-              {followingFixtures.map((fixture, index) => (
-                <article className="agenda-item fixture" key={fixture.key}>
-                  <span className="agenda-icon"><Trophy size={17} /></span>
-                  <div><strong>{fixture.home} × {fixture.away}</strong><p>{fixture.detail}</p></div>
-                  <time>{fixture.date}<small>{fixture.time}</small></time>
-                  {index === 0 && <Badge tone="info"><Plane size={12} /> Próxima</Badge>}
-                </article>
-              ))}
+              {schedule.otherItems.length > 0 && (
+                <>
+                  <div className="agenda-date"><span>AGENDA</span><strong>+</strong><small>CONFIRMADA</small></div>
+                  {schedule.otherItems.map((item) => {
+                    const date = validCalendarDate(item.scheduledAt);
+                    const displayFixture = item.kind === 'fixture' ? roomFixtureToDisplay(item.fixture) : null;
+                    return (
+                      <article className={`agenda-item${item.kind === 'fixture' ? ' fixture' : ''}`} key={item.id}>
+                        <span className="agenda-icon">{commitmentIcon(item.kind)}</span>
+                        <div>
+                          <strong>{displayFixture ? `${displayFixture.home} × ${displayFixture.away}` : item.title}</strong>
+                          <p>{displayFixture?.detail ?? item.detail}</p>
+                        </div>
+                        <time>
+                          {displayFixture?.date ?? (date ? formattedDate(date) : 'A definir')}
+                          <small>{displayFixture?.time ?? commitmentTiming(item.kind)}</small>
+                        </time>
+                      </article>
+                    );
+                  })}
+                </>
+              )}
             </div>
 
             <aside className="calendar-summary">
-              <div><p className="eyebrow">SEQUÊNCIA DE PARTIDAS</p><h3>{gameCount} {gameCount === 1 ? 'jogo pendente' : 'jogos pendentes'}</h3><span className="load-meter"><i style={{ width: `${Math.min(100, gameCount * 18)}%` }} /></span><p>Sequência definida pelo calendário oficial da sala.</p></div>
-              <dl><div><dt><Swords size={14} /> Jogos</dt><dd>{gameCount}</dd></div><div><dt><Dumbbell size={14} /> Treinos</dt><dd>8</dd></div><div><dt><Plane size={14} /> Viagens</dt><dd>Variável</dd></div><div><dt><Clock3 size={14} /> Descanso</dt><dd>3 dias</dd></div></dl>
-              <div className="calendar-alert"><Check size={15} /><span><strong>Calendário sincronizado</strong><small>Fixtures atualizadas com o save da sala.</small></span></div>
+              <div>
+                <p className="eyebrow">AGENDA DO SAVE</p>
+                <h3>{schedule.items.length} {schedule.items.length === 1 ? 'compromisso pendente' : 'compromissos pendentes'}</h3>
+                <p>Somente eventos confirmados no estado atual da sala.</p>
+              </div>
+              <dl>
+                <div><dt><Swords size={14} /> Jogos</dt><dd>{counts.fixture}</dd></div>
+                {counts['facility-project'] > 0 && <div><dt><Building2 size={14} /> Obras</dt><dd>{counts['facility-project']}</dd></div>}
+                {counts['staff-contract'] > 0 && <div><dt><BriefcaseBusiness size={14} /> Contratos</dt><dd>{counts['staff-contract']}</dd></div>}
+                {counts.lifecycle > 0 && <div><dt><UserRoundCheck size={14} /> Carreira</dt><dd>{counts.lifecycle}</dd></div>}
+                {unscheduledGames > 0 && <div><dt><Trophy size={14} /> Datas a definir</dt><dd>{unscheduledGames}</dd></div>}
+              </dl>
             </aside>
           </div>
         ) : (
           <div className="month-grid">
             <div className="weekday-row">{['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'].map((day) => <span key={day}>{day}</span>)}</div>
-            <div className="month-days">{monthDays.map((day, index) => <button key={index} className={day === 16 ? 'today' : ''} disabled={!day}><span>{day}</span>{[5, 12, 16, 20, 24, 28].includes(day ?? 0) && <i className={day === 16 ? 'match' : day === 24 ? 'cup' : ''} />}{[3, 4, 9, 10, 17, 22, 26].includes(day ?? 0) && <small>Treino</small>}</button>)}</div>
+            <div className="month-days">{days.map((day, index) => {
+              const dayItems = day ? itemsByDay.get(day) ?? [] : [];
+              const isToday = day === today.getUTCDate()
+                && displayedMonth.getUTCMonth() === today.getUTCMonth()
+                && displayedMonth.getUTCFullYear() === today.getUTCFullYear();
+              const label = dayItems.length > 1
+                ? `${dayItems.length} compromissos`
+                : dayItems[0] ? commitmentLabel(dayItems[0].kind) : null;
+              const hasFixture = dayItems.some((item) => item.kind === 'fixture');
+              return (
+                <button key={index} className={isToday ? 'today' : ''} disabled={!day}>
+                  <span>{day}</span>
+                  {label && <><i className={hasFixture ? 'match' : 'cup'} /><small>{label}</small></>}
+                </button>
+              );
+            })}</div>
           </div>
         )}
       </section>

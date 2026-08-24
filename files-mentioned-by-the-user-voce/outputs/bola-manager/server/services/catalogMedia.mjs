@@ -50,6 +50,37 @@ function matchesSignature(buffer, signature) {
   return false;
 }
 
+export function validateCatalogMediaUpload(suppliedMimeType, bytes) {
+  const mimeType = normalizedMimeType(suppliedMimeType);
+  const mediaType = MEDIA_TYPES[mimeType];
+  if (!mediaType) {
+    throw new CatalogMediaError(
+      "Formato de imagem nao suportado; use PNG, JPEG ou WebP",
+      "EDITOR_MEDIA_MIME_UNSUPPORTED",
+      415,
+    );
+  }
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+    throw new CatalogMediaError("Envie a imagem no corpo da requisicao", "EDITOR_MEDIA_BODY_REQUIRED", 400);
+  }
+  if (bytes.length > MAX_EDITOR_MEDIA_BYTES) {
+    throw new CatalogMediaError(
+      "A imagem excede o limite de 5 MB",
+      "EDITOR_MEDIA_TOO_LARGE",
+      413,
+      { maximumBytes: MAX_EDITOR_MEDIA_BYTES },
+    );
+  }
+  if (!matchesSignature(bytes, mediaType.signature)) {
+    throw new CatalogMediaError(
+      "O conteudo do arquivo nao corresponde ao tipo de imagem informado",
+      "EDITOR_MEDIA_MIME_MISMATCH",
+      400,
+    );
+  }
+  return { mimeType, mediaType };
+}
+
 function downloadUrl(bucketName, path, token) {
   return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(path)}?alt=media&token=${encodeURIComponent(token)}`;
 }
@@ -63,6 +94,8 @@ export class CatalogMediaService {
   constructor({ bucket = null, idFactory = randomUUID } = {}) {
     this.bucket = bucket;
     this.idFactory = idFactory;
+    this.provider = "firebase";
+    this.configured = Boolean(bucket && typeof bucket.file === "function" && bucket.name);
   }
 
   async upload({ entity, recordId, kind, mimeType: suppliedMimeType, bytes, uploadedBy }) {
@@ -73,33 +106,7 @@ export class CatalogMediaService {
         503,
       );
     }
-    const mimeType = normalizedMimeType(suppliedMimeType);
-    const mediaType = MEDIA_TYPES[mimeType];
-    if (!mediaType) {
-      throw new CatalogMediaError(
-        "Formato de imagem nao suportado; use PNG, JPEG ou WebP",
-        "EDITOR_MEDIA_MIME_UNSUPPORTED",
-        415,
-      );
-    }
-    if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
-      throw new CatalogMediaError("Envie a imagem no corpo da requisicao", "EDITOR_MEDIA_BODY_REQUIRED", 400);
-    }
-    if (bytes.length > MAX_EDITOR_MEDIA_BYTES) {
-      throw new CatalogMediaError(
-        "A imagem excede o limite de 5 MB",
-        "EDITOR_MEDIA_TOO_LARGE",
-        413,
-        { maximumBytes: MAX_EDITOR_MEDIA_BYTES },
-      );
-    }
-    if (!matchesSignature(bytes, mediaType.signature)) {
-      throw new CatalogMediaError(
-        "O conteudo do arquivo nao corresponde ao tipo de imagem informado",
-        "EDITOR_MEDIA_MIME_MISMATCH",
-        400,
-      );
-    }
+    const { mimeType, mediaType } = validateCatalogMediaUpload(suppliedMimeType, bytes);
 
     const objectId = this.idFactory();
     const token = this.idFactory();

@@ -4,7 +4,7 @@ import { io as createClient } from "socket.io-client";
 import { FIXTURE_SCHEDULE_VERSION } from "../game/fixtures.mjs";
 import { MemoryRoomPersistence } from "../store/roomPersistence.mjs";
 import { RoomStore } from "../store/roomStore.mjs";
-import { startTestServer } from "./testHarness.mjs";
+import { automaticallyReadyAtHalftime, startTestServer } from "./testHarness.mjs";
 
 function connect(url, auth) {
   return new Promise((resolve, reject) => {
@@ -61,6 +61,7 @@ test("partida persiste, rejeita replay e match:sync sobrevive a reinicio", async
 
     const order = [];
     const finished = new Promise((resolve) => firstClient.once("match:finished", resolve));
+    automaticallyReadyAtHalftime(firstClient);
     firstClient.once("match:started", () => order.push("started"));
     firstClient.once("match:event", () => order.push("event"));
     const matchAck = await firstClient.timeout(1_000).emitWithAck("match:ready", {
@@ -77,6 +78,9 @@ test("partida persiste, rejeita replay e match:sync sobrevive a reinicio", async
     assert.equal(result.awayTeam, "Palmeiras");
     assert.equal(result.code, room.code);
     assert.equal(result.nextFixtureId, "rodada-2");
+    assert.equal(result.roundSummary.matches.length, 1);
+    assert.equal(result.roundSummary.matches[0].source, "manager");
+    assert.deepEqual(result.roundSummary.matches[0].score, result.score);
 
     const persistedRoom = await first.store.getRoom(room.code);
     assert.deepEqual(persistedRoom.completedFixtureIds, ["abertura"]);
@@ -84,6 +88,9 @@ test("partida persiste, rejeita replay e match:sync sobrevive a reinicio", async
     assert.equal(persistedRoom.lastCompletedMatch.id, result.id);
     assert.equal(persistedRoom.lastCompletedMatch.code, room.code);
     assert.equal(persistedRoom.lastCompletedMatch.roomRevision, persistedRoom.revision);
+    assert.equal(persistedRoom.lastCompletedMatch.events.length, result.events.length);
+    assert.equal(persistedRoom.completedMatches[0].events, undefined);
+    assert.deepEqual(persistedRoom.lastCompletedRound, result.roundSummary);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     const replay = await firstClient.timeout(1_000).emitWithAck("match:start", {
@@ -102,11 +109,16 @@ test("partida persiste, rejeita replay e match:sync sobrevive a reinicio", async
     assert.equal(sync.ok, true);
     assert.equal(sync.source, "persisted");
     assert.equal(sync.started, null);
-    assert.deepEqual(sync.events, []);
+    assert.equal(sync.events.length, result.events.length);
+    assert.equal(sync.events[0].code, room.code);
+    assert.equal(sync.events[0].matchId, result.id);
+    assert.equal(sync.events[0].fixtureId, "abertura");
     assert.equal(sync.result.id, result.id);
     assert.equal(sync.result.code, room.code);
     assert.equal(sync.result.fixtureId, "abertura");
     assert.equal(sync.result.nextFixtureId, "rodada-2");
+    assert.deepEqual(sync.result.roundSummary, result.roundSummary);
+    assert.deepEqual(sync.lastCompletedRound, result.roundSummary);
   } finally {
     firstClient?.disconnect();
     secondClient?.disconnect();
@@ -124,6 +136,7 @@ test("match:sync devolve metadados e eventos enriquecidos da sessao viva", async
 
   const firstEvent = new Promise((resolve) => client.once("match:event", resolve));
   const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
   const start = await client.timeout(1_000).emitWithAck("match:ready", { code: room.code, ready: true });
   const event = await firstEvent;
   const sync = await client.timeout(1_000).emitWithAck("match:sync", { code: room.code });
@@ -147,7 +160,7 @@ test("match:sync devolve metadados e eventos enriquecidos da sessao viva", async
 });
 
 test("partida transmite inicio, eventos e resultado para todos os managers", async (context) => {
-  const { server, url } = await startTestServer();
+  const { server, store, url } = await startTestServer();
   context.after(() => server.close());
   const owner = await connect(url, { token: "owner-token" });
   const second = await connect(url, { token: "second-token" });
@@ -194,6 +207,7 @@ test("partida transmite inicio, eventos e resultado para todos os managers", asy
   const secondEvent = new Promise((resolve) => second.once("match:event", resolve));
   const ownerFinished = new Promise((resolve) => owner.once("match:finished", resolve));
   const secondFinished = new Promise((resolve) => second.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(owner);
 
   let startedBeforeEveryoneWasReady = false;
   owner.once("match:started", () => { startedBeforeEveryoneWasReady = true; });
@@ -232,8 +246,20 @@ test("partida transmite inicio, eventos e resultado para todos os managers", asy
   assert.equal(firstSecondEvent.code, created.room.code);
   assert.equal(ownerResult.id, start.matchId);
   assert.equal(ownerResult.code, created.room.code);
+  assert.equal(ownerResult.simulationVersion, 2);
+  assert.equal(Array.isArray(ownerResult.playerStatistics?.home), true);
+  assert.equal(Array.isArray(ownerResult.playerStatistics?.away), true);
+  assert.equal(ownerResult.playerStatistics.home.every((player) => Boolean(player.playerId)), true);
+  assert.equal(Array.isArray(ownerResult.playerEffects), true);
+  assert.equal(ownerResult.playerEffects.every((effect) => (
+    typeof effect.status === "string" && Number.isInteger(effect.suspensionMatches)
+  )), true);
   assert.equal(secondResult.id, start.matchId);
   assert.equal(secondResult.code, created.room.code);
+  const persisted = await store.getRoom(created.room.code);
+  assert.equal(persisted.playerStates.length > 0, true);
+  assert.equal(persisted.playerStates.every((player) => player.lastMatchId === start.matchId), true);
+  assert.deepEqual(ownerResult.playerEffects, persisted.lastCompletedMatch.playerEffects);
 });
 
 test("encerramento do servidor cancela sessao de partida viva", async () => {
@@ -323,12 +349,17 @@ test("room:delete rejeita exclusao durante partida em andamento", async (context
   const { server, store, url } = await startTestServer({ matchDelayMs: 5_000 });
   context.after(() => server.close());
   const owner = await connect(url, { token: "owner-token" });
+  const intruder = await connect(url, { token: "intruder-token" });
   context.after(() => owner.disconnect());
+  context.after(() => intruder.disconnect());
   const room = await createActiveRoom(owner);
 
   const started = await owner.timeout(1_000).emitWithAck("match:ready", { code: room.code, ready: true });
   assert.equal(started.ok, true);
   assert.equal(started.started, true);
+  const hidden = await intruder.timeout(1_000).emitWithAck("room:delete", { code: room.code });
+  assert.equal(hidden.ok, false);
+  assert.equal(hidden.error.code, "ROOM_NOT_FOUND");
   const deletion = await owner.timeout(1_000).emitWithAck("room:delete", { code: room.code });
   assert.equal(deletion.ok, false);
   assert.equal(deletion.error.code, "MATCH_IN_PROGRESS");

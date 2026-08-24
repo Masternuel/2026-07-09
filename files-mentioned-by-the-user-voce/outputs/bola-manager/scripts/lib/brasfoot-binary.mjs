@@ -5,24 +5,44 @@ import { JavaSerializationError, parseJavaSerialization } from "./java-serializa
 
 const MAX_SOURCE_FILES = 50_000;
 const BRAZIL_COUNTRY_ID = 29;
+const BRAZILIAN_STATE_CODES = [
+  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA",
+  "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
+];
 const CHARACTERISTICS = [
   "Colocacao", "Defesa de penalti", "Reflexo", "Saida do gol", "Armacao", "Cabeceio", "Cruzamento",
   "Desarme", "Drible", "Finalizacao", "Marcacao", "Passe", "Resistencia", "Velocidade",
 ];
+const SOURCE_SHIRT_NUMBER_FIELDS = [
+  "shirtNumber", "jerseyNumber", "numeroCamisa", "numero_camisa", "numCamisa", "camisa", "numero",
+];
+const SHIRT_NUMBER_PREFERENCES = {
+  GOL: [1, 12, 22, 23, 24, 25, 30, 31, 40],
+  LD: [2, 13, 14, 22, 23, 32],
+  LE: [6, 16, 21, 26, 31, 36],
+  ZAG: [3, 4, 5, 13, 14, 15, 24, 25, 33, 34],
+  VOL: [5, 8, 15, 18, 20, 25],
+  MC: [8, 10, 5, 15, 18, 20, 21, 28],
+  MEI: [10, 8, 5, 18, 20, 21, 27, 28],
+  PD: [7, 17, 19, 20, 23, 27],
+  PE: [11, 7, 17, 19, 21, 27],
+  ATA: [9, 11, 18, 19, 20, 21, 29, 30],
+};
+const ALL_SHIRT_NUMBERS = Array.from({ length: 99 }, (_item, index) => index + 1);
 const CHARACTERISTIC_ATTRIBUTES = {
-  0: ["defesa", "nocao"],
-  1: ["defesa", "nocao"],
-  2: ["defesa", "nocao"],
-  3: ["defesa", "nocao"],
+  0: ["defesa", "nocao", "posicionamentoGol"],
+  1: ["defesa", "nocao", "penaltis"],
+  2: ["defesa", "nocao", "reflexos"],
+  3: ["defesa", "nocao", "saidaGol"],
   4: ["passe", "nocao"],
-  5: ["nocao", "chute"],
+  5: ["nocao", "chute", "impulsao"],
   6: ["passe"],
   7: ["defesa"],
   8: ["drible"],
   9: ["chute"],
   10: ["defesa"],
   11: ["passe"],
-  12: ["nocao", "defesa"],
+  12: ["nocao", "defesa", "resistencia"],
   13: ["velocidade"],
 };
 
@@ -77,6 +97,16 @@ function countryName(countryId, countriesById) {
   return countriesById.get(Number(countryId)) ?? (Number(countryId) === BRAZIL_COUNTRY_ID ? "BRA" : `PAIS-${countryId}`);
 }
 
+function stateCode(countryId, stateId) {
+  if (stateId == null || stateId === "") return null;
+  const numericCountry = Number(countryId);
+  const numericState = Number(stateId);
+  if (numericCountry === BRAZIL_COUNTRY_ID && Number.isInteger(numericState)) {
+    return BRAZILIAN_STATE_CODES[numericState] ?? null;
+  }
+  return numericState > 0 ? String(numericState) : null;
+}
+
 function mapPosition(player) {
   const category = Number(field(player, "e", -1));
   const side = Number(field(player, "i", 0));
@@ -93,16 +123,54 @@ function mapPosition(player) {
   return "MEI";
 }
 
+function sourceShirtNumber(player) {
+  for (const name of SOURCE_SHIRT_NUMBER_FIELDS) {
+    const numeric = Number(field(player, name, Number.NaN));
+    if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 99) return numeric;
+  }
+  return null;
+}
+
+function allocateShirtNumbers(roster) {
+  const sourceNumbers = roster.map(({ player }) => sourceShirtNumber(player));
+  // Reserva primeiro os numeros realmente presentes na origem. Assim um fallback
+  // gerado para atleta anterior nunca toma a camisa explicita de atleta posterior.
+  const used = new Set(sourceNumbers.filter((number) => number != null));
+  const assigned = [...sourceNumbers];
+  // Primeira passagem usa somente camisas adequadas a cada posicao. Fallbacks
+  // ficam para depois, evitando que um meia excedente tome a 9 do atacante.
+  roster.forEach(({ player }, index) => {
+    if (assigned[index] != null) return;
+    const preferences = SHIRT_NUMBER_PREFERENCES[mapPosition(player)] ?? [];
+    const generated = preferences.find((number) => !used.has(number)) ?? null;
+    if (generated != null) used.add(generated);
+    assigned[index] = generated;
+  });
+  assigned.forEach((number, index) => {
+    if (number != null) return;
+    const fallback = ALL_SHIRT_NUMBERS.find((candidate) => !used.has(candidate)) ?? null;
+    if (fallback != null) used.add(fallback);
+    assigned[index] = fallback;
+  });
+  return assigned;
+}
+
 function rawFields(value) {
   return Object.fromEntries(Object.entries(value?.$fields ?? {}).filter(([, item]) => (
     item == null || ["string", "number", "boolean"].includes(typeof item)
   )));
 }
 
-function characteristicAttributes(player, overall) {
+function characteristicAttributes(player, overall, position) {
   const bonuses = {};
   for (const characteristic of [field(player, "g"), field(player, "h")]) {
-    for (const attribute of CHARACTERISTIC_ATTRIBUTES[Number(characteristic)] ?? []) {
+    const characteristicId = Number(characteristic);
+    const attributes = characteristicId === 5 && ["ZAG", "LD", "LE"].includes(position)
+      ? ["nocao", "defesa", "impulsao"]
+      : characteristicId === 12
+        ? ["forca", "resistencia"]
+        : CHARACTERISTIC_ATTRIBUTES[characteristicId] ?? [];
+    for (const attribute of attributes) {
       bonuses[attribute] = (bonuses[attribute] ?? 0) + 1;
     }
   }
@@ -110,6 +178,24 @@ function characteristicAttributes(player, overall) {
     attribute,
     clamp(overall + 1 + occurrences, 1, 20),
   ]));
+}
+
+function estimatedPlayerOverall(player, teamLevel) {
+  // O .ban da base traz nivel do time e marcadores do jogador, mas nao grava
+  // a forca/habilidades numericas criadas pelo motor ao iniciar uma carreira.
+  const age = clamp(Math.round(Number(field(player, "d", 27))), 16, 40);
+  const starterMultiplier = Number(field(player, "f", 0)) === 1 ? 1.2 : 1;
+  const fameMultiplier = field(player, "j", false) === true
+    ? 1.53
+    : field(player, "b", false) === true ? 1.28 : 1;
+  const rawHash = Number(field(player, "hash", 5));
+  const hashVariation = Math.max(-5, Math.min(5, (Number.isFinite(rawHash) ? rawHash : 5) - 5));
+  const rawStrength = Math.floor(
+    2.17 * teamLevel * starterMultiplier * fameMultiplier
+      - 0.28 * (age - 27) ** 2
+      + hashVariation,
+  );
+  return clamp(Math.round(clamp(rawStrength, 1, 100) / 5), 1, 20);
 }
 
 function uniqueRoster(team) {
@@ -148,7 +234,7 @@ export function mapBrasfootTeam(team, context = {}) {
     reputation,
     division: "Sem divisao",
     country: countryName(field(team, "a", 0), context.countriesById ?? new Map()),
-    state: Number(field(team, "b", 0)) > 0 ? String(field(team, "b")) : null,
+    state: stateCode(field(team, "a", 0), field(team, "b", null)),
     city: null,
     budget: 0,
     active: field(team, "valid", true) !== false,
@@ -158,20 +244,23 @@ export function mapBrasfootTeam(team, context = {}) {
     brasfootRaw: rawFields(team),
     assets: context.assets ?? {},
   };
-  const players = uniqueRoster(team).map(({ player, rosterName }, index) => {
+  const roster = uniqueRoster(team);
+  const shirtNumbers = allocateShirtNumbers(roster);
+  const players = roster.map(({ player, rosterName }, index) => {
     const isStar = field(player, "b", false) === true;
     const worldStar = field(player, "j", false) === true;
-    const overall = clamp(reputation + (isStar ? 1 : 0) + (worldStar ? 1 : 0), 1, 20);
+    const overall = estimatedPlayerOverall(player, strength);
+    const position = mapPosition(player);
     return {
       id: `${clubId}-${playerIdentity(player)}`,
       clubId,
       name: String(field(player, "a", `Jogador ${index + 1}`)).trim() || `Jogador ${index + 1}`,
-      position: mapPosition(player),
+      position,
       age: clamp(Math.round(Number(field(player, "d", 18))), 14, 60),
       nationality: countryName(field(player, "c", 0), context.countriesById ?? new Map()),
-      shirtNumber: null,
+      shirtNumber: shirtNumbers[index],
       overall,
-      attributes: characteristicAttributes(player, overall),
+      attributes: characteristicAttributes(player, overall, position),
       isStar,
       worldStar,
       starter: Number(field(player, "f", 0)) === 1,
@@ -206,6 +295,7 @@ export function mapBrasfootLeague(config, context = {}) {
     countryId,
     level,
     division: divisionName || String(level),
+    legs: field(config, "doisTurnos", true) === false ? "single" : "double",
     active: true,
     source: "brasfoot-java-serialization",
     brasfootRaw: rawFields(config),

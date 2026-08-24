@@ -19,10 +19,16 @@ export interface ApiCredentials {
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
 }
 
+export interface ApiBlobDownload {
+  blob: Blob;
+  filename: string | null;
+}
+
 interface ApiRequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: object;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 const serverUrl = (import.meta.env.VITE_SERVER_URL || window.location.origin).replace(/\/$/, '');
@@ -31,6 +37,34 @@ function isErrorEnvelope(value: unknown): value is { error: ServerErrorPayload }
   if (!value || typeof value !== 'object' || !('error' in value)) return false;
   const error = (value as { error?: unknown }).error;
   return Boolean(error && typeof error === 'object' && 'message' in error && 'code' in error);
+}
+
+function downloadFilename(contentDisposition: string | null) {
+  if (!contentDisposition) return null;
+  const encoded = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim().replace(/^"|"$/g, ''));
+    } catch {
+      // Continua para o formato filename quando o servidor enviar encoding inválido.
+    }
+  }
+  return contentDisposition.match(/filename\s*=\s*"([^"]+)"/i)?.[1]
+    ?? contentDisposition.match(/filename\s*=\s*([^;\s]+)/i)?.[1]
+    ?? null;
+}
+
+async function authorizationHeaders(credentials: ApiCredentials, accept: string) {
+  const headers = new Headers({ Accept: accept });
+  if (credentials.identity.mode === 'firebase') {
+    const token = await credentials.getIdToken();
+    if (!token) throw new ApiError('Sua sessão expirou. Entre novamente.', 'AUTH_TOKEN_MISSING', 401);
+    headers.set('Authorization', `Bearer ${token}`);
+  } else {
+    headers.set('x-demo-user-id', credentials.identity.uid);
+    headers.set('x-demo-user-name', credentials.identity.displayName);
+  }
+  return headers;
 }
 
 export async function apiRequest<T>(
@@ -49,20 +83,72 @@ export async function apiRequest<T>(
   }
   if (options.body) headers.set('Content-Type', 'application/json');
 
-  const response = await fetch(`${serverUrl}${path.startsWith('/') ? path : `/${path}`}`, {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: options.signal,
-  });
-  const payload: unknown = await response.json().catch(() => null);
+  const timeoutMs = Number(options.timeoutMs);
+  const useTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  const requestController = useTimeout ? new AbortController() : null;
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const abortFromCaller = () => requestController?.abort();
+  if (requestController && options.signal) {
+    if (options.signal.aborted) requestController.abort();
+    else options.signal.addEventListener('abort', abortFromCaller, { once: true });
+  }
+  if (requestController) {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      requestController.abort();
+    }, timeoutMs);
+  }
+
+  try {
+    const response = await fetch(`${serverUrl}${path.startsWith('/') ? path : `/${path}`}`, {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: requestController?.signal ?? options.signal,
+    });
+    const payload: unknown = await response.json().catch(() => null);
+    if (timedOut) throw new Error('request timed out');
+    if (!response.ok) {
+      if (isErrorEnvelope(payload)) {
+        throw new ApiError(payload.error.message, payload.error.code, response.status, payload.error.details);
+      }
+      throw new ApiError('O servidor não conseguiu concluir a solicitação.', 'HTTP_ERROR', response.status);
+    }
+    return payload as T;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(
+        'O servidor demorou para preparar sua base. Tente novamente.',
+        'API_REQUEST_TIMEOUT',
+        408,
+      );
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    options.signal?.removeEventListener('abort', abortFromCaller);
+  }
+}
+
+export async function apiBlobDownload(
+  path: string,
+  credentials: ApiCredentials,
+  signal?: AbortSignal,
+): Promise<ApiBlobDownload> {
+  const headers = await authorizationHeaders(credentials, 'application/json, application/octet-stream');
+  const response = await fetch(`${serverUrl}${path.startsWith('/') ? path : `/${path}`}`, { headers, signal });
   if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
     if (isErrorEnvelope(payload)) {
       throw new ApiError(payload.error.message, payload.error.code, response.status, payload.error.details);
     }
-    throw new ApiError('O servidor não conseguiu concluir a solicitação.', 'HTTP_ERROR', response.status);
+    throw new ApiError('O servidor não conseguiu exportar a base de dados.', 'HTTP_ERROR', response.status);
   }
-  return payload as T;
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response.headers.get('Content-Disposition')),
+  };
 }
 
 export async function apiUpload<T>(

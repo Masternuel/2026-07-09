@@ -1,5 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { calculatePlayerOverall } from "../game/lineupStrength.mjs";
 import { calculateStarImpact, sortPlayersForSelection } from "../game/starImpact.mjs";
 import { tournamentConsistencySchema } from "../editorSchemas.mjs";
+import {
+  CATALOG_DATABASE_ENTITIES,
+  MAX_CATALOG_DATABASE_BYTES,
+  createCatalogDatabasePackage,
+  parseCatalogDatabase,
+} from "../services/catalogDatabase.mjs";
+import {
+  catalogDatabaseDocument,
+  createScopedCatalogFirestore,
+} from "./catalogScope.mjs";
 
 const COLLECTIONS = Object.freeze({
   leagues: "brasfootLeagues",
@@ -14,11 +26,13 @@ const MEDIA_FIELDS = Object.freeze({
   tournaments: Object.freeze({ url: "trophyImageUrl", path: "trophyImagePath" }),
 });
 
-const AURORA_DEMO_STARS = Object.freeze([
-  { id: "p08", clubId: "AUR", name: "Igor Sampaio", active: true, isStar: true },
-  { id: "p10", clubId: "AUR", name: "Felipe Rocha", active: true, isStar: true },
-]);
 const EDITOR_PAGE_LIMIT = 50;
+const CATALOG_INITIALIZATION_LEASE_MS = 30 * 1000;
+const CATALOG_INITIALIZATION_HEARTBEAT_MS = 10 * 1000;
+const CATALOG_INITIALIZATION_POLL_MS = 100;
+const CATALOG_INITIALIZATION_POLL_ATTEMPTS = 450;
+const CATALOG_TRANSACTION_MAX_ITEMS = 390;
+const CATALOG_TRANSACTION_MAX_BYTES = 8 * 1024 * 1024;
 
 export class CatalogStoreError extends Error {
   constructor(message, code, status = 400, details) {
@@ -50,8 +64,8 @@ function invalidCursorError() {
   return new CatalogStoreError("Cursor de paginacao invalido", "EDITOR_CURSOR_INVALID", 400);
 }
 
-function encodeCursor({ entity, id, query = null, clubId = null }) {
-  return Buffer.from(JSON.stringify({ entity, id, query, clubId }), "utf8").toString("base64url");
+function encodeCursor({ entity, id, query = null, clubId = null, scope = null }) {
+  return Buffer.from(JSON.stringify({ entity, id, query, clubId, scope }), "utf8").toString("base64url");
 }
 
 function decodeCursor(value, expected) {
@@ -61,7 +75,8 @@ function decodeCursor(value, expected) {
       || typeof parsed.id !== "string"
       || parsed.entity !== expected.entity
       || (parsed.query ?? null) !== (expected.query ?? null)
-      || (parsed.clubId ?? null) !== (expected.clubId ?? null)) {
+      || (parsed.clubId ?? null) !== (expected.clubId ?? null)
+      || (parsed.scope ?? null) !== (expected.scope ?? null)) {
       throw invalidCursorError();
     }
     return parsed;
@@ -73,7 +88,11 @@ function decodeCursor(value, expected) {
 
 function snapshotRecord(document, entity) {
   const record = { ...document.data(), id: document.id };
-  return entity === "players" ? { ...record, isStar: record.isStar === true } : record;
+  return entity === "players" ? {
+    ...record,
+    isStar: record.isStar === true,
+    overall: calculatePlayerOverall(record, record.overall),
+  } : record;
 }
 
 function sortRecords(records) {
@@ -83,20 +102,65 @@ function sortRecords(records) {
 }
 
 function tournamentParticipant(record) {
+  const reputation = Number(record.reputation);
+  const stadiumCapacity = Number(record.stadiumCapacity);
   return {
     id: record.id,
     name: record.name,
     abbreviation: record.abbreviation ?? "",
     colors: Array.isArray(record.colors) ? record.colors : [],
+    ...(typeof record.darkThemeColor === "string" ? { darkThemeColor: record.darkThemeColor } : {}),
+    ...(typeof record.lightThemeColor === "string" ? { lightThemeColor: record.lightThemeColor } : {}),
     country: record.country ?? null,
     division: record.division ?? null,
+    leagueId: record.leagueId ?? null,
+    reputation: Number.isFinite(reputation) ? Math.max(1, Math.min(20, reputation)) : 10,
+    stadium: typeof record.stadium === "string" ? record.stadium : null,
+    stadiumCapacity: Number.isInteger(stadiumCapacity) ? Math.max(0, stadiumCapacity) : 0,
     crestImageUrl: record.crestImageUrl ?? null,
     crestImagePath: record.crestImagePath ?? null,
   };
 }
 
+function competitionPrizeMoney(record) {
+  const objectPrizes = [record?.prizes, record?.rewards, record?.awards]
+    .filter((value) => value && typeof value === "object" && !Array.isArray(value));
+  const rankedPrize = [record?.prizes, record?.rewards, record?.awards]
+    .filter(Array.isArray)
+    .flat()
+    .find((entry) => entry && typeof entry === "object" && (
+      Number(entry.position) === 1
+      || ["winner", "champion", "campeao", "campeão"].includes(
+        String(entry.type ?? entry.place ?? entry.label ?? "").trim().toLocaleLowerCase("pt-BR"),
+      )
+    ));
+  const configured = [
+    record?.prizeMoney,
+    record?.championPrize,
+    record?.winnerPrize,
+    record?.firstPlacePrize,
+    record?.premioCampeao,
+    record?.premiacaoCampeao,
+    record?.prize,
+    record?.premio,
+    record?.premiacao,
+    ...objectPrizes.flatMap((value) => [
+      value.winner,
+      value.champion,
+      value.campeao,
+      value.first,
+      value[1],
+    ]),
+    rankedPrize?.amount,
+    rankedPrize?.value,
+    rankedPrize?.prizeMoney,
+  ].map(Number).find((amount) => Number.isSafeInteger(amount) && amount > 0);
+  return configured ?? 0;
+}
+
 function publicTournament(record, participantsById) {
   const teamIds = Array.isArray(record.teamIds) ? record.teamIds : [];
+  const prizeMoney = competitionPrizeMoney(record);
   return {
     id: record.id,
     name: record.name,
@@ -107,19 +171,484 @@ function publicTournament(record, participantsById) {
     teamIds,
     trophyImageUrl: record.trophyImageUrl ?? null,
     trophyImagePath: record.trophyImagePath ?? null,
+    ...(prizeMoney > 0 ? { prizeMoney } : {}),
     active: true,
     participants: teamIds.map((id) => participantsById.get(id)).filter(Boolean),
   };
 }
 
+function recordIsActive(record) {
+  return record.active !== false;
+}
+
+function initializationLeaseExpired(metadata, timestamp) {
+  const leaseTimestamp = Date.parse(
+    metadata?.initializationHeartbeatAt
+    ?? metadata?.initializationStartedAt
+    ?? "",
+  );
+  const nowTimestamp = Date.parse(timestamp);
+  return !Number.isFinite(leaseTimestamp)
+    || !Number.isFinite(nowTimestamp)
+    || nowTimestamp - leaseTimestamp >= CATALOG_INITIALIZATION_LEASE_MS;
+}
+
+function catalogIdKey(value) {
+  return String(value ?? "").trim().toLocaleUpperCase("pt-BR");
+}
+
+function leagueLegs(record) {
+  if (record?.legs === "single" || record?.legs === "double") return record.legs;
+  if (typeof record?.brasfootRaw?.doisTurnos === "boolean") {
+    return record.brasfootRaw.doisTurnos ? "double" : "single";
+  }
+  return "double";
+}
+
+function publicLeague(record, clubCount) {
+  const prizeMoney = competitionPrizeMoney(record);
+  return {
+    id: record.id,
+    name: record.name ?? record.id,
+    country: record.country ?? "",
+    level: Number.isFinite(Number(record.level)) ? Number(record.level) : 1,
+    division: record.division ?? "",
+    ...(prizeMoney > 0 ? { prizeMoney } : {}),
+    active: true,
+    clubCount,
+  };
+}
+
+function publicCompetitionClub(record) {
+  const configuredColor = Array.isArray(record.colors)
+    ? record.colors.find((color) => typeof color === "string" && color.trim())
+    : null;
+  const reputation = Number(record.reputation);
+  const budget = Number(record.budget);
+  const stadiumCapacity = Number(record.stadiumCapacity);
+  const configuredCode = typeof record.abbreviation === "string" ? record.abbreviation.trim() : "";
+  const configuredStadium = typeof record.stadium === "string" ? record.stadium.trim() : "";
+  return {
+    id: record.id,
+    name: record.name ?? record.id,
+    code: (configuredCode || record.id).slice(0, 8).toLocaleUpperCase("pt-BR"),
+    color: configuredColor ?? "#c8ff3d",
+    ...(typeof record.darkThemeColor === "string" ? { darkThemeColor: record.darkThemeColor } : {}),
+    ...(typeof record.lightThemeColor === "string" ? { lightThemeColor: record.lightThemeColor } : {}),
+    reputation: Number.isFinite(reputation) && reputation > 0 ? reputation : 10,
+    budget: Number.isFinite(budget) && budget >= 0
+      ? Math.min(2_000_000_000, Math.trunc(budget))
+      : 0,
+    stadium: configuredStadium || "A definir",
+    stadiumCapacity: Number.isInteger(stadiumCapacity)
+      && stadiumCapacity >= 0
+      && stadiumCapacity <= 500_000
+      ? stadiumCapacity
+      : 0,
+    crestImageUrl: typeof record.crestImageUrl === "string" ? record.crestImageUrl : null,
+    leagueId: String(record.leagueId ?? "").trim(),
+  };
+}
+
+async function loadActiveCompetitionRecords(firestore) {
+  const [leaguesSnapshot, clubsSnapshot] = await Promise.all([
+    firestore.collection(COLLECTIONS.leagues).get(),
+    firestore.collection(COLLECTIONS.clubs).get(),
+  ]);
+  const leagues = leaguesSnapshot.docs
+    .map((document) => snapshotRecord(document, "leagues"))
+    .filter(recordIsActive);
+  const activeLeagueIds = new Set(leagues.map((league) => catalogIdKey(league.id)));
+  const clubs = clubsSnapshot.docs
+    .map((document) => snapshotRecord(document, "clubs"))
+    .filter(recordIsActive)
+    .filter((club) => activeLeagueIds.has(catalogIdKey(club.leagueId)));
+  return { leagues, clubs };
+}
+
+function selectedLeagueIds(leagueIds) {
+  if (leagueIds === undefined || leagueIds === null) return null;
+  const values = Array.isArray(leagueIds) ? leagueIds : [leagueIds];
+  return new Set(values.map(catalogIdKey).filter(Boolean));
+}
+
+function transactionChunks(items, recordForItem = (item) => item.record) {
+  const chunks = [];
+  let chunk = [];
+  let bytes = 0;
+  for (const item of items) {
+    let itemBytes = 1024;
+    try {
+      itemBytes += Buffer.byteLength(JSON.stringify(recordForItem(item) ?? null), "utf8");
+    } catch {
+      itemBytes += 512 * 1024;
+    }
+    if (chunk.length > 0 && (chunk.length >= CATALOG_TRANSACTION_MAX_ITEMS
+      || bytes + itemBytes > CATALOG_TRANSACTION_MAX_BYTES)) {
+      chunks.push(chunk);
+      chunk = [];
+      bytes = 0;
+    }
+    chunk.push(item);
+    bytes += itemBytes;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
+}
+
 export class CatalogStore {
-  constructor({ firestore = null, now = () => new Date() } = {}) {
+  constructor({
+    firestore = null,
+    rootFirestore = firestore,
+    ownerId = null,
+    now = () => new Date(),
+  } = {}) {
     this.firestore = firestore;
+    this.rootFirestore = rootFirestore;
+    this.ownerId = ownerId;
     this.now = now;
   }
 
   get source() {
     return this.firestore ? "firestore" : "brasfoot-not-loaded";
+  }
+
+  forOwner(ownerId) {
+    if (!this.rootFirestore) return this;
+    return new CatalogStore({
+      firestore: createScopedCatalogFirestore(this.rootFirestore, ownerId),
+      rootFirestore: this.rootFirestore,
+      ownerId: String(ownerId),
+      now: this.now,
+    });
+  }
+
+  async ensureInitialized() {
+    if (!this.ownerId || !this.rootFirestore) return this;
+    const metadataReference = catalogDatabaseDocument(this.rootFirestore, this.ownerId);
+    const timestamp = this.now().toISOString();
+    const initializationId = randomUUID();
+    let shouldInitialize = false;
+    let waitForInitialization = false;
+    await this.rootFirestore.runTransaction(async (transaction) => {
+      shouldInitialize = false;
+      waitForInitialization = false;
+      const metadata = await transaction.get(metadataReference);
+      if (metadata.exists && metadata.data()?.initialized === true) {
+        if (metadata.data()?.status === "importing") {
+          throw new CatalogStoreError(
+            "A base esta sendo importada. Tente novamente em instantes",
+            "CATALOG_DATABASE_IMPORT_IN_PROGRESS",
+            409,
+          );
+        }
+        if (metadata.data()?.status === "import_failed") {
+          throw new CatalogStoreError(
+            "A ultima importacao falhou e a base precisa ser recuperada",
+            "CATALOG_DATABASE_RECOVERY_REQUIRED",
+            503,
+          );
+        }
+        return;
+      }
+      if (metadata.data()?.status === "initializing") {
+        if (!initializationLeaseExpired(metadata.data(), timestamp)) {
+          waitForInitialization = true;
+          return;
+        }
+      }
+      transaction.set(metadataReference, {
+        ...(metadata.exists ? metadata.data() : {}),
+        ownerId: this.ownerId,
+        initialized: false,
+        status: "initializing",
+        initializationId,
+        initializationStartedAt: timestamp,
+        initializationHeartbeatAt: timestamp,
+        updatedAt: timestamp,
+      });
+      shouldInitialize = true;
+    });
+    if (waitForInitialization) {
+      for (let attempt = 0; attempt < CATALOG_INITIALIZATION_POLL_ATTEMPTS; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, CATALOG_INITIALIZATION_POLL_MS));
+        const current = await metadataReference.get();
+        const currentData = current.data();
+        if (currentData?.initialized === true && currentData?.status === "ready") return this;
+        if (["initialization_failed", "import_failed"].includes(currentData?.status)
+          || currentData?.status !== "initializing"
+          || initializationLeaseExpired(currentData, this.now().toISOString())) {
+          return this.ensureInitialized();
+        }
+      }
+      throw new CatalogStoreError(
+        "A base continua sendo preparada. Tente novamente em instantes",
+        "CATALOG_DATABASE_INITIALIZING",
+        409,
+      );
+    }
+    if (!shouldInitialize) return this;
+
+    let heartbeatInFlight = false;
+    const refreshInitializationHeartbeat = async () => {
+      await this.rootFirestore.runTransaction(async (transaction) => {
+        const current = await transaction.get(metadataReference);
+        if (current.data()?.initializationId !== initializationId) return;
+        const heartbeatAt = this.now().toISOString();
+        transaction.set(metadataReference, {
+          ...current.data(),
+          initializationHeartbeatAt: heartbeatAt,
+          updatedAt: heartbeatAt,
+        });
+      });
+    };
+    const heartbeatTimer = setInterval(() => {
+      if (heartbeatInFlight) return;
+      heartbeatInFlight = true;
+      void refreshInitializationHeartbeat()
+        .catch(() => {})
+        .finally(() => { heartbeatInFlight = false; });
+    }, CATALOG_INITIALIZATION_HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
+
+    try {
+      const snapshots = await Promise.all(CATALOG_DATABASE_ENTITIES.map((entity) => (
+        this.rootFirestore.collection(COLLECTIONS[entity]).get()
+      )));
+      await refreshInitializationHeartbeat();
+      const operations = [];
+      snapshots.forEach((snapshot, index) => {
+        const entity = CATALOG_DATABASE_ENTITIES[index];
+        const mediaPath = MEDIA_FIELDS[entity]?.path;
+        for (const document of snapshot.docs) {
+          const record = { ...document.data(), id: document.id };
+          if (mediaPath) record[mediaPath] = null;
+          operations.push({ reference: this.#collection(entity).doc(document.id), record });
+        }
+      });
+      for (const chunk of transactionChunks(operations)) {
+        await this.rootFirestore.runTransaction(async (transaction) => {
+          const current = await transaction.get(metadataReference);
+          if (current.data()?.initializationId !== initializationId) {
+            throw new CatalogStoreError(
+              "A preparacao desta base foi substituida por outra tentativa",
+              "CATALOG_DATABASE_INITIALIZATION_REPLACED",
+              409,
+            );
+          }
+          for (const operation of chunk) transaction.set(operation.reference, operation.record);
+          transaction.set(metadataReference, {
+            ...current.data(),
+            initializationHeartbeatAt: this.now().toISOString(),
+            updatedAt: this.now().toISOString(),
+          });
+        });
+      }
+      await this.rootFirestore.runTransaction(async (transaction) => {
+        const current = await transaction.get(metadataReference);
+        if (current.data()?.initializationId !== initializationId) {
+          throw new CatalogStoreError(
+            "A preparacao desta base foi substituida por outra tentativa",
+            "CATALOG_DATABASE_INITIALIZATION_REPLACED",
+            409,
+          );
+        }
+        transaction.set(metadataReference, {
+          ownerId: this.ownerId,
+          initialized: true,
+          status: "ready",
+          schemaVersion: 1,
+          revision: 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          clonedFromLegacy: true,
+          counts: Object.fromEntries(CATALOG_DATABASE_ENTITIES.map((entity, index) => (
+            [entity, snapshots[index].docs.length]
+          ))),
+        });
+      });
+    } catch (error) {
+      await this.rootFirestore.runTransaction(async (transaction) => {
+        const current = await transaction.get(metadataReference);
+        if (current.data()?.initializationId !== initializationId) return;
+        transaction.set(metadataReference, {
+          ...(current.exists ? current.data() : {}),
+          initialized: false,
+          status: "initialization_failed",
+          initializationFailedAt: this.now().toISOString(),
+          updatedAt: this.now().toISOString(),
+        });
+      }).catch(() => {});
+      throw error;
+    } finally {
+      clearInterval(heartbeatTimer);
+    }
+    return this;
+  }
+
+  collection(entity) {
+    return this.#collection(entity);
+  }
+
+  async exportDatabase() {
+    this.#assertAvailable();
+    const snapshots = await Promise.all(CATALOG_DATABASE_ENTITIES.map((entity) => (
+      this.#collection(entity).get()
+    )));
+    const records = Object.fromEntries(CATALOG_DATABASE_ENTITIES.map((entity, index) => [
+      entity,
+      snapshots[index].docs.map((document) => snapshotRecord(document, entity)),
+    ]));
+    const database = createCatalogDatabasePackage(records, this.now());
+    const bytes = Buffer.byteLength(JSON.stringify(database), "utf8");
+    if (bytes > MAX_CATALOG_DATABASE_BYTES) {
+      throw new CatalogStoreError(
+        "A base excede 24 MB e ainda nao pode ser exportada em um unico arquivo",
+        "CATALOG_DATABASE_EXPORT_TOO_LARGE",
+        413,
+        { maximumBytes: MAX_CATALOG_DATABASE_BYTES, receivedBytes: bytes },
+      );
+    }
+    return database;
+  }
+
+  async importDatabase(databaseValue, updatedBy) {
+    this.#assertAvailable();
+    if (!this.ownerId || !this.rootFirestore) {
+      throw new CatalogStoreError(
+        "Importacao exige uma base pessoal",
+        "CATALOG_DATABASE_PERSONAL_REQUIRED",
+        409,
+      );
+    }
+    const database = parseCatalogDatabase(databaseValue);
+    const metadataReference = catalogDatabaseDocument(this.rootFirestore, this.ownerId);
+    const startedAt = this.now().toISOString();
+    let revision = 1;
+    await this.rootFirestore.runTransaction(async (transaction) => {
+      const metadata = await transaction.get(metadataReference);
+      if (metadata.data()?.status === "importing") {
+        throw new CatalogStoreError(
+          "Ja existe uma importacao em andamento nesta base",
+          "CATALOG_DATABASE_IMPORT_IN_PROGRESS",
+          409,
+        );
+      }
+      revision = Math.max(1, Number(metadata.data()?.revision) || 1);
+      transaction.set(metadataReference, {
+        ...(metadata.exists ? metadata.data() : {}),
+        ownerId: this.ownerId,
+        initialized: true,
+        status: "importing",
+        importStartedAt: startedAt,
+        updatedAt: startedAt,
+      });
+    });
+
+    const timestamp = this.now().toISOString();
+    const operations = CATALOG_DATABASE_ENTITIES.flatMap((entity) => (
+      database.records[entity].map((record) => ({
+        entity,
+        reference: this.#collection(entity).doc(record.id),
+        record: {
+          ...record,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          updatedBy,
+        },
+      }))
+    ));
+    const backups = [];
+    const previousMediaPaths = new Set();
+    let writeStarted = false;
+    let rollbackSucceeded = true;
+    try {
+      for (const chunk of transactionChunks(operations)) {
+        const documents = typeof this.rootFirestore.getAll === "function"
+          ? await this.rootFirestore.getAll(...chunk.map((operation) => operation.reference))
+          : await Promise.all(chunk.map((operation) => operation.reference.get()));
+        documents.forEach((document, documentIndex) => {
+          const operation = chunk[documentIndex];
+          const existing = document.exists ? { ...document.data(), id: document.id } : null;
+          const media = MEDIA_FIELDS[operation.entity];
+          if (existing?.createdAt) operation.record.createdAt = existing.createdAt;
+          if (media && existing?.[media.path]) {
+            if ((existing[media.url] ?? null) === (operation.record[media.url] ?? null)) {
+              operation.record[media.path] = existing[media.path];
+            } else {
+              operation.record[media.path] = null;
+              previousMediaPaths.add(existing[media.path]);
+            }
+          }
+          backups.push({
+            reference: operation.reference,
+            exists: document.exists,
+            record: existing,
+          });
+        });
+      }
+
+      for (const chunk of transactionChunks(operations)) {
+        writeStarted = true;
+        await this.rootFirestore.runTransaction(async (transaction) => {
+          for (const operation of chunk) transaction.set(operation.reference, operation.record);
+        });
+      }
+
+      const completedAt = this.now().toISOString();
+      const counts = Object.fromEntries(CATALOG_DATABASE_ENTITIES.map((entity) => [
+        entity,
+        database.records[entity].length,
+      ]));
+      await this.rootFirestore.runTransaction(async (transaction) => {
+        const current = await transaction.get(metadataReference);
+        transaction.set(metadataReference, {
+          ...(current.exists ? current.data() : {}),
+          status: "ready",
+          revision: revision + 1,
+          lastImportAt: completedAt,
+          lastImportBy: updatedBy,
+          updatedAt: completedAt,
+          counts,
+        });
+      });
+      return {
+        imported: true,
+        mode: "merge",
+        revision: revision + 1,
+        counts,
+        total: operations.length,
+        previousMediaPaths: [...previousMediaPaths],
+      };
+    } catch (error) {
+      if (writeStarted) {
+        try {
+          for (const chunk of transactionChunks(backups)) {
+            await this.rootFirestore.runTransaction(async (transaction) => {
+              for (const backup of chunk) {
+                if (backup.exists) transaction.set(backup.reference, backup.record);
+                else transaction.delete(backup.reference);
+              }
+            });
+          }
+        } catch {
+          rollbackSucceeded = false;
+        }
+      }
+      await this.rootFirestore.runTransaction(async (transaction) => {
+        const current = await transaction.get(metadataReference);
+        transaction.set(metadataReference, {
+          ...(current.exists ? current.data() : {}),
+          status: rollbackSucceeded ? "ready" : "import_failed",
+          importFailedAt: this.now().toISOString(),
+          updatedAt: this.now().toISOString(),
+        });
+      }).catch(() => {});
+      if (!rollbackSucceeded && error && typeof error === "object") {
+        error.details = { ...(error.details ?? {}), recoveryRequired: true };
+      }
+      throw error;
+    }
   }
 
   async list({ limit = EDITOR_PAGE_LIMIT } = {}) {
@@ -145,8 +674,45 @@ export class CatalogStore {
       throw new CatalogStoreError("clubId so pode filtrar jogadores", "EDITOR_FILTER_INVALID", 400);
     }
 
+    // Rosters are intentionally paginated in memory. This avoids requiring a
+    // composite Firestore index for clubId + name in every personal catalog.
+    if (clubId) {
+      const clubSnapshot = await collection.where("clubId", "==", clubId).get();
+      const matchingDocuments = clubSnapshot.docs
+        .filter((document) => !query || String(document.data()?.name ?? "").startsWith(query))
+        .sort((left, right) => {
+          const byName = String(left.data()?.name ?? "").localeCompare(
+            String(right.data()?.name ?? ""),
+            "pt-BR",
+          );
+          return byName || left.id.localeCompare(right.id, "pt-BR");
+        });
+      let startIndex = 0;
+      if (cursor) {
+        const decoded = decodeCursor(cursor, { entity, query, clubId, scope: this.ownerId });
+        const cursorIndex = matchingDocuments.findIndex((document) => document.id === decoded.id);
+        if (cursorIndex < 0) throw invalidCursorError();
+        startIndex = cursorIndex + 1;
+      }
+      const pageDocuments = matchingDocuments.slice(startIndex, startIndex + pageLimit + 1);
+      const hasMore = pageDocuments.length > pageLimit;
+      const documents = pageDocuments.slice(0, pageLimit);
+      const records = documents.map((document) => snapshotRecord(document, entity));
+      return {
+        entity,
+        records,
+        count: matchingDocuments.length,
+        returned: records.length,
+        limit: pageLimit,
+        nextCursor: hasMore && documents.length > 0
+          ? encodeCursor({ entity, id: documents.at(-1).id, query, clubId, scope: this.ownerId })
+          : null,
+        hasMore,
+        filters: { query, clubId },
+      };
+    }
+
     let baseQuery = collection;
-    if (clubId) baseQuery = baseQuery.where("clubId", "==", clubId);
     baseQuery = baseQuery.orderBy("name");
     let filteredQuery = baseQuery;
     if (query) filteredQuery = filteredQuery.startAt(query).endAt(`${query}\uf8ff`);
@@ -155,7 +721,7 @@ export class CatalogStore {
     const count = aggregate ? Number(aggregate.data().count) : null;
     let pageQuery = baseQuery;
     if (cursor) {
-      const decoded = decodeCursor(cursor, { entity, query, clubId });
+      const decoded = decodeCursor(cursor, { entity, query, clubId, scope: this.ownerId });
       const cursorDocument = await collection.doc(decoded.id).get();
       if (!cursorDocument.exists) throw invalidCursorError();
       pageQuery = pageQuery.startAfter(cursorDocument);
@@ -168,7 +734,7 @@ export class CatalogStore {
     const documents = snapshot.docs.slice(0, pageLimit);
     const records = documents.map((document) => snapshotRecord(document, entity));
     const nextCursor = hasMore && documents.length > 0
-      ? encodeCursor({ entity, id: documents.at(-1).id, query, clubId })
+      ? encodeCursor({ entity, id: documents.at(-1).id, query, clubId, scope: this.ownerId })
       : null;
     return {
       entity,
@@ -209,6 +775,47 @@ export class CatalogStore {
     return { tournaments, count: tournaments.length, source: "firestore" };
   }
 
+  async listActiveLeagues() {
+    if (!this.firestore) return { leagues: [], count: 0, source: this.source };
+    const { leagues: activeLeagues, clubs } = await loadActiveCompetitionRecords(this.firestore);
+    const clubCounts = new Map();
+    for (const club of clubs) {
+      const leagueId = catalogIdKey(club.leagueId);
+      clubCounts.set(leagueId, (clubCounts.get(leagueId) ?? 0) + 1);
+    }
+    const leagues = sortRecords(activeLeagues.map((league) => (
+      publicLeague(league, clubCounts.get(catalogIdKey(league.id)) ?? 0)
+    )));
+    return { leagues, count: leagues.length, source: "firestore" };
+  }
+
+  async listCompetitionCatalog(leagueIds) {
+    if (!this.firestore) return [];
+    const selection = selectedLeagueIds(leagueIds);
+    if (selection?.size === 0) return [];
+    const { leagues: activeLeagues, clubs: activeClubs } = await loadActiveCompetitionRecords(this.firestore);
+    const leagues = activeLeagues.filter((league) => (
+      selection === null || selection.has(catalogIdKey(league.id))
+    ));
+    return sortRecords(leagues.map((league) => {
+      const leagueId = catalogIdKey(league.id);
+      const prizeMoney = competitionPrizeMoney(league);
+      const clubs = sortRecords(activeClubs
+        .filter((club) => catalogIdKey(club.leagueId) === leagueId)
+        .map((club) => ({ ...publicCompetitionClub(club), leagueId: league.id })));
+      return {
+        id: league.id,
+        name: league.name ?? league.id,
+        country: league.country ?? "",
+        level: Number.isFinite(Number(league.level)) ? Math.max(1, Math.trunc(Number(league.level))) : 1,
+        division: league.division ?? "",
+        legs: leagueLegs(league),
+        ...(prizeMoney > 0 ? { prizeMoney } : {}),
+        clubs,
+      };
+    }));
+  }
+
   async get(entity, idValue) {
     const collection = this.#collection(entity);
     const id = this.#validId(idValue);
@@ -222,7 +829,7 @@ export class CatalogStore {
     const id = this.#validId(input?.id);
     const reference = collection.doc(id);
     const timestamp = this.now().toISOString();
-    const record = {
+    let record = {
       ...input,
       ...(entity === "players" ? { isStar: input?.isStar === true } : {}),
       id,
@@ -230,6 +837,9 @@ export class CatalogStore {
       updatedAt: timestamp,
       updatedBy,
     };
+    if (entity === "players") {
+      record = { ...record, overall: calculatePlayerOverall(record, record.overall) };
+    }
     this.#assertRecordConsistency(entity, record);
 
     await this.firestore.runTransaction(async (transaction) => {
@@ -257,12 +867,6 @@ export class CatalogStore {
       .where("clubId", "==", clubId)
       .get();
     const players = snapshot.docs.map((document) => snapshotRecord(document, "players"));
-    if (clubId === "AUR" && players.length === 0) {
-      return {
-        ...calculateStarImpact(clubId, AURORA_DEMO_STARS, { lineupIds }),
-        source: "demo-fallback",
-      };
-    }
     return { ...calculateStarImpact(clubId, players, { lineupIds }), source: "firestore" };
   }
 
@@ -281,7 +885,7 @@ export class CatalogStore {
     return {
       players,
       count: players.length,
-      source: clubId === "AUR" && snapshot.docs.length === 0 ? "demo-fallback" : "firestore",
+      source: "firestore",
     };
   }
 
@@ -307,6 +911,9 @@ export class CatalogStore {
         updatedAt: timestamp,
         updatedBy,
       };
+      if (entity === "players") {
+        result = { ...result, overall: calculatePlayerOverall(result, result.overall) };
+      }
       this.#assertRecordConsistency(entity, result);
       await this.#assertReferences(transaction, entity, result);
       if (entity === "clubs" && result.active === false) {
@@ -314,6 +921,7 @@ export class CatalogStore {
       }
       const persistedChanges = {
         ...changes,
+        ...(entity === "players" ? { overall: result.overall } : {}),
         ...(existing.createdAt ? {} : { createdAt: result.createdAt }),
         updatedAt: result.updatedAt,
         updatedBy,
@@ -425,6 +1033,64 @@ export class CatalogStore {
       transaction.delete(reference);
     });
     return { deleted: true, id, previousPath };
+  }
+
+  async deleteMany(entity, idValues) {
+    const collection = this.#collection(entity);
+    const ids = idValues.map((value) => this.#validId(value));
+    const references = ids.map((id) => collection.doc(id));
+    const previousPaths = [];
+
+    await this.firestore.runTransaction(async (transaction) => {
+      const documents = typeof transaction.getAll === "function"
+        ? await transaction.getAll(...references)
+        : await Promise.all(references.map((reference) => transaction.get(reference)));
+      for (let index = 0; index < documents.length; index += 1) {
+        if (!documents[index].exists) throw notFoundError(entity, ids[index]);
+      }
+
+      // Firestore requires every read to happen before the first write.
+      // Validate all dependencies first so the batch is all-or-nothing.
+      for (const id of ids) {
+        if (entity === "leagues") {
+          await this.#assertNoDependents(
+            transaction,
+            "clubs",
+            "leagueId",
+            id,
+            "EDITOR_LEAGUE_IN_USE",
+            "Arquive a liga: ainda existem clubes vinculados a ela",
+          );
+        } else if (entity === "clubs") {
+          await this.#assertNoDependents(
+            transaction,
+            "tournaments",
+            "teamIds",
+            id,
+            "EDITOR_CLUB_IN_TOURNAMENT",
+            "Remova o clube dos torneios antes de exclui-lo",
+            "array-contains",
+          );
+          await this.#assertNoDependents(
+            transaction,
+            "players",
+            "clubId",
+            id,
+            "EDITOR_CLUB_IN_USE",
+            "Arquive o clube: ainda existem jogadores vinculados a ele",
+          );
+        }
+      }
+
+      const mediaFields = MEDIA_FIELDS[entity];
+      documents.forEach((document, index) => {
+        const previousPath = mediaFields ? document.data()?.[mediaFields.path] ?? null : null;
+        if (previousPath) previousPaths.push(previousPath);
+        transaction.delete(references[index]);
+      });
+    });
+
+    return { deleted: true, ids, count: ids.length, previousPaths };
   }
 
   #assertAvailable() {

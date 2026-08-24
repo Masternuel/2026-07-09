@@ -13,6 +13,10 @@ function player(
   options: Partial<Pick<Player, 'status' | 'morale' | 'condition' | 'foot' | 'personality' | 'role' | 'worldStar' | 'isStar'>> = {},
 ): Player {
   const names = name.split(' ');
+  const goalkeeper = position === 'GOL';
+  const forca = Math.round((scores[4] * 2 + scores[3]) / 3);
+  const resistencia = Math.round((scores[0] + scores[3]) / 2);
+  const impulsao = Math.round((scores[0] + scores[4]) / 2);
   return {
     id,
     name,
@@ -25,7 +29,7 @@ function player(
     nationality: 'Brasil',
     value,
     wage: Math.round(value * 0.0035),
-    condition: options.condition ?? 92,
+    condition: options.condition ?? 100,
     morale: options.morale ?? 'Boa',
     status: options.status ?? 'Disponível',
     foot: options.foot ?? 'Direito',
@@ -34,6 +38,11 @@ function player(
     attributes: {
       velocidade: scores[0], chute: scores[1], drible: scores[2], nocao: scores[3],
       defesa: scores[4], passe: scores[5], peBom: scores[6], peRuim: scores[7],
+      forca, resistencia, impulsao,
+      reflexos: goalkeeper ? Math.max(scores[3], scores[4]) : 5,
+      posicionamentoGol: goalkeeper ? scores[3] : 5,
+      saidaGol: goalkeeper ? Math.round((scores[4] + scores[5]) / 2) : 5,
+      penaltis: goalkeeper ? Math.round((scores[3] + scores[6]) / 2) : 5,
     },
   };
 }
@@ -100,8 +109,8 @@ export const matchEvents: MatchEvent[] = [
 ];
 
 export const upcomingFixtures = [
-  { date: '16 JUL', competition: 'Brasileirão · Rodada 14', home: 'Aurora FC', away: 'Santos', venue: 'Estádio Boreal', time: '21:30', kind: 'home' },
-  { date: '20 JUL', competition: 'Brasileirão · Rodada 15', home: 'Fluminense', away: 'Aurora FC', venue: 'Maracanã', time: '18:30', kind: 'away' },
+  { date: '16 JUL', competition: 'Brasileirão · Rodada 1', home: 'Aurora FC', away: 'Santos', venue: 'Estádio Boreal', time: '21:30', kind: 'home' },
+  { date: '20 JUL', competition: 'Brasileirão · Rodada 2', home: 'Fluminense', away: 'Aurora FC', venue: 'Maracanã', time: '18:30', kind: 'away' },
   { date: '24 JUL', competition: 'Copa do Brasil · Oitavas', home: 'Aurora FC', away: 'Fortaleza', venue: 'Estádio Boreal', time: '20:00', kind: 'cup' },
-  { date: '28 JUL', competition: 'Brasileirão · Rodada 16', home: 'Aurora FC', away: 'Bahia', venue: 'Estádio Boreal', time: '16:00', kind: 'home' },
+  { date: '28 JUL', competition: 'Brasileirão · Rodada 3', home: 'Aurora FC', away: 'Bahia', venue: 'Estádio Boreal', time: '16:00', kind: 'home' },
 ];

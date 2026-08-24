@@ -85,7 +85,12 @@ function fakeFirestore() {
         };
       },
       async get() {
-        operations.queries.push({ collectionName, filters: structuredClone(state.filters), maximum: state.maximum });
+        operations.queries.push({
+          collectionName,
+          filters: structuredClone(state.filters),
+          orderField: state.orderField,
+          maximum: state.maximum,
+        });
         const docs = matchingEntries().map(([id]) => snapshot(document(collectionName, id)));
         return { docs, empty: docs.length === 0 };
       },
@@ -93,6 +98,8 @@ function fakeFirestore() {
   };
   const firestore = {
     operations,
+    failCatalogTransactionAt: null,
+    catalogTransactionCount: 0,
     collection(name) {
       const query = buildQuery(name);
       return {
@@ -107,7 +114,8 @@ function fakeFirestore() {
       return references.map(snapshot);
     },
     async runTransaction(operation) {
-      return operation({
+      let touchedCatalogRecord = false;
+      const result = await operation({
         async get(target) {
           return target.get();
         },
@@ -116,6 +124,9 @@ function fakeFirestore() {
           return references.map(snapshot);
         },
         set(reference, value) {
+          if (/^catalogDatabases\/[^/]+\/(brasfootLeagues|brasfootClubs|brasfootPlayers|tournaments)$/.test(reference.collectionName)) {
+            touchedCatalogRecord = true;
+          }
           records(reference.collectionName).set(reference.id, structuredClone(value));
         },
         update(reference, changes) {
@@ -126,6 +137,14 @@ function fakeFirestore() {
           records(reference.collectionName).delete(reference.id);
         },
       });
+      if (touchedCatalogRecord) {
+        firestore.catalogTransactionCount += 1;
+        if (firestore.catalogTransactionCount === firestore.failCatalogTransactionAt) {
+          firestore.failCatalogTransactionAt = null;
+          throw new Error("falha simulada durante importacao");
+        }
+      }
+      return result;
     },
   };
   return firestore;
@@ -173,7 +192,10 @@ function club(id = "AUR", leagueId = "BR-A") {
     name: "Aurora FC",
     abbreviation: "AUR",
     colors: ["#bfff00", "#101414"],
+    darkThemeColor: "#e7e7e7",
+    lightThemeColor: "#171a17",
     stadium: "Estadio Aurora",
+    stadiumCapacity: 36_250,
     reputation: 14,
     division: "Serie A",
     country: "Brasil",
@@ -239,7 +261,47 @@ test("config normaliza UIDs administrativos sem duplicatas", () => {
   );
 });
 
-test("Editor preserva claim booleano, aceita UID configurado e nega demais em producao", async (context) => {
+test("retoma automaticamente uma base que fica abandonada durante a espera", async () => {
+  const firestore = fakeFirestore();
+  const ownerId = "uid-orphan";
+  await firestore.runTransaction(async (transaction) => {
+    transaction.set(firestore.collection("catalogDatabases").doc(ownerId), {
+      ownerId,
+      initialized: false,
+      status: "initializing",
+      initializationId: "attempt-that-crashed",
+      initializationStartedAt: "2026-07-15T02:14:00.000Z",
+      initializationHeartbeatAt: "2026-07-15T02:14:00.000Z",
+    });
+    transaction.set(firestore.collection("brasfootLeagues").doc("BR-A"), league());
+    transaction.set(firestore.collection("brasfootClubs").doc("AUR"), club());
+    transaction.set(firestore.collection("brasfootPlayers").doc("AUR-9"), player());
+  });
+
+  let clockReads = 0;
+  const catalog = new CatalogStore({
+    firestore,
+    now: () => new Date(clockReads++ === 0
+      ? "2026-07-15T02:14:00.000Z"
+      : "2026-07-15T02:14:31.000Z"),
+  }).forOwner(ownerId);
+  await catalog.ensureInitialized();
+
+  const metadata = await firestore.collection("catalogDatabases").doc(ownerId).get();
+  assert.equal(metadata.data().initialized, true);
+  assert.equal(metadata.data().status, "ready");
+  assert.deepEqual(metadata.data().counts, {
+    leagues: 1,
+    clubs: 1,
+    players: 1,
+    tournaments: 0,
+  });
+  assert.equal((await catalog.collection("leagues").doc("BR-A").get()).exists, true);
+  assert.equal((await catalog.collection("clubs").doc("AUR").get()).exists, true);
+  assert.equal((await catalog.collection("players").doc("AUR-9").get()).exists, true);
+});
+
+test("Editor libera uma base isolada para toda conta Firebase em producao", async (context) => {
   const firestore = fakeFirestore();
   const { server, url } = await startTestServer({
     firebase: fakeFirebase({ firestore }),
@@ -247,32 +309,26 @@ test("Editor preserva claim booleano, aceita UID configurado e nega demais em pr
   });
   context.after(() => server.close());
 
-  for (const token of ["editor-token", "admin-token"]) {
+  for (const token of ["editor-token", "admin-token", "owner-token", "string-editor-token"]) {
     const response = await jsonRequest(`${url}/api/editor/access`, token);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { canEdit: true });
-  }
-
-  for (const token of ["owner-token", "string-editor-token"]) {
-    const access = await jsonRequest(`${url}/api/editor/access`, token);
-    assert.deepEqual(await access.json(), { canEdit: false });
     const catalog = await jsonRequest(`${url}/api/editor/catalog`, token);
-    assert.equal(catalog.status, 403);
-    assert.equal((await catalog.json()).error.code, "EDITOR_FORBIDDEN");
+    assert.equal(catalog.status, 200);
   }
 });
 
-test("bypass local exige flag explicita e nunca libera demo", async (context) => {
+test("Editor pessoal independe de bypass local e nunca libera demo", async (context) => {
   const firestore = fakeFirestore();
   const closedServer = await startTestServer({ firebase: fakeFirebase({ firestore }) });
   context.after(() => closedServer.server.close());
   assert.deepEqual(
     await (await jsonRequest(`${closedServer.url}/api/editor/access`, "owner-token")).json(),
-    { canEdit: false },
+    { canEdit: true },
   );
   assert.equal(
     (await jsonRequest(`${closedServer.url}/api/editor/catalog`, "owner-token")).status,
-    403,
+    200,
   );
 
   const localServer = await startTestServer({
@@ -324,8 +380,32 @@ test("CRUD lista catalogo, registra auditoria, mantem ID imutavel e permite arqu
     assert.equal(record.createdAt, "2026-07-12T15:30:00.000Z");
     assert.equal(record.updatedAt, record.createdAt);
     assert.equal(record.updatedBy, "uid-owner");
-    if (entity === "players") assert.equal(record.isStar, false);
-    if (entity === "clubs") assert.equal(record.crestImagePath, null);
+    if (entity === "players") {
+      assert.equal(record.isStar, false);
+      assert.equal(record.overall, 15);
+      assert.deepEqual(
+        Object.fromEntries([
+          "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
+        ].map((key) => [key, record.attributes[key]])),
+        {
+          forca: 10,
+          resistencia: 10,
+          impulsao: 10,
+          reflexos: 10,
+          posicionamentoGol: 10,
+          saidaGol: 10,
+          penaltis: 10,
+        },
+      );
+    }
+    if (entity === "clubs") {
+      assert.equal(record.crestImagePath, null);
+      assert.deepEqual(record.colors, ["#bfff00", "#101414"]);
+      assert.equal(record.darkThemeColor, "#e7e7e7");
+      assert.equal(record.lightThemeColor, "#171a17");
+      assert.equal(record.stadium, "Estadio Aurora");
+      assert.equal(record.stadiumCapacity, 36_250);
+    }
     if (entity === "players") assert.equal(record.avatarImagePath, null);
     if (entity === "tournaments") assert.equal(record.trophyImagePath, null);
   }
@@ -335,6 +415,14 @@ test("CRUD lista catalogo, registra auditoria, mantem ID imutavel e permite arqu
   assert.deepEqual(catalog.clubs.map((record) => record.id), ["AUR"]);
   assert.deepEqual(catalog.players.map((record) => record.id), ["AUR-9"]);
   assert.deepEqual(catalog.tournaments.map((record) => record.id), ["COPA-AUR"]);
+  assert.equal(catalog.clubs[0].stadium, "Estadio Aurora");
+  assert.equal(catalog.clubs[0].stadiumCapacity, 36_250);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(catalog.clubs[0]).filter(([key]) => (
+      ["colors", "darkThemeColor", "lightThemeColor"].includes(key)
+    ))),
+    { colors: ["#bfff00", "#101414"], darkThemeColor: "#e7e7e7", lightThemeColor: "#171a17" },
+  );
   assert.deepEqual(catalog.meta.players, {
     count: 1,
     returned: 1,
@@ -343,6 +431,73 @@ test("CRUD lista catalogo, registra auditoria, mantem ID imutavel e permite arqu
     hasMore: false,
     filters: { query: null, clubId: null },
   });
+
+  const recalculated = await jsonRequest(`${url}/api/editor/players/AUR-9`, "owner-token", {
+    method: "PATCH",
+    body: { overall: 1, attributes: { ...player().attributes, chute: 20 } },
+  });
+  assert.equal(recalculated.status, 200);
+  assert.equal((await recalculated.json()).record.overall, 16);
+
+  const recolored = await jsonRequest(`${url}/api/editor/clubs/AUR`, "owner-token", {
+    method: "PATCH",
+    body: {
+      colors: ["#ffffff", "#101414", "#112233"],
+      darkThemeColor: "#f0f0f0",
+      lightThemeColor: "#202420",
+    },
+  });
+  assert.equal(recolored.status, 200);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries((await recolored.json()).record).filter(([key]) => (
+      ["colors", "darkThemeColor", "lightThemeColor"].includes(key)
+    ))),
+    { colors: ["#ffffff", "#101414", "#112233"], darkThemeColor: "#f0f0f0", lightThemeColor: "#202420" },
+  );
+
+  const invalidThemeColor = await jsonRequest(`${url}/api/editor/clubs/AUR`, "owner-token", {
+    method: "PATCH",
+    body: { darkThemeColor: "branco" },
+  });
+  assert.equal(invalidThemeColor.status, 400);
+  assert.equal((await invalidThemeColor.json()).error.code, "VALIDATION_ERROR");
+
+  const renovatedStadium = await jsonRequest(`${url}/api/editor/clubs/AUR`, "owner-token", {
+    method: "PATCH",
+    body: { stadium: "Arena Aurora", stadiumCapacity: 42_500 },
+  });
+  assert.equal(renovatedStadium.status, 200);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries((await renovatedStadium.json()).record)
+      .filter(([key]) => ["stadium", "stadiumCapacity"].includes(key))),
+    { stadium: "Arena Aurora", stadiumCapacity: 42_500 },
+  );
+
+  const invalidStadiumCapacity = await jsonRequest(`${url}/api/editor/clubs/AUR`, "owner-token", {
+    method: "PATCH",
+    body: { stadiumCapacity: 500_001 },
+  });
+  assert.equal(invalidStadiumCapacity.status, 400);
+  assert.equal((await invalidStadiumCapacity.json()).error.code, "VALIDATION_ERROR");
+
+  const competitionCatalog = await catalogStore.forOwner("uid-owner").listCompetitionCatalog();
+  const publicAurora = competitionCatalog[0].clubs.find((item) => item.id === "AUR");
+  assert.equal(publicAurora.stadium, "Arena Aurora");
+  assert.equal(publicAurora.stadiumCapacity, 42_500);
+
+  const legacyClub = club("LEG");
+  delete legacyClub.darkThemeColor;
+  delete legacyClub.lightThemeColor;
+  delete legacyClub.stadiumCapacity;
+  const legacyResponse = await jsonRequest(`${url}/api/editor/clubs`, "owner-token", {
+    method: "POST",
+    body: { ...legacyClub, name: "Clube legado" },
+  });
+  assert.equal(legacyResponse.status, 201);
+  const legacyRecord = (await legacyResponse.json()).record;
+  assert.equal(legacyRecord.darkThemeColor, null);
+  assert.equal(legacyRecord.lightThemeColor, null);
+  assert.equal(legacyRecord.stadiumCapacity, 0);
 
   const invalidTournamentPatch = await jsonRequest(
     `${url}/api/editor/tournaments/COPA-AUR`,
@@ -373,6 +528,189 @@ test("CRUD lista catalogo, registra auditoria, mantem ID imutavel e permite arqu
   const removed = await jsonRequest(`${url}/api/editor/players/AUR-9`, "owner-token", { method: "DELETE" });
   assert.equal(removed.status, 200);
   assert.deepEqual(await removed.json(), { deleted: true, id: "AUR-9", mediaRemoved: true });
+});
+
+test("exclusao em lote e atomica e respeita dependencias", async (context) => {
+  const firestore = fakeFirestore();
+  const { server, url } = await startTestServer({
+    firebase: fakeFirebase({ firestore }),
+    env: { NODE_ENV: "production" },
+  });
+  context.after(() => server.close());
+
+  await jsonRequest(`${url}/api/editor/leagues`, "owner-token", { method: "POST", body: league() });
+  await jsonRequest(`${url}/api/editor/clubs`, "owner-token", { method: "POST", body: club() });
+  await jsonRequest(`${url}/api/editor/clubs`, "owner-token", {
+    method: "POST",
+    body: { ...club("LIVRE"), name: "Clube Livre", abbreviation: "LIV" },
+  });
+  await jsonRequest(`${url}/api/editor/players`, "owner-token", { method: "POST", body: player() });
+
+  const missingPlayer = await jsonRequest(`${url}/api/editor/players/bulk-delete`, "owner-token", {
+    method: "POST",
+    body: { ids: ["AUR-9", "NAO-EXISTE"] },
+  });
+  assert.equal(missingPlayer.status, 404);
+  assert.equal((await missingPlayer.json()).error.code, "EDITOR_RECORD_NOT_FOUND");
+  const playersAfterMissing = await (await jsonRequest(
+    `${url}/api/editor/players?clubId=AUR`,
+    "owner-token",
+  )).json();
+  assert.deepEqual(playersAfterMissing.records.map((record) => record.id), ["AUR-9"]);
+
+  const blockedClubs = await jsonRequest(`${url}/api/editor/clubs/bulk-delete`, "owner-token", {
+    method: "POST",
+    body: { ids: ["LIVRE", "AUR"] },
+  });
+  assert.equal(blockedClubs.status, 409);
+  assert.equal((await blockedClubs.json()).error.code, "EDITOR_CLUB_IN_USE");
+  const clubsAfterBlocked = await (await jsonRequest(`${url}/api/editor/clubs`, "owner-token")).json();
+  assert.deepEqual(clubsAfterBlocked.records.map((record) => record.id).sort(), ["AUR", "LIVRE"]);
+
+  await jsonRequest(`${url}/api/editor/players`, "owner-token", {
+    method: "POST",
+    body: { ...player("AUR-10"), name: "Bruno Lima", shirtNumber: 10 },
+  });
+  const removedPlayers = await jsonRequest(`${url}/api/editor/players/bulk-delete`, "owner-token", {
+    method: "POST",
+    body: { ids: ["AUR-9", "AUR-10"] },
+  });
+  assert.equal(removedPlayers.status, 200);
+  assert.deepEqual(await removedPlayers.json(), {
+    deleted: true,
+    ids: ["AUR-9", "AUR-10"],
+    count: 2,
+    mediaRemoved: true,
+    removedMediaCount: 0,
+    failedMediaCount: 0,
+  });
+  assert.equal((await (await jsonRequest(
+    `${url}/api/editor/players?clubId=AUR`,
+    "owner-token",
+  )).json()).count, 0);
+
+  const duplicateIds = await jsonRequest(`${url}/api/editor/clubs/bulk-delete`, "owner-token", {
+    method: "POST",
+    body: { ids: ["AUR", "AUR"] },
+  });
+  assert.equal(duplicateIds.status, 400);
+  assert.equal((await duplicateIds.json()).error.code, "VALIDATION_ERROR");
+});
+
+test("exporta, compartilha e importa bases sem misturar donos nem transferir posse da imagem", async (context) => {
+  const firestore = fakeFirestore();
+  const { server, url } = await startTestServer({
+    firebase: fakeFirebase({ firestore }),
+    env: { NODE_ENV: "production" },
+  });
+  context.after(() => server.close());
+
+  await jsonRequest(`${url}/api/editor/leagues`, "editor-token", { method: "POST", body: {
+    ...league("ES-1"), name: "La Liga", country: "Espanha", division: "Primera Division",
+  } });
+  await jsonRequest(`${url}/api/editor/clubs`, "editor-token", { method: "POST", body: {
+    ...club("RMA", "ES-1"),
+    name: "Real Madrid",
+    country: "Espanha",
+    division: "Primera Division",
+    crestImageUrl: "https://cdn.example.com/real-madrid.png",
+    crestImagePath: "editor-media/clubs/real-madrid/owner.png",
+  } });
+  await jsonRequest(`${url}/api/editor/players`, "editor-token", { method: "POST", body: {
+    ...player("RMA-10", "RMA"), name: "Craque Espanhol", nationality: "Espanha", isStar: true,
+  } });
+
+  const exportedResponse = await jsonRequest(`${url}/api/editor/database/export`, "editor-token");
+  assert.equal(exportedResponse.status, 200);
+  assert.match(exportedResponse.headers.get("content-disposition"), /bola-manager-base-/);
+  const database = await exportedResponse.json();
+  assert.equal(database.format, "bola-manager-database");
+  assert.equal(database.version, 1);
+  assert.deepEqual(database.summary.countries, ["Espanha"]);
+  assert.equal(database.records.clubs[0].stadium, "Estadio Aurora");
+  assert.equal(database.records.clubs[0].stadiumCapacity, 36_250);
+  assert.equal(database.records.players[0].attributes.reflexos, 10);
+  assert.equal(database.records.players[0].attributes.resistencia, 10);
+  database.records.players[0].shortName = "Craque";
+  database.records.players[0].marketValue = 125_000_000;
+  database.records.players[0].worldStar = true;
+  database.records.clubs[0].crestImagePath = "editor-media/clubs/real-madrid/owner.png";
+  const legacyDatabase = structuredClone(database);
+  for (const key of [
+    "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
+  ]) delete legacyDatabase.records.players[0].attributes[key];
+
+  const restoredOwnBackup = await fetch(`${url}/api/editor/database/import?mode=merge`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer editor-token",
+      "content-type": "application/octet-stream",
+    },
+    body: Buffer.from(JSON.stringify(legacyDatabase)),
+  });
+  assert.equal(restoredOwnBackup.status, 200);
+  const restoredOwnerCatalog = await (await jsonRequest(`${url}/api/editor/catalog`, "editor-token")).json();
+  assert.equal(restoredOwnerCatalog.clubs[0].crestImagePath, "editor-media/clubs/real-madrid/owner.png");
+  assert.equal(restoredOwnerCatalog.players[0].attributes.posicionamentoGol, 10);
+
+  const failedDatabase = structuredClone(database);
+  failedDatabase.records.clubs[0].name = "Nome que deve sofrer rollback";
+  firestore.failCatalogTransactionAt = firestore.catalogTransactionCount + 1;
+  const failedImport = await fetch(`${url}/api/editor/database/import?mode=merge`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer editor-token",
+      "content-type": "application/octet-stream",
+    },
+    body: Buffer.from(JSON.stringify(failedDatabase)),
+  });
+  assert.equal(failedImport.status, 500);
+  const afterRollback = await (await jsonRequest(`${url}/api/editor/catalog`, "editor-token")).json();
+  assert.equal(afterRollback.clubs[0].name, "Real Madrid");
+  assert.equal(afterRollback.clubs[0].crestImagePath, "editor-media/clubs/real-madrid/owner.png");
+
+  const importedResponse = await fetch(`${url}/api/editor/database/import?mode=merge`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer second-token",
+      "content-type": "application/octet-stream",
+    },
+    body: Buffer.from(JSON.stringify(database)),
+  });
+  assert.equal(importedResponse.status, 200);
+  const imported = await importedResponse.json();
+  assert.equal(imported.mode, "merge");
+  assert.equal(imported.counts.players, 1);
+
+  const recipientCatalog = await (await jsonRequest(`${url}/api/editor/catalog`, "second-token")).json();
+  assert.deepEqual(recipientCatalog.leagues.map((item) => item.id), ["ES-1"]);
+  assert.equal(recipientCatalog.clubs[0].crestImageUrl, "https://cdn.example.com/real-madrid.png");
+  assert.equal(recipientCatalog.clubs[0].crestImagePath, null);
+  assert.equal(recipientCatalog.clubs[0].stadium, "Estadio Aurora");
+  assert.equal(recipientCatalog.clubs[0].stadiumCapacity, 36_250);
+  assert.equal(recipientCatalog.players[0].shortName, "Craque");
+  assert.equal(recipientCatalog.players[0].marketValue, 125_000_000);
+  assert.equal(recipientCatalog.players[0].worldStar, true);
+  assert.equal(recipientCatalog.players[0].attributes.forca, 10);
+  assert.equal(recipientCatalog.players[0].attributes.reflexos, 10);
+
+  await jsonRequest(`${url}/api/editor/clubs/RMA`, "second-token", {
+    method: "PATCH", body: { name: "Real Madrid da copia" },
+  });
+  const ownerCatalog = await (await jsonRequest(`${url}/api/editor/catalog`, "editor-token")).json();
+  assert.equal(ownerCatalog.clubs[0].name, "Real Madrid");
+
+  const invalid = { ...database, version: 99 };
+  const invalidResponse = await fetch(`${url}/api/editor/database/import`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer second-token",
+      "content-type": "application/octet-stream",
+    },
+    body: Buffer.from(JSON.stringify(invalid)),
+  });
+  assert.equal(invalidResponse.status, 400);
+  assert.equal((await invalidResponse.json()).error.code, "CATALOG_DATABASE_VERSION_UNSUPPORTED");
 });
 
 test("Editor pagina e pesquisa por entidade sem carregar o catalogo inteiro", async (context) => {
@@ -419,6 +757,13 @@ test("Editor pagina e pesquisa por entidade sem carregar o catalogo inteiro", as
   )).json();
   assert.equal(search.count, 1);
   assert.deepEqual(search.records.map((record) => record.name), ["Bruno Lima"]);
+  assert.equal(
+    firestore.operations.queries.some((operation) => (
+      operation.orderField === "name"
+      && operation.filters.some((filter) => filter.field === "clubId")
+    )),
+    false,
+  );
 
   const catalog = await (await jsonRequest(`${url}/api/editor/catalog?limit=1`, "owner-token")).json();
   assert.equal(catalog.players.length, 1);
@@ -465,7 +810,7 @@ test("catalogo autenticado de torneios lista somente ativos com participantes e 
     body: { ...tournament("ARQUIVADO"), name: "Torneio Arquivado" },
   });
 
-  const response = await jsonRequest(`${url}/api/tournaments`, "intruder-token");
+  const response = await jsonRequest(`${url}/api/tournaments`, "editor-token");
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.equal(payload.count, 1);
@@ -474,11 +819,20 @@ test("catalogo autenticado de torneios lista somente ativos com participantes e 
   assert.equal(payload.tournaments[0].trophyImageUrl, "https://cdn.example.com/copa.webp");
   assert.equal(payload.tournaments[0].participants[0].id, "AUR");
   assert.equal(payload.tournaments[0].participants[0].crestImageUrl, "https://cdn.example.com/aurora.webp");
-  assert.deepEqual(firestore.operations.getAll.at(-1), ["brasfootClubs/AUR", "brasfootClubs/BOR"]);
+  assert.equal(payload.tournaments[0].participants[0].darkThemeColor, "#e7e7e7");
+  assert.equal(payload.tournaments[0].participants[0].lightThemeColor, "#171a17");
+  assert.deepEqual(firestore.operations.getAll.at(-1), [
+    "catalogDatabases/uid-editor/brasfootClubs/AUR",
+    "catalogDatabases/uid-editor/brasfootClubs/BOR",
+  ]);
   assert.equal(
-    firestore.operations.queries.some((operation) => operation.collectionName === "brasfootClubs"),
+    firestore.operations.queries.some((operation) => (
+      operation.collectionName === "catalogDatabases/uid-editor/brasfootClubs"
+    )),
     false,
   );
+  const isolated = await (await jsonRequest(`${url}/api/tournaments`, "intruder-token")).json();
+  assert.equal(isolated.count, 0);
   assert.equal((await fetch(`${url}/api/tournaments`)).status, 401);
 });
 
@@ -716,7 +1070,8 @@ test("upload de midia valida, associa ao registro e substitui o objeto anterior"
   assert.equal(bucket.saved.size, savedCount);
 
   const forbidden = await uploadEntity({ token: "intruder-token" });
-  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.status, 404);
+  assert.equal((await forbidden.json()).error.code, "EDITOR_RECORD_NOT_FOUND");
   assert.equal(bucket.saved.size, savedCount);
 
   const unsupported = await uploadEntity({ body: Buffer.from("gif"), contentType: "image/gif" });

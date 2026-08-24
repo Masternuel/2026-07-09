@@ -1,6 +1,7 @@
 import { createBolaManagerServer } from "../index.mjs";
 import { MemoryRoomPersistence } from "../store/roomPersistence.mjs";
 import { RoomStore } from "../store/roomStore.mjs";
+import { MemoryMatchSessionPersistence } from "../store/matchSessionPersistence.mjs";
 
 const USERS = {
   "owner-token": { uid: "uid-owner", name: "Dona da Sala", email: "owner@example.com" },
@@ -27,6 +28,16 @@ export function fakeFirebase({ firestore = null, bucket = null } = {}) {
   };
 }
 
+export function automaticallyReadyAtHalftime(socket) {
+  socket.once("match:halftime", (halftime) => {
+    void socket.timeout(1_000).emitWithAck("match:halftime-ready", {
+      code: halftime.code,
+      matchId: halftime.matchId,
+      ready: true,
+    }).catch(() => {});
+  });
+}
+
 export async function startTestServer({
   store: injectedStore,
   newsStore,
@@ -37,6 +48,7 @@ export async function startTestServer({
   firebase,
   env = {},
   matchDelayMs = 0,
+  matchSessionStore,
 } = {}) {
   const store = injectedStore ?? new RoomStore({
     persistence: new MemoryRoomPersistence(),
@@ -57,6 +69,7 @@ export async function startTestServer({
     catalogStore,
     mediaService,
     brasfootImportService,
+    matchSessionStore: matchSessionStore ?? new MemoryMatchSessionPersistence(),
     logger: { error() {} },
   });
   const address = await server.listen(0);

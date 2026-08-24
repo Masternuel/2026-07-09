@@ -1,19 +1,24 @@
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowLeft, Check, ChevronRight, Copy, Database, Infinity as InfinityIcon, Link2, LockKeyhole, Plus, Radio, Save, Settings2, Shield, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy, Database, Infinity as InfinityIcon, Link2, LockKeyhole, Plus, Radio, Save, Settings2, Shield, Zap } from 'lucide-react';
 import { SaveManager } from '../components/lobby/SaveManager';
 import { Badge } from '../components/shared/Badge';
 import { Button } from '../components/shared/Button';
 import { ClubMark } from '../components/shared/ClubMark';
-import { clubByCode, type ClubOption } from '../constants/clubs';
+import { CountryFlag } from '../components/shared/CountryFlag';
+import type { ClubOption } from '../constants/clubs';
 import type { ClubCatalogSource } from '../hooks/useClubCatalog';
 import type { SocketState } from '../hooks/useSocket';
-import type { ClubChoice, ManagerIdentity, Room, RoomCreatePayload } from '../types';
+import type { ClubChoice, LeagueChoice, ManagerIdentity, Room, RoomCreatePayload } from '../types';
+import { defaultLeagueIds, groupLeaguesByCountry, initialOpenCountryKey, resolveLeagueSelectionAfterCatalogChange } from '../utils/leagueCountryGroups';
 
 interface LobbyViewProps {
   clubs: ClubOption[];
+  leagues: LeagueChoice[];
   catalogLoading: boolean;
   catalogSource: ClubCatalogSource;
   catalogError: string | null;
+  leagueCatalogLoading: boolean;
+  leagueCatalogError: string | null;
   identity: ManagerIdentity;
   room: Room | null;
   savedRooms: Room[];
@@ -31,46 +36,122 @@ interface LobbyViewProps {
   onStart: () => Promise<Room>;
   onEnterGame: () => void;
   onOpenEditor: () => void;
+  onRefreshCatalog: () => void;
   onClubSelected: (club: ClubChoice) => void;
   onToast: (message: string) => void;
 }
 
 const lobbyTabs = ['saves', 'create', 'join'] as const;
 
+function identifierKey(value: string | null | undefined) {
+  return String(value ?? '').trim().toLocaleUpperCase('pt-BR');
+}
+
+function countryPanelId(countryKey: string) {
+  const suffix = countryKey.toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]+/g, '-');
+  return `league-country-${suffix || 'unknown'}`;
+}
+
+function divisionDescriptor(league: LeagueChoice) {
+  const division = league.division.trim();
+  if (division && identifierKey(division) !== identifierKey(league.name)) {
+    return /^\d+$/.test(division) ? `Nível ${division}` : division;
+  }
+  return `Nível ${league.level}`;
+}
+
 export function LobbyView(props: LobbyViewProps) {
   const [tab, setTab] = useState<'saves' | 'create' | 'join'>('saves');
   const [roomName, setRoomName] = useState('Noite dos Managers');
-  const [selectedClub, setSelectedClub] = useState(() => props.clubs[0]?.id ?? 'AUR');
+  const [selectedClub, setSelectedClub] = useState('');
   const [seasonLength, setSeasonLength] = useState('3');
   const [maxManagers, setMaxManagers] = useState('6');
+  const [selectedLeagueIds, setSelectedLeagueIds] = useState<string[]>(() => defaultLeagueIds(props.leagues));
+  const [openCountryKey, setOpenCountryKey] = useState<string | null>(() => (
+    initialOpenCountryKey(groupLeaguesByCountry(props.leagues), defaultLeagueIds(props.leagues))
+  ));
+  const previousDefaultLeagueIds = useRef(defaultLeagueIds(props.leagues));
+  const leagueSelectionEdited = useRef(false);
+
+  const leagueCountryGroups = useMemo(() => groupLeaguesByCountry(props.leagues), [props.leagues]);
 
   const currentManager = props.room?.managers.find((manager) => manager.id === props.identity.uid);
-  const selected = useMemo(
-    () => clubByCode(selectedClub, props.clubs),
-    [selectedClub, props.clubs],
+  const activeLeagueKeys = useMemo(
+    () => new Set((props.room?.activeLeagues ?? []).map(identifierKey)),
+    [props.room?.activeLeagues],
   );
-  const selectedExists = props.clubs.some((club) => club.id === selectedClub);
-  const restoringSavedClub = Boolean(currentManager?.clubId && !selectedExists);
+  const roomClubs = useMemo(() => {
+    if (!props.room || activeLeagueKeys.size === 0) return props.clubs;
+    return props.clubs.filter((club) => Boolean(club.leagueId && activeLeagueKeys.has(identifierKey(club.leagueId))));
+  }, [props.room, props.clubs, activeLeagueKeys]);
+  const selected = useMemo(
+    () => roomClubs.find((club) => identifierKey(club.id) === identifierKey(selectedClub)) ?? null,
+    [selectedClub, roomClubs],
+  );
+  const selectedExists = selected !== null;
+  const restoringSavedClub = Boolean(
+    currentManager?.clubId
+    && !selectedExists
+    && (props.catalogLoading || props.leagueCatalogLoading),
+  );
   const isOwner = props.room?.ownerId === props.identity.uid;
   const allReady = Boolean(props.room?.managers.length && props.room.managers.every((manager) => manager.ready));
+  const selectedUnderfilledLeagues = props.leagues.filter((league) => (
+    selectedLeagueIds.includes(league.id) && league.clubCount === 1
+  ));
+  const selectedClubCount = props.leagues.reduce((total, league) => (
+    selectedLeagueIds.includes(league.id) ? total + league.clubCount : total
+  ), 0);
+  const selectableLeagueCount = props.leagues.filter((league) => league.clubCount > 0).length;
+
+  useEffect(() => {
+    if (props.room) return;
+    const previousDefaults = previousDefaultLeagueIds.current;
+    previousDefaultLeagueIds.current = defaultLeagueIds(props.leagues);
+    setSelectedLeagueIds((current) => resolveLeagueSelectionAfterCatalogChange(
+      current,
+      previousDefaults,
+      props.leagues,
+      leagueSelectionEdited.current,
+    ));
+  }, [props.leagues, props.room]);
+
+  useEffect(() => {
+    setOpenCountryKey((current) => (
+      current && leagueCountryGroups.some((group) => group.key === current)
+        ? current
+        : initialOpenCountryKey(leagueCountryGroups, selectedLeagueIds)
+    ));
+  }, [leagueCountryGroups, selectedLeagueIds]);
 
   useEffect(() => {
     const savedClubId = currentManager?.clubId;
     setSelectedClub((current) => {
       if (savedClubId) return savedClubId;
-      return props.clubs.some((club) => club.id === current)
+      return roomClubs.some((club) => identifierKey(club.id) === identifierKey(current))
         ? current
-        : props.clubs[0]?.id ?? current;
+        : '';
     });
-  }, [currentManager?.clubId, props.clubs]);
+  }, [currentManager?.clubId, roomClubs]);
+
+  function toggleLeague(leagueId: string) {
+    leagueSelectionEdited.current = true;
+    setSelectedLeagueIds((current) => current.includes(leagueId)
+      ? current.filter((candidate) => candidate !== leagueId)
+      : [...current, leagueId]);
+  }
 
   async function createRoom() {
+    if (selectedLeagueIds.length === 0) {
+      props.onToast('Selecione pelo menos uma liga para criar a temporada.');
+      return;
+    }
     const unlimitedSeasons = seasonLength === 'unlimited';
     const finiteSeasonLength = ['1', '3', '5'].includes(seasonLength) ? Number(seasonLength) : 1;
     try {
       await props.onCreate({
         name: roomName,
-        activeLeagues: ['BR-A', 'BR-B', 'AR-A'],
+        activeLeagues: [...selectedLeagueIds],
         seasonLength: unlimitedSeasons ? 1 : finiteSeasonLength,
         unlimitedSeasons,
         maxManagers: Number(maxManagers),
@@ -93,6 +174,10 @@ export function LobbyView(props: LobbyViewProps) {
   }
 
   async function confirmClub() {
+    if (!selectedExists || !selected) {
+      props.onToast('Nenhum clube está disponível nas ligas ativas desta sala.');
+      return;
+    }
     try {
       await props.onReady(true, selected.id);
       props.onClubSelected(selected);
@@ -105,7 +190,7 @@ export function LobbyView(props: LobbyViewProps) {
   async function startSeason() {
     try {
       await props.onStart();
-      props.onToast(`Temporada iniciada com o ${selected.name}.`);
+      props.onToast(selected ? `Temporada iniciada com o ${selected.name}.` : 'Temporada iniciada.');
     } catch {
       // O hook mantém a mensagem de erro visível.
     }
@@ -136,7 +221,7 @@ export function LobbyView(props: LobbyViewProps) {
 
   const connectionLabel = props.connectionState === 'connected'
     ? 'TEMPO REAL CONECTADO'
-    : props.connectionState === 'connecting' ? 'CONECTANDO AO SERVIDOR' : 'MODO LOCAL / RECONECTANDO';
+    : props.connectionState === 'connecting' ? 'CONECTANDO AO SERVIDOR' : 'DESCONECTADO / RECONECTANDO';
 
   return (
     <main className="lobby-screen">
@@ -194,11 +279,68 @@ export function LobbyView(props: LobbyViewProps) {
                 {seasonLength === 'unlimited' && <p className="unlimited-season-note" id="unlimited-season-note" role="note"><InfinityIcon size={15} aria-hidden="true" /> A carreira gera uma nova temporada automaticamente após a última rodada.</p>}
                 <fieldset className="league-selector">
                   <legend>Ligas ativas</legend>
-                  <label><input type="checkbox" defaultChecked /><span>BR</span> Brasil · Séries A e B</label>
-                  <label><input type="checkbox" defaultChecked /><span>AR</span> Argentina · Primera</label>
-                  <label><input type="checkbox" /><span>EU</span> Top 5 da Europa</label>
+                  <div className="league-selector__countries">
+                    {leagueCountryGroups.map((group) => {
+                      const expanded = openCountryKey === group.key;
+                      const panelId = countryPanelId(group.key);
+                      const headingId = `${panelId}-heading`;
+                      const selectedCount = group.leagues.filter((league) => selectedLeagueIds.includes(league.id)).length;
+                      return (
+                        <section className={`league-country${expanded ? ' league-country--open' : ''}`} key={group.key}>
+                          <button
+                            id={headingId}
+                            className="league-country__trigger"
+                            type="button"
+                            aria-expanded={expanded}
+                            aria-controls={panelId}
+                            onClick={() => setOpenCountryKey((current) => current === group.key ? null : group.key)}
+                          >
+                            <span className="league-country__identity">
+                              <strong>
+                                <CountryFlag className="league-country__flag" country={group.key} />
+                                <span className="league-country__name">{group.label}</span>
+                              </strong>
+                              <small>{selectedCount}/{group.leagues.length} {group.leagues.length === 1 ? 'divisão selecionada' : 'divisões selecionadas'}</small>
+                            </span>
+                            <span className="league-country__clubs">{group.clubCount} {group.clubCount === 1 ? 'clube' : 'clubes'}</span>
+                            <ChevronDown className="league-country__chevron" size={16} aria-hidden="true" />
+                          </button>
+                          <div className="league-country__divisions" id={panelId} role="region" aria-labelledby={headingId} hidden={!expanded}>
+                            {group.leagues.map((league) => {
+                              const unavailable = league.clubCount === 0;
+                              return (
+                                <label className={`league-division-row${unavailable ? ' league-division-row--disabled' : ''}`} key={league.id}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedLeagueIds.includes(league.id)}
+                                    disabled={props.pending || props.leagueCatalogLoading || unavailable}
+                                    onChange={() => toggleLeague(league.id)}
+                                  />
+                                  <span className="league-division-row__identity">
+                                    <strong>{league.name}</strong>
+                                    <small>{divisionDescriptor(league)}</small>
+                                  </span>
+                                  <span className="league-division-row__clubs">{league.clubCount} {league.clubCount === 1 ? 'clube' : 'clubes'}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                  {!props.leagues.length && <p className="form-note">Nenhuma liga ativa foi encontrada no catálogo.</p>}
+                  {props.leagues.length > 0 && (
+                    <p className="league-selector__summary" role="status" aria-live="polite">
+                      <strong>{selectedLeagueIds.length}</strong> de {selectableLeagueCount} divisões disponíveis · {selectedClubCount} {selectedClubCount === 1 ? 'clube' : 'clubes'} no save
+                    </p>
+                  )}
                 </fieldset>
-                <Button variant="primary" loading={props.pending} disabled={props.pending} onClick={() => void createRoom()} icon={<ChevronRight size={16} />}>Criar e escolher clube</Button>
+                {props.leagueCatalogLoading && <p className="form-note">Atualizando ligas disponíveis…</p>}
+                {props.leagueCatalogError && <div className="form-note" role="alert"><span>{props.leagueCatalogError}</span> <Button size="sm" variant="ghost" onClick={props.onRefreshCatalog}>Tentar novamente</Button></div>}
+                {selectedUnderfilledLeagues.length > 0 && <p className="form-note" role="note">{selectedUnderfilledLeagues.map((league) => league.name).join(', ')} precisa de pelo menos mais um clube ativo no Editor para iniciar partidas.</p>}
+                {!selectedLeagueIds.length && <p className="form-error" role="alert">Selecione pelo menos uma liga.</p>}
+                <Button variant="primary" loading={props.pending || props.leagueCatalogLoading} disabled={props.pending || props.leagueCatalogLoading || !props.leagues.length || !selectedLeagueIds.length} onClick={() => void createRoom()} icon={<ChevronRight size={16} />}>Criar e escolher clube</Button>
               </div>
             </div>
             <div id="lobby-panel-join" role="tabpanel" aria-labelledby="lobby-tab-join" hidden={tab !== 'join'}>
@@ -220,22 +362,23 @@ export function LobbyView(props: LobbyViewProps) {
 
             {props.error && <p className="form-error" role="alert">{props.error}</p>}
             <div className="club-selection">
-              <header><div><h2>Escolha seu clube</h2><p>Clubes confirmados por outro manager ficam bloqueados em tempo real.</p></div><Badge tone="info">{props.catalogLoading ? 'Atualizando…' : `${props.clubs.length} clubes · ${props.catalogSource === 'firestore' ? 'servidor' : 'demo'}`}</Badge></header>
-              {props.catalogError && <p className="form-note">{props.catalogError}</p>}
+              <header><div><h2>Escolha seu clube</h2><p>Clubes confirmados por outro manager ficam bloqueados em tempo real.</p></div><Badge tone="info">{props.catalogLoading || props.leagueCatalogLoading ? 'Atualizando…' : `${roomClubs.length} clubes · ${props.catalogSource === 'firestore' ? 'servidor' : 'demonstração explícita'}`}</Badge></header>
+              {(props.catalogError || props.leagueCatalogError) && <div className="form-note" role="alert"><span>{props.catalogError ?? props.leagueCatalogError}</span> <Button size="sm" variant="ghost" onClick={props.onRefreshCatalog}>Tentar novamente</Button></div>}
               <div className="club-list">
-                {props.clubs.map((club) => {
+                {roomClubs.map((club) => {
                   const holder = props.room?.managers.find((manager) => manager.id !== props.identity.uid && manager.clubId === club.id);
                   const available = !holder;
                   return (
                     <button key={club.id} disabled={!available || Boolean(currentManager?.ready)} className={club.id === selectedClub ? 'selected' : ''} onClick={() => setSelectedClub(club.id)}>
-                      <ClubMark code={club.code} color={club.color} imageUrl={club.crestImageUrl} />
-                      <span className="club-list__name"><strong>{club.name}</strong><small>{club.city}</small></span>
+                      <ClubMark code={club.code} color={club.color} darkThemeColor={club.darkThemeColor} lightThemeColor={club.lightThemeColor} imageUrl={club.crestImageUrl} />
+                      <span className="club-list__name"><strong>{club.name}</strong><small>{[club.leagueName, club.city].filter(Boolean).join(' · ')}</small></span>
                       <span className="club-list__metric"><small>FORÇA</small><strong>{club.stars.toFixed(1)} ★</strong></span>
                       <span className="club-list__metric"><small>CAIXA</small><strong>{club.budget}</strong></span>
                       <span className="club-list__status">{available ? club.id === selectedClub ? <Check size={15} /> : 'Livre' : 'Escolhido'}</span>
                     </button>
                   );
                 })}
+                {!roomClubs.length && <p className="form-note">Nenhum clube ativo pertence às ligas selecionadas para esta sala.</p>}
               </div>
             </div>
           </div>
@@ -243,13 +386,19 @@ export function LobbyView(props: LobbyViewProps) {
           <aside className="room-sidebar">
             <header><p className="eyebrow">VESTIÁRIO</p><h2>Managers <span>{props.room.managers.length}/{props.room.maxManagers}</span></h2></header>
             <div className="manager-list">
-              {props.room.managers.map((manager, index) => (
-                <div key={manager.id}>
+              {props.room.managers.map((manager, index) => {
+                const managerClub = manager.clubId
+                  ? props.clubs.find((candidate) => identifierKey(candidate.id) === identifierKey(manager.clubId))
+                  : null;
+                const clubLabel = manager.clubId
+                  ? managerClub?.name ?? `Clube ${manager.clubId} indisponível`
+                  : 'Escolhendo clube';
+                return <div key={manager.id}>
                   <span className={`avatar ${index % 2 ? 'avatar--blue' : ''}`}>{manager.name.slice(0, 2).toUpperCase()}</span>
-                  <span><strong>{manager.name}</strong><small>{manager.clubId ? clubByCode(manager.clubId, props.clubs).name : 'Escolhendo clube'}{manager.id === props.identity.uid ? ' · Você' : ''}</small></span>
+                  <span><strong>{manager.name}</strong><small>{clubLabel}{manager.id === props.identity.uid ? ' · Você' : ''}</small></span>
                   <Badge tone={manager.ready ? 'positive' : 'warning'} dot>{manager.ready ? 'Pronto' : 'Escolhendo'}</Badge>
-                </div>
-              ))}
+                </div>;
+              })}
               {props.room.managers.length < props.room.maxManagers && <div className="invite-slot"><Plus size={15} /> Aguardando manager</div>}
             </div>
             <div className="room-rules">
@@ -260,7 +409,7 @@ export function LobbyView(props: LobbyViewProps) {
             {props.room.status === 'active' ? (
               <Button variant="primary" onClick={props.onEnterGame} icon={<Zap size={16} />}>Entrar na temporada</Button>
             ) : !currentManager?.ready ? (
-              <Button variant="primary" loading={props.pending || props.catalogLoading} disabled={props.pending || props.catalogLoading || restoringSavedClub} onClick={() => void confirmClub()} icon={<Check size={16} />}>{restoringSavedClub ? 'Carregando clube salvo' : `Confirmar ${selected.name}`}</Button>
+              <Button variant="primary" loading={props.pending || props.catalogLoading || props.leagueCatalogLoading} disabled={props.pending || props.catalogLoading || props.leagueCatalogLoading || restoringSavedClub || !selectedExists} onClick={() => void confirmClub()} icon={<Check size={16} />}>{restoringSavedClub ? 'Carregando clube salvo' : selected ? `Confirmar ${selected.name}` : roomClubs.length ? 'Selecione um clube' : 'Nenhum clube disponível'}</Button>
             ) : isOwner && allReady ? (
               <Button variant="primary" loading={props.pending} disabled={props.pending} onClick={() => void startSeason()} icon={<Zap size={16} />}>Iniciar temporada</Button>
             ) : (

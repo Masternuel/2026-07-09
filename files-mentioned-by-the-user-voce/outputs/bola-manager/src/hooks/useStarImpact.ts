@@ -49,7 +49,7 @@ function starImpactError(error: unknown) {
   return 'Não foi possível calcular o impacto comercial das estrelas.';
 }
 
-export function useStarImpact(club: ClubChoice, credentials: ApiCredentials | null): StarImpactState {
+export function useStarImpact(club: ClubChoice, credentials: ApiCredentials | null, roomCode?: string | null): StarImpactState {
   const [state, setState] = useState<StarImpactState>({ profile: null, loading: Boolean(credentials), error: null });
 
   useEffect(() => {
@@ -59,8 +59,11 @@ export function useStarImpact(club: ClubChoice, credentials: ApiCredentials | nu
       return () => controller.abort();
     }
 
-    setState((current) => ({ ...current, loading: true, error: null }));
-    void apiRequest<unknown>(`/api/teams/${encodeURIComponent(club.id)}/star-impact`, credentials, { signal: controller.signal })
+    const query = new URLSearchParams();
+    if (roomCode?.trim()) query.set('roomCode', roomCode.trim());
+    const queryString = query.toString();
+    setState({ profile: null, loading: true, error: null });
+    void apiRequest<unknown>(`/api/teams/${encodeURIComponent(club.id)}/star-impact${queryString ? `?${queryString}` : ''}`, credentials, { signal: controller.signal })
       .then((payload) => {
         if (controller.signal.aborted) return;
         const profile = normalizeProfile(payload, club.id);
@@ -73,7 +76,7 @@ export function useStarImpact(club: ClubChoice, credentials: ApiCredentials | nu
       });
 
     return () => controller.abort();
-  }, [club, credentials]);
+  }, [club, credentials, roomCode]);
 
   return state;
 }

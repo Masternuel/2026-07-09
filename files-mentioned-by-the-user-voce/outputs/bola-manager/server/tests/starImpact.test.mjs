@@ -157,7 +157,7 @@ test("CatalogStore consulta por clubId, normaliza legado e devolve fallback sem 
   });
 });
 
-test("Aurora usa fallback demo apenas quando a consulta nao encontra nenhum jogador real", async () => {
+test("catalogo vazio nao inventa estrelas nem jogadores", async () => {
   const storeFor = (docs) => new CatalogStore({
     firestore: {
       collection() {
@@ -171,19 +171,16 @@ test("Aurora usa fallback demo apenas quando a consulta nao encontra nenhum joga
   });
 
   const fallback = await storeFor([]).getStarImpact("AUR");
-  assert.deepEqual(fallback.starPlayers, [
-    { id: "p10", name: "Felipe Rocha" },
-    { id: "p08", name: "Igor Sampaio" },
-  ]);
-  assert.equal(fallback.catalogPlayerCount, 2);
-  assert.equal(fallback.starCount, 2);
-  assert.equal(fallback.matchStrengthBonus, 0.5);
-  assert.equal(fallback.sponsorBoostPercent, 10);
-  assert.equal(fallback.sponsorAnnualBonus, 5_000_000);
-  assert.equal(fallback.source, "demo-fallback");
-  assert.equal(fallback.playingStarCount, 2);
+  assert.deepEqual(fallback.starPlayers, []);
+  assert.equal(fallback.catalogPlayerCount, 0);
+  assert.equal(fallback.starCount, 0);
+  assert.equal(fallback.matchStrengthBonus, 0);
+  assert.equal(fallback.sponsorBoostPercent, 0);
+  assert.equal(fallback.sponsorAnnualBonus, 0);
+  assert.equal(fallback.source, "firestore");
+  assert.equal(fallback.playingStarCount, 0);
   const fallbackRoster = await storeFor([]).listPlayers("AUR");
-  assert.deepEqual(fallbackRoster, { players: [], count: 0, source: "demo-fallback" });
+  assert.deepEqual(fallbackRoster, { players: [], count: 0, source: "firestore" });
 
   const realPlayer = document("real-1", {
     clubId: "AUR",

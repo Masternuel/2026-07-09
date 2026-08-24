@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { io as createClient } from "socket.io-client";
+import { REQUIRED_ATTRIBUTE_KEYS } from "../game/lineupStrength.mjs";
 import { calculateStarImpact } from "../game/starImpact.mjs";
-import { jsonRequest, startTestServer } from "./testHarness.mjs";
+import { automaticallyReadyAtHalftime, jsonRequest, startTestServer } from "./testHarness.mjs";
 
 function connect(url, token = "owner-token") {
   return new Promise((resolve, reject) => {
@@ -29,9 +30,19 @@ function waitForRoomState(socket, predicate) {
 }
 
 test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", async (context) => {
+  const positions = ["GOL", "LE", "ZAG", "ZAG", "LD", "VOL", "MC", "MC", "PE", "ATA", "PD"];
+  const roster = (clubId) => positions.map((position, index) => ({
+    id: `${clubId.toLocaleLowerCase()}-${index}`,
+    clubId,
+    name: `${clubId} ${index}`,
+    position,
+    overall: 20 - index / 10,
+    active: true,
+    isStar: index === 0,
+  }));
   const playersByClub = {
-    AUR: [{ id: "aur-star", clubId: "AUR", name: "Estrela AUR", overall: 20, active: true, isStar: true }],
-    SAN: [{ id: "san-star", clubId: "SAN", name: "Estrela SAN", overall: 20, active: true, isStar: true }],
+    AUR: roster("AUR"),
+    SAN: roster("SAN"),
   };
   const catalogStore = {
     source: "firestore",
@@ -57,7 +68,7 @@ test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", 
   await second.timeout(1_000).emitWithAck("room:join", { code: created.room.code, clubId: "SAN" });
   const ownerSaved = await owner.timeout(1_000).emitWithAck("lineup:save", {
     code: created.room.code,
-    lineupIds: ["aur-star"],
+    lineupIds: playersByClub.AUR.map((player) => player.id),
   });
   assert.deepEqual(ownerSaved.room.lineups.map((lineup) => lineup.managerId), ["uid-owner"]);
 
@@ -65,7 +76,7 @@ test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", 
   const secondState = waitForRoomState(second, (room) => room.lineups[0]?.managerId === "uid-second");
   const secondSaved = await second.timeout(1_000).emitWithAck("lineup:save", {
     code: created.room.code,
-    lineupIds: ["san-star"],
+    lineupIds: playersByClub.SAN.map((player) => player.id),
   });
   assert.deepEqual(secondSaved.room.lineups.map((lineup) => lineup.managerId), ["uid-second"]);
   assert.deepEqual((await ownerState).lineups.map((lineup) => lineup.managerId), ["uid-owner"]);
@@ -79,7 +90,9 @@ test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", 
   const ownerRest = await (await jsonRequest(`${url}/api/rooms/${created.room.code}`, "owner-token")).json();
   const secondRest = await (await jsonRequest(`${url}/api/rooms`, "second-token")).json();
   assert.deepEqual(ownerRest.room.lineups.map((lineup) => lineup.managerId), ["uid-owner"]);
-  assert.deepEqual(secondRest.rooms[0].lineups.map((lineup) => lineup.managerId), ["uid-second"]);
+  // Room listing is metadata-only in save schema v2. Full private lineup is
+  // fetched only when the member opens/syncs the selected room.
+  assert.deepEqual(secondRest.rooms[0].lineups, []);
   assert.deepEqual(
     (await server.store.getRoom(created.room.code)).lineups.map((lineup) => lineup.managerId).sort(),
     ["uid-owner", "uid-second"],
@@ -111,6 +124,8 @@ test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", 
   ]);
   await owner.timeout(1_000).emitWithAck("match:ready", { code: created.room.code, ready: true });
   const finished = new Promise((resolve) => owner.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(owner);
+  automaticallyReadyAtHalftime(second);
   const match = await second.timeout(1_000).emitWithAck("match:ready", {
     code: created.room.code,
     ready: true,
@@ -179,7 +194,7 @@ test("lineup:save aceita IDs demo canonicos, persiste snapshot e valida payload"
   assert.equal(tooMany.error.code, "VALIDATION_ERROR");
   const invalidPlayer = await client.timeout(1_000).emitWithAck("lineup:save", {
     code: created.room.code,
-    lineupIds: ["p21"],
+    lineupIds: [...lineupIds.slice(0, 10), "p21"],
   });
   assert.equal(invalidPlayer.ok, false);
   assert.equal(invalidPlayer.error.code, "LINEUP_PLAYER_NOT_IN_CLUB");
@@ -193,16 +208,18 @@ test("lineup:save aceita IDs demo canonicos, persiste snapshot e valida payload"
 });
 
 test("partida usa estrela da escalacao salva mesmo quando seria reserva por overall", async (context) => {
+  const positions = ["GOL", "LE", "ZAG", "ZAG", "LD", "VOL", "MC", "MC", "PE", "ATA", "PD"];
   const regulars = Array.from({ length: 11 }, (_, index) => ({
     id: `r${index}`,
     clubId: "AUR",
     name: `Regular ${index}`,
+    position: positions[index],
     overall: 20 - index / 10,
     active: true,
     isStar: false,
   }));
   const reserveStar = {
-    id: "star-low", clubId: "AUR", name: "Estrela", overall: 1, active: true, isStar: true,
+    id: "star-low", clubId: "AUR", name: "Estrela", position: "GOL", overall: 1, active: true, isStar: true,
   };
   const auroraPlayers = [...regulars, reserveStar];
   const catalogStore = {
@@ -222,7 +239,7 @@ test("partida usa estrela da escalacao salva mesmo quando seria reserva por over
     name: "Escalacao real",
     clubId: "AUR",
   });
-  const lineupIds = [reserveStar.id, ...regulars.slice(0, 10).map((player) => player.id)];
+  const lineupIds = [reserveStar.id, ...regulars.slice(1).map((player) => player.id)];
   const saved = await client.timeout(1_000).emitWithAck("lineup:save", {
     code: created.room.code,
     lineupIds,
@@ -231,6 +248,7 @@ test("partida usa estrela da escalacao salva mesmo quando seria reserva por over
   await client.timeout(1_000).emitWithAck("room:ready", { code: created.room.code, ready: true });
   const active = await client.timeout(1_000).emitWithAck("room:start", { code: created.room.code });
   const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
   const start = await client.timeout(1_000).emitWithAck("match:ready", {
     code: active.room.code,
     ready: true,
@@ -257,6 +275,7 @@ test("partida real aplica perfil de estrelas uma unica vez e persiste metadados"
   context.after(() => client.disconnect());
   const room = await activeRoom(client);
   const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
 
   const start = await client.timeout(1_000).emitWithAck("match:ready", {
     code: room.code,
@@ -268,13 +287,92 @@ test("partida real aplica perfil de estrelas uma unica vez e persiste metadados"
   assert.equal(start.strengthProfile.home.starBonus, 1);
   assert.equal(
     start.strengthProfile.home.effective,
-    start.strengthProfile.home.base + 1,
+    Math.round((
+      start.strengthProfile.home.base
+        + start.strengthProfile.home.starBonus
+        + start.strengthProfile.home.formationFitBonus
+        + start.strengthProfile.home.tacticalMatchupBonus
+        + start.strengthProfile.home.cohesionBonus
+        + (start.strengthProfile.home.careerBonus ?? 0)
+    ) * 1_000) / 1_000,
   );
 
   const result = await finished;
   assert.deepEqual(result.starImpact, start.starImpact);
   assert.deepEqual(result.strengthProfile, start.strengthProfile);
   assert.deepEqual((await server.store.getRoom(room.code)).lastCompletedMatch.starImpact, start.starImpact);
+});
+
+test("partida integra atributos completos depois do bonus de estrela", async (context) => {
+  function roster(clubId) {
+    const positions = ["GOL", "ZAG", "ZAG", "LD", "LE", "VOL", "MC", "MEI", "PD", "PE", "ATA"];
+    return positions.map((position, index) => ({
+      id: `${clubId}-${index}`,
+      clubId,
+      name: `${clubId} ${index}`,
+      position,
+      overall: 15,
+      attributes: Object.fromEntries(REQUIRED_ATTRIBUTE_KEYS.map((key) => [key, 15])),
+      active: true,
+      isStar: clubId === "AUR" && index === 0,
+    }));
+  }
+  const catalogStore = {
+    source: "test",
+    async listPlayers(clubId) {
+      const players = roster(clubId);
+      return { players, count: players.length, source: "test" };
+    },
+    async getStarImpact(clubId, options) {
+      return calculateStarImpact(clubId, roster(clubId), options);
+    },
+  };
+  const { server, url } = await startTestServer({ catalogStore });
+  context.after(() => server.close());
+  const client = await connect(url);
+  context.after(() => client.disconnect());
+  const created = await client.timeout(1_000).emitWithAck("room:create", {
+    name: "Atributos completos",
+    clubId: "AUR",
+  });
+  const lineupIds = roster("AUR").map((player) => player.id);
+  await client.timeout(1_000).emitWithAck("lineup:save", {
+    code: created.room.code,
+    lineupIds,
+  });
+  await client.timeout(1_000).emitWithAck("room:ready", { code: created.room.code, ready: true });
+  const active = await client.timeout(1_000).emitWithAck("room:start", { code: created.room.code });
+  const fixture = active.room.fixtureSchedule.find(
+    (candidate) => candidate.fixtureId === active.room.currentFixtureId,
+  );
+  const managedSide = fixture.homeClubId === "AUR" ? "home" : "away";
+  const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
+  const start = await client.timeout(1_000).emitWithAck("match:ready", {
+    code: active.room.code,
+    ready: true,
+  });
+
+  assert.equal(start.lineupAttributeProfile[managedSide].available, true);
+  assert.equal(start.lineupAttributeProfile[managedSide].rating, 15);
+  assert.equal(start.lineupAttributeProfile[managedSide].physicalSecondHalfModifier, 0.2);
+  assert.equal(start.strengthProfile[managedSide].starBonus, 0.25);
+  assert.equal(start.strengthProfile[managedSide].attributeBonus, 0.6);
+  assert.equal(
+    start.strengthProfile[managedSide].effective,
+    Math.round((
+      start.strengthProfile[managedSide].base
+        + start.strengthProfile[managedSide].starBonus
+        + start.strengthProfile[managedSide].attributeBonus
+        + start.strengthProfile[managedSide].formationFitBonus
+        + start.strengthProfile[managedSide].tacticalMatchupBonus
+        + start.strengthProfile[managedSide].cohesionBonus
+        + (start.strengthProfile[managedSide].careerBonus ?? 0)
+    ) * 1_000) / 1_000,
+  );
+  const result = await finished;
+  assert.deepEqual(result.lineupAttributeProfile, start.lineupAttributeProfile);
+  assert.deepEqual(result.strengthProfile, start.strengthProfile);
 });
 
 test("reserva matchSessions enquanto consulta assincrona impede inicio concorrente", async (context) => {
@@ -296,6 +394,7 @@ test("reserva matchSessions enquanto consulta assincrona impede inicio concorren
   context.after(() => client.disconnect());
   const room = await activeRoom(client);
   const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
 
   const firstStart = client.timeout(1_000).emitWithAck("match:ready", { code: room.code, ready: true });
   await lookupStarted;

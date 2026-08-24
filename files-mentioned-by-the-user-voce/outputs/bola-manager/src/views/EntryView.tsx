@@ -64,12 +64,12 @@ export function EntryView({ onAuthenticated }: EntryViewProps) {
           <div className="entry-fixture">
             <div className="entry-fixture__team">
               <ClubMark code="AUR" size="lg" />
-              <span>Aurora FC<small>2º · 27 pts</small></span>
+              <span>Aurora FC<small>Temporada · 0 pts</small></span>
             </div>
-            <div className="entry-fixture__kickoff"><strong>21:30</strong><span>Brasileirão · R14</span></div>
+            <div className="entry-fixture__kickoff"><strong>21:30</strong><span>Brasileirão · R1</span></div>
             <div className="entry-fixture__team entry-fixture__team--away">
               <ClubMark code="SAN" color="#e7e7e7" size="lg" />
-              <span>Santos<small>10º · 15 pts</small></span>
+              <span>Santos<small>Temporada · 0 pts</small></span>
             </div>
           </div>
         </div>

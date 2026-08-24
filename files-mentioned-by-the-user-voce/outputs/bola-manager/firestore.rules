@@ -41,7 +41,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /roomPayloads/{document=**} {
+      allow read, write: if false;
+    }
+
     match /matches/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Snapshots de partidas em andamento pertencem somente ao backend Admin.
+    match /activeMatches/{document=**} {
       allow read, write: if false;
     }
 

@@ -27,6 +27,8 @@ function normalize(value: unknown): Tournament | null {
       name: typeof participant.name === 'string' ? participant.name : participantId,
       abbreviation: typeof participant.abbreviation === 'string' ? participant.abbreviation : participantId.slice(0, 3).toUpperCase(),
       colors: Array.isArray(participant.colors) ? participant.colors.filter((item): item is string => typeof item === 'string') : [],
+      darkThemeColor: typeof participant.darkThemeColor === 'string' ? participant.darkThemeColor : null,
+      lightThemeColor: typeof participant.lightThemeColor === 'string' ? participant.lightThemeColor : null,
       country: typeof participant.country === 'string' ? participant.country : null,
       division: typeof participant.division === 'string' ? participant.division : null,
       crestImageUrl: typeof participant.crestImageUrl === 'string' ? participant.crestImageUrl : null,
@@ -45,7 +47,7 @@ function normalize(value: unknown): Tournament | null {
   };
 }
 
-export function useTournamentCatalog() {
+export function useTournamentCatalog(roomCode?: string | null) {
   const auth = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,13 +57,18 @@ export function useTournamentCatalog() {
   useEffect(() => {
     if (auth.status !== 'authenticated' || !auth.identity) { setTournaments([]); setLoading(false); return; }
     const controller = new AbortController();
+    const normalizedRoomCode = roomCode?.trim();
+    const endpoint = normalizedRoomCode
+      ? `/api/tournaments?roomCode=${encodeURIComponent(normalizedRoomCode)}`
+      : '/api/tournaments';
+    setTournaments([]);
     setLoading(true); setError(null);
-    void apiRequest<TournamentResponse>('/api/tournaments', { identity: auth.identity, getIdToken: auth.getIdToken }, { signal: controller.signal })
+    void apiRequest<TournamentResponse>(endpoint, { identity: auth.identity, getIdToken: auth.getIdToken }, { signal: controller.signal })
       .then((payload) => { if (!controller.signal.aborted) setTournaments((payload.tournaments ?? []).flatMap((item) => { const tournament = normalize(item); return tournament ? [tournament] : []; })); })
       .catch((nextError: unknown) => { if (!(nextError instanceof DOMException && nextError.name === 'AbortError')) { setTournaments([]); setError(nextError instanceof Error ? nextError.message : 'Torneios personalizados indisponíveis.'); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [auth.getIdToken, auth.identity, auth.status, attempt]);
+  }, [auth.getIdToken, auth.identity, auth.status, attempt, roomCode]);
 
   const refresh = useCallback(() => setAttempt((value) => value + 1), []);
   return useMemo(() => ({ tournaments, loading, error, refresh }), [tournaments, loading, error, refresh]);

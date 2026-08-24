@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -50,7 +51,7 @@ export function Modal({ open, onClose, title, eyebrow, children, footer, size = 
 
   if (!open) return null;
 
-  return (
+  const content = (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className={`modal modal--${size}`} role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={panelRef}>
         <header className="modal__header">
@@ -67,4 +68,11 @@ export function Modal({ open, onClose, title, eyebrow, children, footer, size = 
       </div>
     </div>
   );
+
+  // Keep dialogs outside animated views while preserving the active club theme.
+  // A transformed view would otherwise turn the fixed backdrop into page content.
+  const portalTarget = typeof document === 'undefined'
+    ? null
+    : document.querySelector('.app-shell') ?? document.body;
+  return portalTarget ? createPortal(content, portalTarget) : content;
 }

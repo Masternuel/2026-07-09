@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111214" />
     <meta name="description" content="Bola Manager — gestão de futebol, do vestiário ao apito final." />
+    <script>
+      (() => {
+        try {
+          const cached = JSON.parse(localStorage.getItem('bola-manager:user-preferences-cache:v1') || 'null');
+          const preference = ['dark', 'light', 'system'].includes(cached?.theme) ? cached.theme : 'dark';
+          const light = preference === 'light'
+            || (preference === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
+          document.documentElement.classList.toggle('theme-light', light);
+          document.documentElement.dataset.theme = light ? 'light' : 'dark';
+          document.querySelector('meta[name="theme-color"]')
+            ?.setAttribute('content', light ? '#eceeeb' : '#111214');
+        } catch {
+          // O cache de prepaint é opcional; o Firestore continua sendo a fonte oficial.
+        }
+      })();
+    </script>
     <title>Bola Manager</title>
   </head>
   <body>

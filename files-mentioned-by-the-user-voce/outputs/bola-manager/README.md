@@ -31,6 +31,9 @@ Na tela inicial, entre com Google/e-mail para usar o fluxo autenticado ou escolh
 - Partida autoritativa no servidor com eventos Socket.io a cada 800 ms; o cliente adapta todos os eventos para a narração e recebe placar/estatísticas do servidor.
 - Rotas de calendário, competições, mercado, finanças, infraestrutura, rankings, notícias, comissão, relatórios e configurações com dados e interações próprias.
 - Rede social da sala com posts persistentes, conversas encadeadas em tempo real, repercussão de personagens e notícias editoriais geradas a partir de declarações relevantes.
+- Calendário unificado por datas reais com ligas, copas, grupos e mata-mata; resultados da IA avançam as mesmas chaves dos jogos dos managers.
+- Virada de temporada com promoção e rebaixamento entre divisões selecionadas do mesmo país.
+- Carreira persistida no save com contratos, treino, evolução, envelhecimento, aposentadoria, Sub-20, promoção de jovens e convocações nacionais.
 
 ## Comandos
 
@@ -51,9 +54,11 @@ Com Firebase Admin configurado, o backend verifica o ID token no REST e no hands
 
 O importador administrativo em `scripts/import-brasfoot.mjs` aceita JSON normalizado, `.ban`, `.cfg`, a pasta `teams` ou a raiz do Brasfoot. O parser lê Java Serialization como dados e nunca carrega classes da origem. Faça primeiro um `--dry-run --report`, confira corrompidos/duplicidades e consulte [scripts/BRASFOOT_IMPORT.md](./scripts/BRASFOOT_IMPORT.md) antes do commit.
 
-O mesmo fluxo está disponível na interface: entre com uma conta autorizada, abra **Editor da Base**, clique em **Importar Brasfoot** e arraste os arquivos de `teams` ou use **Selecionar pasta**. O Editor aceita `.ban`, `.cfg` e os escudos `.png`, mostra uma prévia de clubes/jogadores/avisos e só grava no Firebase após confirmação. Cada lote aceita até 200 arquivos, 32 MB por arquivo e 256 MB no total.
+O mesmo fluxo está disponível na interface: entre com sua conta Firebase, abra **Editor da Base**, clique em **Importar Brasfoot** e arraste os arquivos de `teams` ou use **Selecionar pasta**. Cada conta possui sua própria base. O Editor aceita `.ban`, `.cfg` e os escudos `.png`, mostra uma prévia de clubes/jogadores/avisos e só grava no Firebase após confirmação. Cada lote aceita até 200 arquivos, 32 MB por arquivo e 256 MB no total.
 
-O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O Editor aceita escudos, avatares e troféus pelo backend; configure `FIREBASE_STORAGE_BUCKET` no servidor. Upload direto pelo cliente permanece bloqueado pelas regras do Storage.
+No Editor, **Exportar base** gera um pacote JSON versionado com ligas, clubes, jogadores e torneios; **Importar base** valida e combina esse pacote com a base da conta. Links públicos de imagens são preservados, mas os caminhos privados de remoção não são transferidos. Dentro de uma sala, todos os managers consultam automaticamente a base do criador, mesmo que não possuam aquelas ligas em suas próprias contas.
+
+O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O Editor aceita escudos, avatares e troféus pelo backend. Para usar Cloudinary sem Firebase Storage, defina `MEDIA_STORAGE_PROVIDER=cloudinary` e `CLOUDINARY_URL` somente no Railway; o segredo nunca vai para o navegador. Firebase Storage continua disponível como alternativa com `FIREBASE_STORAGE_BUCKET`.
 
 ## Deploy
 
@@ -70,13 +75,15 @@ O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootCl
 - Start command: `npm run server`.
 - Health check: `/health`.
 - Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
-- Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). Nunca use prefixo `VITE_` nessa chave.
+- Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). `GEMINI_FALLBACK_MODELS` aceita modelos reserva separados por vírgula e usa `gemini-3.1-flash-lite` por padrão. Nunca use prefixo `VITE_` nessas chaves.
 - O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
+- Em **Settings → Scale → Regions**, mantenha exatamente **1 réplica**. O runtime persiste a partida ativa no Firestore, mas o lock do playback ainda é local ao processo.
+- Configure Cloudinary por **um** método: `CLOUDINARY_URL` ou o trio `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Se uma chave aparecer em chat, log ou arquivo rastreável, gere outra, atualize Railway/`.env.local`, teste e revogue a antiga.
 
 ## Limites desta vertical slice
 
-O projeto comprova o ciclo principal e apresenta as áreas dos 23 módulos, mas não implementa uma carreira de décadas, todos os regulamentos internacionais ou negociação completa entre contas reais. Os clubes e jogadores da demo são fictícios/sem licença.
+O projeto comprova o ciclo principal e mantém temporadas sucessivas, mas não reproduz todos os regulamentos internacionais nem oferece gestão jogável de seleções. Os clubes e jogadores da demo são fictícios/sem licença.
 
-O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados e o histórico necessário para sincronização são persistidos no Firestore. A emissão temporizada de uma partida que ainda está acontecendo continua no processo Socket.io e exigirá coordenação entre réplicas para escalar horizontalmente no Railway.
+O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados, eventos emitidos, velocidade, intervalo, planos e prontidão da partida ativa são persistidos no Firestore. Depois de reiniciar o Railway, o primeiro `match:sync` reidrata o cursor e continua sem repetir o primeiro tempo. O playback ainda exige uma única réplica até existir lock distribuído e adapter Socket.io entre processos.
 
-Também permanecem como próximas etapas: engines completos dos 23 módulos, persistência de táticas/calendário/finanças, adapter Socket.io entre réplicas, balanceamento avançado e testes E2E com dois navegadores reais.
+Também permanecem como próximas etapas: adapter Socket.io entre réplicas, balanceamento avançado, regras nacionais adicionais, gestão completa de seleções e testes E2E com dois navegadores reais.

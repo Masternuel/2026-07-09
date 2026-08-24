@@ -298,7 +298,7 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
           </div>
           <section className="brasfoot-import-options">
             {previewErrors.length > 0 && <label><input type="checkbox" checked={allowPartial} onChange={(event) => setAllowPartial(event.target.checked)} /><span><strong>Ignorar arquivos com erro e continuar</strong><small>Somente registros válidos serão gravados.</small></span></label>}
-            <label className={!counts.png ? 'is-disabled' : undefined}><input type="checkbox" checked={importAssets} disabled={!counts.png} onChange={(event) => setImportAssets(event.target.checked)} /><span><strong>Enviar escudos encontrados</strong><small>{counts.png ? `${counts.png} imagem(ns) pronta(s) para o Firebase Storage.` : 'Nenhum PNG foi selecionado.'}</small></span></label>
+            <label className={!counts.png ? 'is-disabled' : undefined}><input type="checkbox" checked={importAssets} disabled={!counts.png} onChange={(event) => setImportAssets(event.target.checked)} /><span><strong>Enviar escudos encontrados</strong><small>{counts.png ? `${counts.png} imagem(ns) pronta(s) para o armazenamento configurado.` : 'Nenhum PNG foi selecionado.'}</small></span></label>
             <div><ShieldAlert size={15} /><span><strong>Atualização segura</strong> Registros com o mesmo ID serão atualizados. Os demais serão preservados.</span></div>
           </section>
         </>}

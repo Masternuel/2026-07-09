@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BriefcaseBusiness,
   CalendarDays,
   CircleDollarSign,
   ClipboardList,
@@ -26,6 +27,7 @@ export interface NavItem {
 
 export const navItems: NavItem[] = [
   { key: 'home', label: 'Central', icon: LayoutDashboard, group: 'Gestão' },
+  { key: 'coach-career', label: 'Carreira do treinador', icon: BriefcaseBusiness, group: 'Gestão' },
   { key: 'squad', label: 'Elenco', icon: Users, group: 'Gestão' },
   { key: 'tactics', label: 'Táticas', icon: ClipboardList, group: 'Gestão' },
   { key: 'calendar', label: 'Calendário', icon: CalendarDays, group: 'Gestão' },

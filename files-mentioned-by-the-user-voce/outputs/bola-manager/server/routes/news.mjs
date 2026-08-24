@@ -3,12 +3,17 @@ import { Router } from "express";
 import {
   newsPostIdSchema,
   parseOrThrow,
+  pressConferenceCreateSchema,
   roomCodeSchema,
   socialAiFeedSchema,
   socialCommentCreateSchema,
   socialPostCreateSchema,
 } from "../schemas.mjs";
 import { buildCanonicalEditorials } from "../services/editorialCatalog.mjs";
+import {
+  buildPressConferenceEditorial,
+  fallbackPressComment,
+} from "../services/pressConference.mjs";
 
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
@@ -84,19 +89,84 @@ function socialInput(room, managerId, posts) {
   };
 }
 
-function enforceCooldown(entries, key, cooldownMs, timestamp, code, message) {
+function compactText(value, maxLength, fallback = "") {
+  const normalized = String(value ?? "").trim();
+  const safe = normalized || fallback;
+  return safe.length <= maxLength ? safe : `${safe.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function careerNewsVisibleToClub(news, clubId) {
+  const clubIds = Array.isArray(news?.clubIds) ? news.clubIds.filter(Boolean) : [];
+  if (!clubIds.length) return true;
+  return clubIds.some((candidate) => sameClub(candidate, clubId));
+}
+
+function buildCanonicalCareerEditorials(room, managerId, requestedPosts = []) {
+  const manager = room.managers.find((candidate) => candidate.id === managerId);
+  const context = clubContext(room, managerId);
+  const persistedNews = Array.isArray(room?.clubCareerState?.news)
+    ? room.clubCareerState.news
+    : [];
+  const persistedById = new Map(persistedNews.map((news) => [String(news?.id ?? ""), news]));
+  const seen = new Set();
+
+  return requestedPosts.flatMap((requested) => {
+    const id = String(requested?.id ?? "").trim();
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    const news = persistedById.get(id);
+    if (!news || !careerNewsVisibleToClub(news, manager?.clubId)) return [];
+
+    const headline = compactText(news.title, 180);
+    const body = compactText(news.content || news.summary, 800);
+    if (!headline || !body) return [];
+    const clubIds = Array.isArray(news.clubIds) ? news.clubIds.filter(Boolean) : [];
+    const source = clubIds.some((clubId) => sameClub(clubId, manager?.clubId))
+      ? context.clubName
+      : "Central da carreira";
+
+    return [{
+      id,
+      clubId: manager?.clubId ?? null,
+      source: compactText(source, 80, "Central da carreira"),
+      sourceType: "clube",
+      headline,
+      body,
+      reactions: 0,
+      tag: compactText(news.category, 40, "Carreira"),
+    }];
+  });
+}
+
+function canonicalRequestedEditorials(room, managerId, requestedPosts) {
+  const context = clubContext(room, managerId);
+  const careerPosts = buildCanonicalCareerEditorials(room, managerId, requestedPosts);
+  const legacyPosts = buildCanonicalEditorials(context, requestedPosts);
+  const byId = new Map([...legacyPosts, ...careerPosts].map((post) => [post.id, post]));
+  return requestedPosts.flatMap((requested) => {
+    const post = byId.get(String(requested?.id ?? "").trim());
+    if (!post) return [];
+    byId.delete(post.id);
+    return [post];
+  });
+}
+
+function enforceCooldown(entries, key, cooldownMs, timestamp, code, message, requestId = null) {
   if (cooldownMs <= 0) return;
   const previous = entries.get(key);
-  if (previous !== undefined && timestamp - previous < cooldownMs) {
+  const previousTimestamp = typeof previous === "object" ? previous.timestamp : previous;
+  if (requestId && typeof previous === "object" && previous.requestId === requestId) return;
+  if (previousTimestamp !== undefined && timestamp - previousTimestamp < cooldownMs) {
     const error = new Error(message);
     error.code = code;
     error.status = 429;
     throw error;
   }
-  entries.set(key, timestamp);
+  entries.set(key, requestId ? { timestamp, requestId } : timestamp);
   if (entries.size <= 2_000) return;
   for (const [entryKey, entryTimestamp] of entries) {
-    if (timestamp - entryTimestamp >= cooldownMs) entries.delete(entryKey);
+    const recordedAt = typeof entryTimestamp === "object" ? entryTimestamp.timestamp : entryTimestamp;
+    if (timestamp - recordedAt >= cooldownMs) entries.delete(entryKey);
   }
   while (entries.size > 2_000) entries.delete(entries.keys().next().value);
 }
@@ -130,13 +200,15 @@ function publicPost(post) {
   };
 }
 
-function publicBundle(generated) {
+function publicBundle(generated, allowedPostIds = null) {
   return {
     teamComment: publicComment(generated.teamComment),
-    replies: generated.replies.map((reply) => ({
-      postId: reply.postId,
-      comments: reply.comments.map(publicComment).filter(Boolean),
-    })),
+    replies: generated.replies
+      .filter((reply) => !allowedPostIds || allowedPostIds.has(reply.postId))
+      .map((reply) => ({
+        postId: reply.postId,
+        comments: reply.comments.map(publicComment).filter(Boolean),
+      })),
   };
 }
 
@@ -155,6 +227,7 @@ function generatedCommentsForPost(generated, postId, timestamp) {
 
 export function createNewsRouter(store, newsStore, socialAi, {
   broadcast = () => {},
+  broadcastRoom = () => {},
   now = () => Date.now(),
   aiCooldownMs = 10_000,
   postCooldownMs = 5_000,
@@ -167,10 +240,54 @@ export function createNewsRouter(store, newsStore, socialAi, {
   const lastPostAt = new Map();
   const lastCommentAt = new Map();
 
+  async function listWithRecoveredPressConferences(room) {
+    const existingPosts = await newsStore.list(room.code);
+    const existingKeys = new Set(existingPosts.map((post) => post.editorialKey).filter(Boolean));
+    const recentMatches = [
+      ...(Array.isArray(room.completedMatches) ? room.completedMatches.slice(-5) : []),
+      room.lastCompletedMatch,
+    ].filter(Boolean);
+    const uniqueMatches = [...new Map(recentMatches.map((match) => [String(match.id), match])).values()];
+    const recoverable = [];
+    const commentsByPostId = new Map();
+
+    for (const match of uniqueMatches) {
+      for (const submission of match.pressConferenceSubmissions ?? []) {
+        const manager = room.managers.find((candidate) => candidate.id === submission.managerId);
+        const editorial = buildPressConferenceEditorial({ room, match, manager, submission });
+        if (existingKeys.has(editorial.editorialKey)) continue;
+        const createdAt = submission.submittedAt || timestampIso(Number(now()));
+        recoverable.push(editorial);
+        commentsByPostId.set(editorial.editorialKey, [{
+          ...fallbackPressComment(submission),
+          id: `press:${submission.matchId}:${submission.managerId}:comment:0`,
+          parentCommentId: null,
+          createdAt,
+          generated: true,
+        }]);
+      }
+    }
+    if (!recoverable.length) return existingPosts;
+
+    try {
+      const recovered = await newsStore.syncEditorials({
+        roomCode: room.code,
+        posts: recoverable,
+        commentsByPostId,
+        aiSource: "fallback",
+      });
+      recovered.forEach((post) => broadcast(publicPost(post)));
+      return newsStore.list(room.code);
+    } catch {
+      logger.warn?.("Nao foi possivel recuperar imediatamente a repercussao de uma coletiva.");
+      return existingPosts;
+    }
+  }
+
   router.get("/:code", asyncRoute(async (request, response) => {
     const code = parseOrThrow(roomCodeSchema, request.params.code);
-    await store.requireMembership(code, request.user.uid);
-    const posts = await newsStore.list(code);
+    const room = await store.requireMembership(code, request.user.uid);
+    const posts = await listWithRecoveredPressConferences(room);
     response.json({ posts: posts.map(publicPost), source: newsStore.source });
   }));
 
@@ -180,12 +297,40 @@ export function createNewsRouter(store, newsStore, socialAi, {
     const payload = parseOrThrow(socialAiFeedSchema, request.body);
     const requestTime = Number(now());
     const context = clubContext(room, request.user.uid);
-    const canonicalPosts = buildCanonicalEditorials(context, payload.posts);
+    const canonicalPosts = canonicalRequestedEditorials(room, request.user.uid, payload.posts);
     if (!canonicalPosts.length) {
       throw routeError("Editorial nao reconhecido", "SOCIAL_EDITORIAL_INVALID", 400);
     }
-    const replyTargets = canonicalPosts.filter((post) => post.sourceType === "jogador");
-    const input = socialInput(room, request.user.uid, replyTargets);
+    const careerPostIds = new Set(buildCanonicalCareerEditorials(
+      room,
+      request.user.uid,
+      payload.posts,
+    ).map((post) => post.id));
+    const replyTargets = canonicalPosts.filter((post) => (
+      post.sourceType === "jogador" || careerPostIds.has(post.id)
+    ));
+    const existingPosts = await newsStore.list(code);
+    const recoveryCapacity = Math.max(0, 8 - replyTargets.length);
+    const recoveryEntries = existingPosts
+      .filter((post) => post.sourceType === "manager"
+        && post.aiSource === "fallback"
+        && (post.authorId === request.user.uid || sameClub(post.clubId, context.clubId)))
+      .slice(0, recoveryCapacity)
+      .map((post, index) => ({
+        post,
+        target: {
+          id: `recover-manager-${index}`,
+          source: post.authorName || post.source || "Manager do clube",
+          sourceType: "manager",
+          headline: post.headline || "Declaracao do manager",
+          body: post.body || "",
+        },
+      }));
+    const input = socialInput(
+      room,
+      request.user.uid,
+      [...replyTargets, ...recoveryEntries.map((entry) => entry.target)],
+    );
     const hasReusableResult = socialAi.hasReusableResult?.(input) ?? false;
     if (socialAi.configured && !hasReusableResult) {
       enforceCooldown(
@@ -212,9 +357,93 @@ export function createNewsRouter(store, newsStore, socialAi, {
       commentsByPostId,
       aiSource: generated.source,
     });
+    const recoveredPosts = [];
+    if (generated.source === "gemini") {
+      for (const { post, target } of recoveryEntries) {
+        const comments = generatedCommentsForPost(generated, target.id, requestTime);
+        if (!comments.length) continue;
+        const recovered = await newsStore.replaceGeneratedComments({
+          roomCode: code,
+          postId: post.id,
+          comments,
+          aiSource: generated.source,
+        });
+        if (!recovered) continue;
+        recoveredPosts.push(recovered);
+        broadcast(publicPost(recovered));
+      }
+    }
     response.json({
-      ...publicBundle(generated),
-      posts: syncedPosts.map(publicPost),
+      ...publicBundle(generated, new Set(canonicalPosts.map((post) => post.id))),
+      posts: [...syncedPosts, ...recoveredPosts].map(publicPost),
+    });
+  }));
+
+  router.post("/:code/press-conferences", asyncRoute(async (request, response) => {
+    const code = parseOrThrow(roomCodeSchema, request.params.code);
+    const payload = parseOrThrow(pressConferenceCreateSchema, request.body);
+    if (typeof store.submitPressConference !== "function") {
+      throw routeError("Coletiva indisponivel nesta sala", "PRESS_CONFERENCE_UNAVAILABLE", 503);
+    }
+    const result = await store.submitPressConference(code, request.user.uid, payload);
+    const { room, submission, alreadySubmitted } = result;
+
+    const match = (room.completedMatches ?? []).find(
+      (candidate) => String(candidate?.id ?? "") === submission.matchId,
+    ) ?? room.lastCompletedMatch;
+    const manager = room.managers.find((candidate) => candidate.id === request.user.uid);
+    const editorial = buildPressConferenceEditorial({ room, match, manager, submission });
+    const existing = (await newsStore.list(code)).find(
+      (post) => post.editorialKey === editorial.editorialKey,
+    );
+
+    let post = existing ?? null;
+    if (!post) {
+      const requestTime = Number(now());
+      const draft = {
+        id: editorial.editorialKey,
+        source: manager?.name || request.user.name,
+        sourceType: "manager",
+        headline: editorial.headline,
+        body: editorial.body,
+      };
+      let comments = [fallbackPressComment(submission)];
+      let aiSource = "fallback";
+      try {
+        const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]));
+        const generatedComments = generatedCommentsForPost(
+          generated,
+          editorial.editorialKey,
+          requestTime,
+        );
+        if (generatedComments.length) comments = generatedComments;
+        aiSource = generated.source ?? aiSource;
+      } catch {
+        logger.warn?.("Repercussao automatica indisponivel para a coletiva.");
+      }
+      comments = comments.slice(0, 2).map((comment, index) => ({
+        ...comment,
+        id: `press:${submission.matchId}:${submission.managerId}:comment:${index}`,
+        parentCommentId: null,
+        createdAt: comment.createdAt ?? timestampIso(requestTime),
+        generated: true,
+      }));
+      [post] = await newsStore.syncEditorials({
+        roomCode: code,
+        clubId: submission.clubId,
+        posts: [editorial],
+        commentsByPostId: new Map([[editorial.editorialKey, comments]]),
+        aiSource,
+      });
+      broadcast(publicPost(post));
+    }
+    await Promise.resolve(broadcastRoom(room));
+
+    response.status(alreadySubmitted ? 200 : 201).json({
+      submission,
+      alreadySubmitted,
+      effects: submission.effects,
+      post: publicPost(post),
     });
   }));
 
@@ -222,6 +451,22 @@ export function createNewsRouter(store, newsStore, socialAi, {
     const code = parseOrThrow(roomCodeSchema, request.params.code);
     const room = await store.requireMembership(code, request.user.uid);
     const payload = parseOrThrow(socialPostCreateSchema, request.body);
+    const requestPayload = { message: payload.message };
+    const previous = await newsStore.getOperationResult({
+      roomCode: code,
+      actorId: request.user.uid,
+      kind: "publish",
+      requestId: payload.requestId,
+      payload: requestPayload,
+    });
+    if (previous) {
+      response.status(200).json({
+        post: publicPost(previous.post),
+        generatedPost: publicPost(previous.generatedPost),
+        teamComment: publicComment(previous.teamComment),
+      });
+      return;
+    }
     const requestTime = Number(now());
     enforceCooldown(
       lastPostAt,
@@ -230,8 +475,8 @@ export function createNewsRouter(store, newsStore, socialAi, {
       requestTime,
       "SOCIAL_RATE_LIMITED",
       "Aguarde alguns segundos antes de publicar novamente",
+      payload.requestId,
     );
-    const context = clubContext(room, request.user.uid);
     const manager = room.managers.find((candidate) => candidate.id === request.user.uid);
     const draft = {
       id: "manager-post",
@@ -241,33 +486,29 @@ export function createNewsRouter(store, newsStore, socialAi, {
       body: payload.message,
     };
     const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]));
-    const post = await newsStore.create({
+    const result = await newsStore.createManagerPostWithOperation({
       roomCode: code,
-      authorId: request.user.uid,
+      actorId: request.user.uid,
+      requestId: payload.requestId,
+      requestPayload,
       authorName: manager?.name || request.user.name,
       clubId: manager?.clubId ?? null,
       body: payload.message,
       comments: generatedCommentsForPost(generated, draft.id, requestTime),
       aiSource: generated.source,
+      teamComment: generated.teamComment,
+      generatedArticle: generated.newsArticle,
     });
-    let generatedPost = null;
-    if (generated.newsArticle?.publish) {
-      generatedPost = await newsStore.createEditorial({
-        roomCode: code,
-        clubId: context.clubId,
-        article: generated.newsArticle,
-        generatedFromPostId: post.id,
-        aiSource: generated.source,
-      });
+    const safePost = publicPost(result.post);
+    const safeGeneratedPost = publicPost(result.generatedPost);
+    if (!result.replayed) {
+      broadcast(safePost);
+      if (safeGeneratedPost) broadcast(safeGeneratedPost);
     }
-    const safePost = publicPost(post);
-    const safeGeneratedPost = publicPost(generatedPost);
-    broadcast(safePost);
-    if (safeGeneratedPost) broadcast(safeGeneratedPost);
-    response.status(201).json({
+    response.status(result.replayed ? 200 : 201).json({
       post: safePost,
       generatedPost: safeGeneratedPost,
-      teamComment: publicComment(generated.teamComment),
+      teamComment: publicComment(result.teamComment),
     });
   }));
 
@@ -276,6 +517,26 @@ export function createNewsRouter(store, newsStore, socialAi, {
     const postId = parseOrThrow(newsPostIdSchema, request.params.postId);
     const payload = parseOrThrow(socialCommentCreateSchema, request.body);
     const room = await store.requireMembership(code, request.user.uid);
+    const requestPayload = {
+      postId,
+      parentCommentId: payload.parentCommentId,
+      message: payload.message,
+    };
+    const previous = await newsStore.getOperationResult({
+      roomCode: code,
+      actorId: request.user.uid,
+      kind: "reply",
+      requestId: payload.requestId,
+      payload: requestPayload,
+    });
+    if (previous) {
+      response.status(200).json({
+        post: publicPost(previous.post),
+        comments: previous.comments.map(publicComment),
+        generatedPost: publicPost(previous.generatedPost),
+      });
+      return;
+    }
     const requestTime = Number(now());
     enforceCooldown(
       lastCommentAt,
@@ -284,6 +545,7 @@ export function createNewsRouter(store, newsStore, socialAi, {
       requestTime,
       "SOCIAL_COMMENT_RATE_LIMITED",
       "Aguarde alguns segundos antes de responder novamente",
+      payload.requestId,
     );
     const post = await newsStore.get(code, postId);
     if (!post) throw routeError("Publicacao nao encontrada", "NEWS_POST_NOT_FOUND");
@@ -337,29 +599,28 @@ export function createNewsRouter(store, newsStore, socialAi, {
         generated: true,
       });
     }
-    const updatedPost = await newsStore.appendComments({
+    const context = clubContext(room, request.user.uid);
+    const result = await newsStore.appendCommentsWithOperation({
       roomCode: code,
       postId,
+      actorId: request.user.uid,
+      requestId: payload.requestId,
+      requestPayload,
       comments: appended,
+      clubId: context.clubId,
+      generatedArticle: generated?.newsArticle,
+      generatedFromPostId: managerComment.id,
+      aiSource: generated?.source,
     });
-    let generatedPost = null;
-    if (generated?.newsArticle?.publish) {
-      const context = clubContext(room, request.user.uid);
-      generatedPost = await newsStore.createEditorial({
-        roomCode: code,
-        clubId: context.clubId,
-        article: generated.newsArticle,
-        generatedFromPostId: managerComment.id,
-        aiSource: generated.source,
-      });
+    const safeUpdatedPost = publicPost(result.post);
+    const safeGeneratedPost = publicPost(result.generatedPost);
+    if (!result.replayed) {
+      broadcast(safeUpdatedPost);
+      if (safeGeneratedPost) broadcast(safeGeneratedPost);
     }
-    const safeUpdatedPost = publicPost(updatedPost);
-    const safeGeneratedPost = publicPost(generatedPost);
-    broadcast(safeUpdatedPost);
-    if (safeGeneratedPost) broadcast(safeGeneratedPost);
-    response.status(201).json({
+    response.status(result.replayed ? 200 : 201).json({
       post: safeUpdatedPost,
-      comments: appended.map(publicComment),
+      comments: result.comments.map(publicComment),
       generatedPost: safeGeneratedPost,
     });
   }));

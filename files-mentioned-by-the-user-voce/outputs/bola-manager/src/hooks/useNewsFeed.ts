@@ -22,6 +22,24 @@ const validSentiments = new Set(['positivo', 'neutro', 'critico']);
 const validSourceTypes = new Set(['imprensa', 'clube', 'jogador', 'torcida', 'manager']);
 const hiddenPersonaPattern = /\b(?:bola\s*ia|arquibancada\s*ia|gemini|intelig[eê]ncia artificial|assistente virtual|chatbot)\b/i;
 const hiddenTextPattern = /\b(?:como (?:uma? )?ia|sou uma? ia|gemini|modelo de linguagem|intelig[eê]ncia artificial|chatbot)\b/i;
+const maxAiEditorials = 8;
+const maxPendingIntents = 32;
+
+function intentRequest(intents: Map<string, string>, key: string) {
+  const existing = intents.get(key);
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  intents.set(key, created);
+  while (intents.size > maxPendingIntents) intents.delete(intents.keys().next().value!);
+  return created;
+}
+
+function analysisFailureMessage(error: unknown) {
+  const detail = error instanceof ApiError && error.status < 500
+    ? ` ${error.message}`
+    : '';
+  return `Feed atualizado, mas a análise das publicações está temporariamente indisponível.${detail}`;
+}
 
 function stableId(prefix: string, ...parts: Array<string | null | undefined>) {
   const value = parts.filter(Boolean).join('-').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -30,11 +48,11 @@ function stableId(prefix: string, ...parts: Array<string | null | undefined>) {
 }
 
 function personaForRole(role: NewsAiComment['role']) {
-  if (role === 'torcida') return 'Arquibancada';
-  if (role === 'jogador') return 'Vestiário';
-  if (role === 'clube') return 'Comunicação do Clube';
+  if (role === 'torcida') return 'Torcida';
+  if (role === 'jogador') return 'Jogador';
+  if (role === 'clube') return 'Clube';
   if (role === 'manager') return 'Manager';
-  return 'Central da Rodada';
+  return 'Imprensa';
 }
 
 function normalizeRole(value: unknown): NewsAiComment['role'] {
@@ -140,60 +158,6 @@ function mergeHydratedPosts(current: NewsPost[], fetched: NewsPost[]) {
   ];
 }
 
-function demoConversation(editorialPosts: NewsItem[]) {
-  const player = editorialPosts.find((item) => item.sourceType === 'jogador');
-  return {
-    teamComment: normalizeComment({
-      id: 'demo-team-radar',
-      author: 'Central da Rodada',
-      role: 'imprensa',
-      text: 'O clube está no centro das conversas da rodada. Foco no próximo jogo e equilíbrio fora de campo.',
-      sentiment: 'neutro',
-    }),
-    replies: player ? normalizeReplies([{
-      postId: player.id,
-      comments: [{
-        id: 'demo-player-reply',
-        author: 'Arquibancada',
-        role: 'torcida',
-        text: `A declaração de ${player.source} aumentou a confiança da torcida para a próxima partida.`,
-        sentiment: 'positivo',
-      }],
-    }]) : {},
-  };
-}
-
-function localFollowUp(parent: NewsAiComment, managerCommentId: string): NewsAiComment {
-  const role = parent.role === 'manager' ? 'torcida' : parent.role;
-  return {
-    id: crypto.randomUUID(),
-    author: parent.role === 'manager' ? 'Arquibancada' : parent.author,
-    role,
-    text: 'Entendo seu ponto. A repercussão vai continuar até a bola rolar.',
-    sentiment: 'neutro',
-    parentCommentId: managerCommentId,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function demoNewsArticle(message: string, roomCode: string, clubName: string): NewsPost | null {
-  const normalized = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const newsworthy = /\b(contratacao|contratamos|anunciamos|confirmamos|lesao|lesionado|vencemos|perdemos|empatamos|criticamos|arbitragem|demissao|renovacao)\b/.test(normalized);
-  if (!newsworthy) return null;
-  return normalizePost({
-    id: crypto.randomUUID(),
-    roomCode,
-    source: 'Central da Rodada',
-    sourceType: 'imprensa',
-    headline: `${clubName} vira assunto nos bastidores`,
-    body: `Uma declaração do manager ganhou repercussão: “${message}”`,
-    reactions: 0,
-    tag: 'Notícia',
-    createdAt: new Date().toISOString(),
-    comments: [],
-  });
-}
-
 export interface NewsFeedController {
   posts: NewsPost[];
   replies: Record<string, NewsAiComment[]>;
@@ -205,6 +169,7 @@ export interface NewsFeedController {
   error: string | null;
   publishError: string | null;
   replyError: string | null;
+  persistenceAvailable: boolean;
   publish: (message: string) => Promise<NewsPost>;
   reply: (postId: string, parentCommentId: string, message: string) => Promise<void>;
   retry: () => void;
@@ -231,6 +196,8 @@ export function useNewsFeed(
   const roomCodeRef = useRef<string | null>(room?.code ?? null);
   const postsRef = useRef(posts);
   const repliesRef = useRef(replies);
+  const publishIntentsRef = useRef(new Map<string, string>());
+  const replyIntentsRef = useRef(new Map<string, string>());
   roomCodeRef.current = room?.code ?? null;
   postsRef.current = posts;
   repliesRef.current = replies;
@@ -239,6 +206,15 @@ export function useNewsFeed(
     identity: auth.identity,
     getIdToken: auth.getIdToken,
   }) : null, [auth.identity, auth.getIdToken]);
+  const editorialSignature = useMemo(() => JSON.stringify(editorialPosts.slice(0, maxAiEditorials).map((item) => ({
+    id: item.id,
+    source: item.source,
+    sourceType: item.sourceType,
+    headline: item.headline,
+    body: item.body,
+    tag: item.tag,
+    reactions: item.reactions,
+  }))), [editorialPosts]);
 
   useEffect(() => {
     if (!room || !credentials) {
@@ -254,6 +230,8 @@ export function useNewsFeed(
     }
     if (activeRoomCode.current !== room.code) {
       activeRoomCode.current = room.code;
+      publishIntentsRef.current.clear();
+      replyIntentsRef.current.clear();
       setPosts([]);
       setReplies({});
       setTeamComment(null);
@@ -261,10 +239,8 @@ export function useNewsFeed(
       setReplyError(null);
     }
     if (credentials.identity.mode === 'demo') {
-      const demo = demoConversation(editorialPosts);
-      setPosts([]);
-      setReplies(demo.replies);
-      setTeamComment(demo.teamComment);
+      setReplies({});
+      setTeamComment(null);
       setError(null);
       setLoading(false);
       return;
@@ -272,52 +248,44 @@ export function useNewsFeed(
 
     const controller = new AbortController();
     const generation = ++requestGeneration.current;
-    const aiPosts: NewsAiRequestPost[] = editorialPosts.map(({
-      id,
-      source: postSource,
-      sourceType,
-      headline,
-      body,
-      tag,
-      reactions,
-    }) => ({
-      id,
-      source: postSource,
-      sourceType,
-      headline,
-      body,
-      tag,
-      reactions,
-    }));
+    const aiPosts = JSON.parse(editorialSignature) as NewsAiRequestPost[];
     setLoading(true);
     setError(null);
-    void Promise.allSettled([
-      apiRequest<NewsFeedApiResponse>(`/api/news/${room.code}`, credentials, { signal: controller.signal }),
-      apiRequest<NewsAiApiResponse>(`/api/news/${room.code}/ai`, credentials, {
+    const feedRequest = apiRequest<NewsFeedApiResponse>(
+      `/api/news/${room.code}`,
+      credentials,
+      { signal: controller.signal },
+    );
+    const analysisRequest = aiPosts.length > 0
+      ? apiRequest<NewsAiApiResponse>(`/api/news/${room.code}/ai`, credentials, {
         method: 'POST',
         body: { posts: aiPosts },
         signal: controller.signal,
-      }),
-    ]).then(([feedResult, analysisResult]) => {
+      })
+      : null;
+    void Promise.allSettled(analysisRequest ? [feedRequest, analysisRequest] : [feedRequest]).then((results) => {
       if (controller.signal.aborted || generation !== requestGeneration.current) return;
-      let failures = 0;
+      const feedResult = results[0];
       if (feedResult.status === 'fulfilled') {
         const fetchedPosts = (feedResult.value.posts ?? []).flatMap((post) => normalizePost(post) ?? []);
         setPosts((current) => mergeHydratedPosts(current, fetchedPosts));
-      } else failures += 1;
-      if (analysisResult.status === 'fulfilled') {
+      } else {
+        setError('Não foi possível atualizar as publicações da sala.');
+      }
+      const analysisResult = results[1];
+      if (analysisResult?.status === 'fulfilled') {
         setReplies(normalizeReplies(analysisResult.value.replies));
         setTeamComment(normalizeComment(analysisResult.value.teamComment));
         const syncedPosts = (analysisResult.value.posts ?? []).flatMap((post) => normalizePost(post) ?? []);
         if (syncedPosts.length) setPosts((current) => mergeHydratedPosts(current, syncedPosts));
-      } else failures += 1;
-      if (failures === 2) setError('Não foi possível atualizar a rede social.');
-      else if (failures === 1) setError('Parte do feed está temporariamente indisponível.');
+      } else if (analysisRequest) {
+        setError((current) => current ?? analysisFailureMessage(analysisResult?.reason));
+      }
     }).finally(() => {
       if (!controller.signal.aborted && generation === requestGeneration.current) setLoading(false);
     });
     return () => controller.abort();
-  }, [room?.code, credentials, editorialPosts, reloadToken]);
+  }, [room?.code, credentials, editorialSignature, reloadToken]);
 
   useEffect(() => {
     if (!socket || !room || !credentials) return;
@@ -362,48 +330,21 @@ export function useNewsFeed(
     if (!normalized) throw new Error('Escreva uma mensagem antes de publicar.');
     if (normalized.length > 500) throw new Error('A publicação pode ter no máximo 500 caracteres.');
     if (!room || !credentials) throw new Error('Entre em uma temporada antes de publicar.');
+    if (credentials.identity.mode === 'demo') {
+      throw new Error('Publicações persistentes exigem uma conta autenticada.');
+    }
     const publishRoomCode = room.code;
+    const intentKey = [publishRoomCode, credentials.identity.uid, normalized].join('\u0000');
+    const requestId = intentRequest(publishIntentsRef.current, intentKey);
     setPublishing(true);
     setPublishError(null);
     try {
-      if (credentials.identity.mode === 'demo') {
-        const createdAt = new Date().toISOString();
-        const post = normalizePost({
-          id: crypto.randomUUID(),
-          roomCode: publishRoomCode,
-          authorId: credentials.identity.uid,
-          authorName: credentials.identity.displayName,
-          source: credentials.identity.displayName,
-          sourceType: 'manager',
-          headline: `Declaração de ${credentials.identity.displayName}`,
-          body: normalized,
-          reactions: 0,
-          tag: 'Sala',
-          createdAt,
-          comments: [{
-            author: 'Central da Rodada',
-            role: 'imprensa',
-            text: 'A declaração movimentou a torcida e já repercute antes da próxima partida.',
-            sentiment: 'neutro',
-            parentCommentId: null,
-            createdAt,
-          }],
-        });
-        if (!post) throw new Error('Não foi possível montar a publicação.');
-        const clubName = editorialPosts.find((item) => item.sourceType === 'clube')?.source ?? 'O clube';
-        const generatedPost = demoNewsArticle(normalized, publishRoomCode, clubName);
-        setPosts((current) => {
-          const next = mergePost(current, post);
-          return generatedPost ? mergePost(next, generatedPost) : next;
-        });
-        return post;
-      }
       const response = await apiRequest<NewsPublishApiResponse>(
         `/api/news/${publishRoomCode}/posts`,
         credentials,
         {
           method: 'POST',
-          body: { message: normalized },
+          body: { message: normalized, requestId },
         },
       );
       if (roomCodeRef.current !== publishRoomCode) {
@@ -419,6 +360,7 @@ export function useNewsFeed(
       });
       const nextTeamComment = normalizeComment(response.teamComment);
       if (nextTeamComment) setTeamComment(nextTeamComment);
+      if (publishIntentsRef.current.get(intentKey) === requestId) publishIntentsRef.current.delete(intentKey);
       return post;
     } catch (nextError) {
       const staleRoom = roomCodeRef.current !== publishRoomCode;
@@ -432,51 +374,41 @@ export function useNewsFeed(
     } finally {
       setPublishing(false);
     }
-  }, [room, credentials, editorialPosts]);
+  }, [room, credentials]);
 
   const reply = useCallback(async (postId: string, parentCommentId: string, message: string) => {
     const normalized = message.trim();
     if (!normalized) throw new Error('Escreva uma resposta antes de enviar.');
     if (normalized.length > 320) throw new Error('A resposta pode ter no máximo 320 caracteres.');
     if (!room || !credentials) throw new Error('Entre em uma temporada antes de responder.');
+    if (credentials.identity.mode === 'demo') {
+      throw new Error('Respostas persistentes exigem uma conta autenticada.');
+    }
     const storedPost = postsRef.current.find((candidate) => candidate.id === postId) ?? null;
     const comments = storedPost?.comments ?? repliesRef.current[postId] ?? [];
     const parent = comments.find((comment) => comment.id === parentCommentId);
     if (!parent) throw new Error('Comentário não encontrado.');
+    if (!storedPost?.roomCode) {
+      throw new Error('A conversa ainda não foi sincronizada. Atualize o radar e tente novamente.');
+    }
     const replyRoomCode = room.code;
+    const intentKey = [
+      replyRoomCode,
+      credentials.identity.uid,
+      postId,
+      parentCommentId,
+      normalized,
+    ].join('\u0000');
+    const requestId = intentRequest(replyIntentsRef.current, intentKey);
     setReplyingTo(parentCommentId);
     setReplyError(null);
     try {
-      if (credentials.identity.mode === 'demo' || !storedPost?.roomCode) {
-        const createdAt = new Date().toISOString();
-        const managerComment: NewsAiComment = {
-          id: crypto.randomUUID(),
-          author: credentials.identity.displayName,
-          role: 'manager',
-          text: normalized,
-          sentiment: 'neutro',
-          parentCommentId,
-          createdAt,
-        };
-        const added = [managerComment, localFollowUp(parent, managerComment.id)];
-        if (storedPost) {
-          setPosts((current) => current.map((post) => (
-            post.id === postId ? { ...post, comments: [...post.comments, ...added] } : post
-          )));
-        } else {
-          setReplies((current) => ({
-            ...current,
-            [postId]: [...(current[postId] ?? []), ...added],
-          }));
-        }
-        return;
-      }
       const response = await apiRequest<NewsCommentReplyApiResponse>(
         `/api/news/${replyRoomCode}/posts/${encodeURIComponent(postId)}/comments`,
         credentials,
         {
           method: 'POST',
-          body: { message: normalized, parentCommentId },
+          body: { message: normalized, parentCommentId, requestId },
         },
       );
       if (roomCodeRef.current !== replyRoomCode) {
@@ -490,6 +422,7 @@ export function useNewsFeed(
         if (generatedPost) next = mergePost(next, generatedPost);
         return next;
       });
+      if (replyIntentsRef.current.get(intentKey) === requestId) replyIntentsRef.current.delete(intentKey);
     } catch (nextError) {
       const staleRoom = roomCodeRef.current !== replyRoomCode;
       const messageText = staleRoom
@@ -515,6 +448,7 @@ export function useNewsFeed(
     error,
     publishError,
     replyError,
+    persistenceAvailable: Boolean(room && credentials?.identity.mode !== 'demo'),
     publish,
     reply,
     retry: () => setReloadToken((value) => value + 1),

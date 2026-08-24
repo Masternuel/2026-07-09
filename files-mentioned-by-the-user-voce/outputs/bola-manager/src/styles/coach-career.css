@@ -1,0 +1,631 @@
+.coach-career-view { --career-accent: var(--accent); }
+.coach-career-heading { align-items: center; }
+.coach-career-inline-error { display: flex; align-items: center; gap: 9px; margin: -8px 0 16px; padding: 10px 12px; color: #ffb4ad; border: 1px solid rgba(224,93,96,.3); border-left: 3px solid var(--red); background: rgba(224,93,96,.07); font-size: 12px; }
+
+.coach-career-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 12px; border: 1px solid var(--line); background: #131518; }
+.coach-career-tabs button { display: flex; min-height: 46px; align-items: center; justify-content: center; gap: 8px; color: var(--muted); border: 0; border-right: 1px solid var(--line); background: transparent; font-size: 12px; font-weight: 600; transition: color 160ms ease, background 160ms ease; }
+.coach-career-tabs button:last-child { border-right: 0; }
+.coach-career-tabs button:hover { color: var(--ink); background: rgba(255,255,255,.025); }
+.coach-career-tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px var(--career-accent); background: var(--raised); }
+.coach-career-tabs button > span { display: grid; min-width: 20px; height: 20px; place-items: center; color: var(--on-accent); border-radius: 10px; background: var(--career-accent); font-size: 12px; }
+.coach-career-tab-panel { min-height: 360px; }
+
+.coach-career-loading, .coach-career-error, .coach-career-empty { display: grid; min-height: 300px; place-items: center; align-content: center; gap: 9px; padding: 36px; color: var(--muted); border: 1px dashed #31353c; background: rgba(255,255,255,.012); text-align: center; }
+.coach-career-loading strong, .coach-career-error strong, .coach-career-empty strong { color: var(--ink); font-size: 15px; }
+.coach-career-loading p, .coach-career-error p, .coach-career-empty p { max-width: 500px; font-size: 12px; line-height: 1.6; }
+.coach-career-empty > span { display: grid; width: 48px; height: 48px; place-items: center; color: var(--career-accent); border: 1px solid color-mix(in srgb, var(--career-accent) 30%, transparent); background: color-mix(in srgb, var(--career-accent) 8%, transparent); }
+.coach-career-error { color: #ffb4ad; border-color: rgba(224,93,96,.28); }
+.coach-career-error > svg { color: var(--red); }
+.coach-career-error .button { margin-top: 8px; }
+
+.coach-career-hero { display: flex; min-height: 164px; align-items: center; justify-content: space-between; gap: 24px; padding: 26px 30px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--career-accent) 25%, var(--line)); background: radial-gradient(circle at 78% 0%, color-mix(in srgb, var(--career-accent) 10%, transparent), transparent 36%), linear-gradient(110deg, color-mix(in srgb, var(--career-accent) 7%, var(--panel)), var(--panel) 50%); }
+.coach-career-hero--unemployed { border-color: var(--line); background: radial-gradient(circle at 78% 0%, rgba(102,163,255,.1), transparent 36%), linear-gradient(110deg, rgba(102,163,255,.04), var(--panel) 50%); }
+.coach-career-hero__identity, .coach-career-hero__actions { display: flex; align-items: center; gap: 18px; }
+.coach-career-hero__identity h2 { margin: 4px 0 5px; font-size: clamp(25px, 3vw, 38px); font-weight: 500; letter-spacing: -.035em; }
+.coach-career-hero__identity > div > p:last-child { color: var(--ink-soft); font-size: 13px; }
+.coach-career-hero__avatar { display: grid; width: 72px; height: 76px; place-items: center; color: var(--blue); border: 1px solid rgba(102,163,255,.26); background: rgba(102,163,255,.07); }
+.coach-career-hero__actions { flex-wrap: wrap; justify-content: flex-end; }
+.coach-career-restriction { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-top: 12px; padding: 13px 15px; color: var(--amber); border: 1px solid rgba(230,184,92,.28); border-left: 3px solid var(--amber); background: rgba(230,184,92,.065); }
+.coach-career-restriction strong { color: var(--ink); font-size: 13px; }
+.coach-career-restriction p { margin-top: 4px; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+
+.coach-career-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 12px 0; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-metrics article { display: grid; min-height: 94px; grid-template-columns: 30px minmax(0, 1fr); align-content: center; padding: 17px 18px; border-right: 1px solid var(--line); }
+.coach-career-metrics article:last-child { border-right: 0; }
+.coach-career-metrics svg { grid-row: 1 / 3; align-self: center; color: var(--career-accent); }
+.coach-career-metrics span { color: var(--muted); font-size: 12px; }
+.coach-career-metrics strong { margin-top: 5px; color: var(--ink); font-size: 17px; font-weight: 600; }
+
+.coach-career-overview__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.coach-career-overview__grid > .panel { min-height: 280px; }
+.coach-career-detail-list { margin: 0; padding: 6px 16px; }
+.coach-career-detail-list > div { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-detail-list > div:last-child { border-bottom: 0; }
+.coach-career-detail-list dt { color: var(--muted); font-size: 12px; }
+.coach-career-detail-list dd { margin: 0; color: var(--ink); font-size: 12px; font-weight: 600; text-align: right; }
+.coach-career-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line-soft); }
+
+.coach-career-security__summary { display: flex; align-items: center; gap: 15px; padding: 17px 17px 10px; }
+.coach-career-security__score { display: flex; align-items: baseline; color: var(--green); }
+.coach-career-security__score--warning { color: var(--amber); }
+.coach-career-security__score--danger { color: var(--red); }
+.coach-career-security__score strong { font-size: 29px; line-height: 1; }
+.coach-career-security__score span { color: var(--muted); font-size: 12px; }
+.coach-career-security__status { display: flex; min-width: 0; align-items: flex-start; flex-direction: column; gap: 5px; }
+.coach-career-security__summary p { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.coach-career-security__bar { height: 4px; margin: 0 17px 12px; overflow: hidden; background: #272b31; }
+.coach-career-security__bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--red), var(--amber) 48%, var(--green)); }
+.coach-career-security-trend { color: var(--muted); font-size: 12px; font-weight: 650; }
+.coach-career-security-trend--rising { color: var(--green); }
+.coach-career-security-trend--falling { color: var(--red); }
+.coach-career-ultimatum { display: grid; gap: 9px; margin: 0 17px 12px; padding: 12px; border: 1px solid rgba(224,93,96,.34); border-left: 3px solid var(--red); background: rgba(224,93,96,.055); }
+.coach-career-ultimatum header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; }
+.coach-career-ultimatum header > span { display: grid; width: 27px; height: 27px; place-items: center; color: var(--red); border: 1px solid rgba(224,93,96,.25); background: rgba(224,93,96,.08); }
+.coach-career-ultimatum strong { font-size: 12px; }
+.coach-career-ultimatum p { margin-top: 3px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+.coach-career-ultimatum__progress { height: 3px; overflow: hidden; background: #282c32; }
+.coach-career-ultimatum__progress span { display: block; height: 100%; background: var(--red); }
+.coach-career-ultimatum footer { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.coach-career-ultimatum__consequence { margin: 0 !important; padding-top: 7px; border-top: 1px solid rgba(224,93,96,.16); }
+.coach-career-security-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 17px 12px; border: 1px solid var(--line-soft); }
+.coach-career-security-metric { position: relative; display: grid; min-height: 74px; align-content: center; gap: 4px; padding: 10px 11px 10px 14px; overflow: hidden; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.coach-career-security-metric:nth-child(2n) { border-right: 0; }
+.coach-career-security-metric:nth-last-child(-n+2) { border-bottom: 0; }
+.coach-career-security-metric::before { position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--blue); content: ''; }
+.coach-career-security-metric--positive::before { background: var(--green); }
+.coach-career-security-metric--warning::before { background: var(--amber); }
+.coach-career-security-metric--danger::before { background: var(--red); }
+.coach-career-security-metric--estimate { grid-column: 1 / -1; border-right: 0; background: rgba(102,163,255,.035); }
+.coach-career-security-metric > span, .coach-career-security-metric small { color: var(--muted); font-size: 12px; }
+.coach-career-security-metric strong { overflow-wrap: anywhere; font-size: 12px; }
+.coach-career-security-classics { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; margin: 0 17px 12px; padding: 11px 12px; border: 1px solid var(--line-soft); background: rgba(255,255,255,.012); }
+.coach-career-security-classics > span { display: grid; width: 28px; height: 28px; place-items: center; color: var(--amber); border: 1px solid rgba(230,184,92,.2); background: rgba(230,184,92,.05); }
+.coach-career-security-classics strong { font-size: 12px; }
+.coach-career-security-classics p, .coach-career-security-classics small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.coach-career-security-classics em { font-size: 12px; font-style: normal; font-weight: 700; }
+.coach-career-security-classics .is-negative { color: var(--red); }
+.coach-career-security-classics .is-positive { color: var(--green); }
+.coach-career-security-details { border-top: 1px solid var(--line-soft); }
+.coach-career-security-details > summary { padding: 11px 17px; color: var(--ink-soft); font-size: 12px; font-weight: 650; cursor: pointer; }
+.coach-career-security-details[open] > summary { color: var(--ink); border-bottom: 1px solid var(--line-soft); }
+.coach-career-security-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 17px 14px; }
+.coach-career-security-dimensions article { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--line-soft); background: rgba(255,255,255,.012); }
+.coach-career-security-dimensions header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.coach-career-security-dimensions strong, .coach-career-security-dimensions span, .coach-career-security-dimensions p { font-size: 12px; }
+.coach-career-security-dimensions header > span, .coach-career-security-dimensions p { color: var(--muted); }
+.coach-career-security-dimensions article > div { height: 3px; overflow: hidden; background: #282c32; }
+.coach-career-security-dimensions article > div span { display: block; height: 100%; background: var(--career-accent); }
+.coach-career-security-history { display: grid; margin: 0; padding: 6px 17px 13px; list-style: none; }
+.coach-career-security-history li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-security-history li:last-child { border-bottom: 0; }
+.coach-career-security-history li > span { color: var(--career-accent); font-size: 14px; font-weight: 700; }
+.coach-career-security-history strong, .coach-career-security-history p, .coach-career-security-history time { font-size: 12px; }
+.coach-career-security-history p, .coach-career-security-history time { margin-top: 3px; color: var(--muted); }
+.coach-career-factors { max-height: 210px; overflow-y: auto; margin: 0; padding: 0 17px 14px; list-style: none; }
+.coach-career-factors li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 7px; padding: 9px 0; border-top: 1px solid var(--line-soft); }
+.coach-career-factors li > span, .coach-career-factors li > em { color: var(--muted); font-size: 12px; font-weight: 700; }
+.coach-career-factors li strong { font-size: 12px; }
+.coach-career-factors li p { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.coach-career-factor--positive > span, .coach-career-factor--positive > em { color: var(--green) !important; }
+.coach-career-factor--negative > span, .coach-career-factor--negative > em { color: var(--red) !important; }
+
+.coach-career-objectives, .coach-career-alerts { padding: 8px 16px 15px; }
+.coach-career-objectives article { padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-objectives article:last-child { border-bottom: 0; }
+.coach-career-objectives article > div:first-child { display: flex; align-items: center; gap: 8px; }
+.coach-career-objectives article > div:first-child svg { color: var(--career-accent); }
+.coach-career-objectives article > div:first-child strong { min-width: 0; flex: 1; font-size: 12px; }
+.coach-career-objectives article > p { margin: 7px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.coach-career-objective__progress { height: 3px; overflow: hidden; background: #282c32; }
+.coach-career-objective__progress span { display: block; height: 100%; background: var(--career-accent); }
+.coach-career-alert { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-alert:last-child { border-bottom: 0; }
+.coach-career-alert > span { display: grid; width: 28px; height: 28px; place-items: center; color: var(--blue); border: 1px solid rgba(102,163,255,.2); background: rgba(102,163,255,.06); }
+.coach-career-alert--warning > span { color: var(--amber); border-color: rgba(230,184,92,.2); background: rgba(230,184,92,.06); }
+.coach-career-alert--danger > span { color: var(--red); border-color: rgba(224,93,96,.2); background: rgba(224,93,96,.06); }
+.coach-career-alert--positive > span { color: var(--green); border-color: rgba(105,213,150,.2); background: rgba(105,213,150,.06); }
+.coach-career-alert strong { font-size: 12px; }
+.coach-career-alert p { margin-top: 4px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+.coach-career-alert time { display: block; margin-top: 4px; color: var(--muted-2); font-size: 12px; }
+
+.coach-career-list-toolbar { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 12px; padding: 11px 14px; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-list-toolbar strong { display: block; margin-top: 3px; font-size: 13px; }
+.coach-career-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.coach-career-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-card > header { display: grid; min-height: 100px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 15px; border-bottom: 1px solid var(--line); background: linear-gradient(100deg, color-mix(in srgb, var(--career-accent) 4%, transparent), transparent 58%); }
+.coach-career-card > header h3 { margin: 3px 0; font-size: 18px; font-weight: 600; }
+.coach-career-card > header div > p:last-child { color: var(--muted); font-size: 12px; }
+.coach-career-card__facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.coach-career-card__facts > span { display: grid; min-height: 62px; grid-template-columns: 19px minmax(0, 1fr); align-content: center; padding: 10px 13px; color: var(--muted); border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.coach-career-card__facts > span:nth-child(2n) { border-right: 0; }
+.coach-career-card__facts svg { grid-row: 1 / 3; align-self: center; color: var(--career-accent); }
+.coach-career-card__facts strong { margin-top: 3px; color: var(--ink); font-size: 12px; }
+.coach-career-card__copy { display: grid; gap: 6px; padding: 12px 15px; }
+.coach-career-card__copy p { color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+.coach-career-card__copy strong { color: var(--ink); }
+.coach-career-card > footer { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: auto; padding: 13px 15px; border-top: 1px solid var(--line); background: rgba(0,0,0,.06); }
+.coach-career-mini-list { display: grid; gap: 6px; margin: 0; padding: 0 15px 13px; list-style: none; }
+.coach-career-mini-list li { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.coach-career-mini-list svg { color: var(--career-accent); }
+.coach-career-vacancy-profile { display: grid; gap: 10px; margin: 0 15px 13px; padding: 12px; border: 1px solid var(--line-soft); background: rgba(255,255,255,.012); }
+.coach-career-vacancy-profile > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.coach-career-vacancy-profile > header > div { display: grid; gap: 3px; }
+.coach-career-vacancy-profile > header strong { color: var(--ink); font-size: 13px; }
+.coach-career-vacancy-profile > header span, .coach-career-vacancy-profile > p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.coach-career-vacancy-profile > p strong { color: var(--ink-soft); }
+.coach-career-vacancy-profile__facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.coach-career-vacancy-profile__facts > span { display: grid; gap: 3px; padding: 8px 9px; color: var(--muted); border: 1px solid var(--line-soft); font-size: 12px; }
+.coach-career-vacancy-profile__facts strong { overflow-wrap: anywhere; color: var(--ink); font-size: 12px; }
+.coach-career-candidate-fit { display: grid; gap: 9px; padding: 10px; color: var(--amber); border: 1px solid rgba(230,184,92,.25); background: rgba(230,184,92,.055); }
+.coach-career-candidate-fit.is-eligible { color: var(--green); border-color: rgba(105,213,150,.25); background: rgba(105,213,150,.055); }
+.coach-career-candidate-fit.is-blocked { color: var(--red); border-color: rgba(224,93,96,.27); background: rgba(224,93,96,.055); }
+.coach-career-candidate-fit > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.coach-career-candidate-fit > header span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+.coach-career-candidate-fit > header strong { font-size: 16px; }
+.coach-career-candidate-fit ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #ffb4ad; font-size: 12px; line-height: 1.45; }
+.coach-career-candidate-fit__factors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.coach-career-candidate-fit__factors span { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 5px; color: var(--ink-soft); border-top: 1px solid var(--line-soft); font-size: 12px; }
+.coach-career-candidate-fit__factors strong { color: var(--ink); }
+.coach-career-interest { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 0 15px 13px; color: var(--muted); font-size: 12px; }
+.coach-career-interest strong { color: var(--ink); }
+.coach-career-interest > div { grid-column: 1 / -1; height: 3px; overflow: hidden; background: #282c32; }
+.coach-career-interest > div span { display: block; height: 100%; background: var(--green); }
+
+.coach-career-negotiation-state, .coach-career-information-request { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin: 0 15px 13px; padding: 11px 12px; color: var(--blue); border: 1px solid rgba(102,163,255,.24); background: rgba(102,163,255,.06); }
+.coach-career-negotiation-state strong, .coach-career-information-request strong { color: var(--ink); font-size: 12px; }
+.coach-career-negotiation-state p, .coach-career-information-request p { margin-top: 3px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+.coach-career-information-request { color: var(--amber); border-color: rgba(230,184,92,.26); background: rgba(230,184,92,.06); }
+.coach-career-information-request time { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.coach-career-information-question { padding: 12px; border: 1px solid rgba(230,184,92,.26); border-left: 3px solid var(--amber); background: rgba(230,184,92,.06); }
+.coach-career-information-question strong { font-size: 12px; }
+.coach-career-information-question p { margin-top: 5px; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+
+.coach-career-guarantees { margin: 0 15px 13px; border: 1px solid var(--line-soft); background: rgba(255,255,255,.012); }
+.coach-career-guarantees > header { display: flex; min-height: 38px; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-guarantees > header strong { font-size: 12px; }
+.coach-career-guarantees > header span { display: grid; width: 21px; height: 21px; place-items: center; color: var(--on-accent); border-radius: 50%; background: var(--career-accent); font-size: 12px; font-weight: 700; }
+.coach-career-guarantees > article { padding: 11px 10px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-guarantees > article:last-child { border-bottom: 0; }
+.coach-career-guarantees > article > div:first-child { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.coach-career-guarantees > article > div:first-child > strong { font-size: 12px; line-height: 1.45; }
+.coach-career-guarantees dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 9px 0 0; }
+.coach-career-guarantees dl div { display: flex; justify-content: space-between; gap: 8px; padding: 6px 7px; border: 1px solid var(--line-soft); }
+.coach-career-guarantees dt, .coach-career-guarantees dd { margin: 0; font-size: 12px; }
+.coach-career-guarantees dt { color: var(--muted); }
+.coach-career-guarantees dd { color: var(--ink); text-align: right; }
+.coach-career-guarantee-block { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--amber); font-size: 12px; }
+.coach-career-guarantees ul { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+.coach-career-guarantees li { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 12px; }
+.coach-career-guarantees li svg { color: var(--green); }
+
+.coach-career-decision-history { margin: 0 15px 13px; border: 1px solid var(--line-soft); }
+.coach-career-decision-history summary { padding: 10px 11px; color: var(--ink-soft); font-size: 12px; font-weight: 600; cursor: pointer; }
+.coach-career-decision-history[open] summary { border-bottom: 1px solid var(--line-soft); }
+.coach-career-decision-history ol { display: grid; gap: 0; margin: 0; padding: 8px 11px; list-style: none; }
+.coach-career-decision-history li { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 8px; padding: 7px 0; }
+.coach-career-decision-history li > span { width: 8px; height: 8px; margin-top: 4px; border: 2px solid var(--career-accent); border-radius: 50%; }
+.coach-career-decision-history strong, .coach-career-decision-history p, .coach-career-decision-history em, .coach-career-decision-history small { display: block; font-size: 12px; }
+.coach-career-decision-history p, .coach-career-decision-history small { margin-top: 3px; color: var(--muted); }
+.coach-career-decision-history em { margin-top: 4px; color: var(--ink-soft); line-height: 1.4; }
+
+.coach-career-processes { display: grid; gap: 12px; }
+.coach-career-process-list { padding: 0 15px; }
+.coach-career-process-list article { display: grid; min-height: 76px; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 13px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-process-list article:last-child { border-bottom: 0; }
+.coach-career-process-list strong { font-size: 13px; }
+.coach-career-process-list p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.coach-career-process-list em { display: block; margin-top: 5px; color: var(--ink-soft); font-size: 12px; }
+.coach-career-process-icon { display: grid; width: 42px; height: 42px; place-items: center; color: var(--career-accent); border: 1px solid color-mix(in srgb, var(--career-accent) 24%, transparent); background: color-mix(in srgb, var(--career-accent) 6%, transparent); }
+
+.coach-career-history { border: 1px solid var(--line); background: var(--panel); }
+.coach-career-history > article { display: grid; grid-template-columns: 36px auto minmax(0, 1fr); gap: 15px; padding: 20px 22px 0; }
+.coach-career-history__rail { display: flex; align-items: center; flex-direction: column; }
+.coach-career-history__rail span { display: grid; width: 26px; height: 26px; place-items: center; color: var(--on-accent); border-radius: 50%; background: var(--career-accent); font-size: 12px; font-weight: 700; }
+.coach-career-history__rail i { width: 1px; min-height: 115px; flex: 1; background: var(--line); }
+.coach-career-history__main { min-width: 0; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.coach-career-history > article:last-child .coach-career-history__main { border-bottom: 0; }
+.coach-career-history__main > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.coach-career-history__main h3 { margin-top: 3px; font-size: 18px; }
+.coach-career-history__main > p { margin-top: 5px; color: var(--muted); font-size: 12px; }
+.coach-career-history__main dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 15px 0 0; border: 1px solid var(--line-soft); }
+.coach-career-history__main dl div { padding: 9px 10px; border-right: 1px solid var(--line-soft); }
+.coach-career-history__main dl div:last-child { border-right: 0; }
+.coach-career-history__main dt { color: var(--muted); font-size: 12px; }
+.coach-career-history__main dd { margin: 4px 0 0; font-size: 13px; font-weight: 700; }
+.coach-career-history__reasons { display: grid; gap: 4px; margin-top: 12px; color: var(--ink-soft); font-size: 12px; }
+.coach-career-history__titles { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.coach-career-history__titles li { display: flex; align-items: center; gap: 5px; padding: 5px 7px; color: var(--amber); border: 1px solid rgba(230,184,92,.2); background: rgba(230,184,92,.05); font-size: 12px; }
+
+.coach-career-history-view { display: grid; gap: 12px; }
+.coach-career-history-tabs { display: flex; min-width: 0; overflow-x: auto; border: 1px solid var(--line); background: #131518; scrollbar-width: thin; }
+.coach-career-history-tabs button { min-height: 44px; flex: 1 0 auto; padding: 9px 14px; color: var(--muted); border: 0; border-right: 1px solid var(--line); background: transparent; font-size: 12px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+.coach-career-history-tabs button:last-child { border-right: 0; }
+.coach-career-history-tabs button:hover { color: var(--ink); background: rgba(255,255,255,.025); }
+.coach-career-history-tabs button:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--career-accent); outline-offset: -3px; }
+.coach-career-history-tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px var(--career-accent); background: var(--raised); }
+.coach-career-history-search { display: grid; align-items: center; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; min-height: 42px; margin-bottom: 12px; padding: 0 12px; color: var(--muted); border: 1px solid var(--line); background: var(--panel); }
+.coach-career-history-search:focus-within { color: var(--career-accent); border-color: color-mix(in srgb, var(--career-accent) 55%, var(--line)); }
+.coach-career-history-search input { min-width: 0; height: 40px; color: var(--ink); border: 0; outline: 0; background: transparent; font: inherit; font-size: 13px; }
+.coach-career-history-search input::placeholder { color: var(--muted); }
+.coach-career-history-search button { display: grid; width: 28px; height: 28px; place-items: center; color: var(--muted); border: 0; background: transparent; cursor: pointer; }
+.coach-career-history-search button:hover, .coach-career-history-search button:focus-visible { color: var(--ink); outline: 1px solid var(--line-strong); }
+.coach-career-history-section { min-width: 0; min-height: 320px; }
+
+.coach-career-history-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--panel); }
+.coach-career-history-summary article { display: grid; min-height: 92px; grid-template-columns: 28px minmax(0, 1fr); align-content: center; padding: 15px 17px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.coach-career-history-summary article:nth-child(4n) { border-right: 0; }
+.coach-career-history-summary article:nth-last-child(-n+4) { border-bottom: 0; }
+.coach-career-history-summary svg, .coach-career-history-glyph { grid-row: 1 / 3; align-self: center; color: var(--career-accent); }
+.coach-career-history-summary article > span:not(.coach-career-history-glyph) { color: var(--muted); font-size: 12px; }
+.coach-career-history-summary article > strong { margin-top: 4px; font-size: 16px; }
+.coach-career-history-glyph { display: grid; min-width: 24px; height: 24px; place-items: center; font-size: 12px; font-style: normal; font-weight: 800; }
+
+.coach-career-unemployment-list { padding: 4px 16px 10px; }
+.coach-career-unemployment-list > article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-unemployment-list > article:last-child { border-bottom: 0; }
+.coach-career-unemployment-list > article > svg { color: var(--career-accent); }
+.coach-career-unemployment-list strong { font-size: 13px; }
+.coach-career-unemployment-list p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.coach-career-unemployment-list dl { display: grid; grid-template-columns: repeat(3, minmax(70px, auto)); margin: 0; border: 1px solid var(--line-soft); }
+.coach-career-unemployment-list dl div { padding: 7px 9px; border-right: 1px solid var(--line-soft); }
+.coach-career-unemployment-list dl div:last-child { border-right: 0; }
+.coach-career-unemployment-list dt { color: var(--muted); font-size: 12px; }
+.coach-career-unemployment-list dd { margin: 3px 0 0; font-size: 12px; font-weight: 700; }
+
+.coach-career-permanent-timeline { display: grid; margin: 0; padding: 4px 0; border: 1px solid var(--line); background: var(--panel); list-style: none; }
+.coach-career-permanent-timeline > li { display: grid; grid-template-columns: 42px minmax(0, 1fr); padding: 0 18px; }
+.coach-career-permanent-timeline > li > span { position: relative; display: grid; width: 12px; height: 12px; align-self: start; justify-self: center; margin-top: 23px; border: 3px solid var(--career-accent); border-radius: 50%; background: var(--panel); }
+.coach-career-permanent-timeline > li > span::after { position: absolute; top: 9px; left: 2px; width: 2px; height: calc(100% + 85px); background: var(--line); content: ""; }
+.coach-career-permanent-timeline > li:last-child > span::after { display: none; }
+.coach-career-permanent-timeline article { min-width: 0; padding: 17px 0; border-bottom: 1px solid var(--line-soft); }
+.coach-career-permanent-timeline > li:last-child article { border-bottom: 0; }
+.coach-career-permanent-timeline header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.coach-career-permanent-timeline h3 { margin-top: 3px; font-size: 16px; }
+.coach-career-permanent-timeline time, .coach-career-permanent-timeline article > p { color: var(--muted); font-size: 12px; }
+.coach-career-permanent-timeline article > p { margin-top: 5px; }
+.coach-career-permanent-timeline em { display: block; margin-top: 8px; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+.coach-career-permanent-timeline footer { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.coach-career-club-spells { display: grid; gap: 12px; }
+.coach-career-club-spells > article { padding: 17px; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-club-spells > article > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding-bottom: 13px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-club-spells h3 { margin: 3px 0; font-size: 19px; }
+.coach-career-club-spells header p:last-child { color: var(--muted); font-size: 12px; }
+.coach-career-spell-period { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 0; color: var(--ink-soft); font-size: 12px; }
+.coach-career-spell-period span { display: flex; align-items: center; gap: 7px; }
+.coach-career-spell-period svg { color: var(--career-accent); }
+.coach-career-spell-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line-soft); }
+.coach-career-spell-facts div { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.coach-career-spell-facts div:nth-child(4n) { border-right: 0; }
+.coach-career-spell-facts div:nth-last-child(-n+4) { border-bottom: 0; }
+.coach-career-spell-facts dt { color: var(--muted); font-size: 12px; }
+.coach-career-spell-facts dd { margin: 4px 0 0; overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; }
+.coach-career-spell-development { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--career-accent); background: color-mix(in srgb, var(--career-accent) 5%, transparent); }
+.coach-career-spell-development strong { margin-right: auto; font-size: 12px; }
+.coach-career-spell-development span { color: var(--ink-soft); font-size: 12px; }
+.coach-career-spell-contracts { margin-top: 12px; border: 1px solid var(--line-soft); }
+.coach-career-spell-contracts summary { padding: 10px 11px; color: var(--ink-soft); font-size: 12px; font-weight: 700; cursor: pointer; }
+.coach-career-spell-contracts[open] summary { border-bottom: 1px solid var(--line-soft); }
+.coach-career-spell-contracts > div { display: grid; }
+.coach-career-spell-contracts article { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(2, minmax(100px, auto)); gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-spell-contracts article:last-child { border-bottom: 0; }
+.coach-career-spell-contracts strong, .coach-career-spell-contracts span, .coach-career-spell-contracts em { font-size: 12px; }
+.coach-career-spell-contracts span, .coach-career-spell-contracts em { color: var(--muted); }
+.coach-career-spell-contracts em { grid-column: 1 / -1; }
+
+.coach-career-history-table-wrap { min-width: 0; overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-history-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.coach-career-history-table caption { padding: 13px 15px; color: var(--ink); border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 700; text-align: left; }
+.coach-career-history-table th, .coach-career-history-table td { padding: 10px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; text-align: right; white-space: nowrap; }
+.coach-career-history-table tr:last-child th, .coach-career-history-table tr:last-child td { border-bottom: 0; }
+.coach-career-history-table thead th { color: var(--muted); background: rgba(255,255,255,.015); font-weight: 600; }
+.coach-career-history-table th:first-child, .coach-career-history-table td:first-child, .coach-career-history-table th[scope="row"] { text-align: left; }
+.coach-career-history-table tbody th { color: var(--ink); font-weight: 700; }
+.coach-career-history-table tbody td { color: var(--ink-soft); }
+
+.coach-career-title-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.coach-career-title-grid article { display: grid; min-height: 116px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 14px; padding: 17px; border: 1px solid rgba(230,184,92,.24); background: linear-gradient(115deg, rgba(230,184,92,.07), var(--panel) 58%); }
+.coach-career-title-grid article > span { display: grid; width: 48px; height: 48px; place-items: center; color: var(--amber); border: 1px solid rgba(230,184,92,.25); background: rgba(230,184,92,.06); }
+.coach-career-title-grid h3 { margin: 3px 0; font-size: 17px; }
+.coach-career-title-grid article p:last-of-type, .coach-career-title-grid time { color: var(--muted); font-size: 12px; }
+.coach-career-title-grid time { display: block; margin-top: 5px; }
+
+.coach-career-permanent-list { padding: 0 15px; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-negotiation-values { text-align: right; }
+.coach-career-negotiation-values strong, .coach-career-negotiation-values span { display: block; font-size: 12px; }
+.coach-career-negotiation-values span { margin-top: 4px; color: var(--muted); }
+
+.coach-career-reputation-list { border: 1px solid var(--line); background: var(--panel); }
+.coach-career-reputation-list article { display: grid; min-height: 78px; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 13px; padding: 11px 15px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-reputation-list article:last-child { border-bottom: 0; }
+.coach-career-reputation-list article > span { display: grid; width: 38px; height: 38px; place-items: center; color: var(--green); border: 1px solid rgba(105,213,150,.22); background: rgba(105,213,150,.05); }
+.coach-career-reputation-list article > span.is-negative { color: var(--red); border-color: rgba(224,93,96,.24); background: rgba(224,93,96,.05); }
+.coach-career-reputation-list strong { font-size: 13px; }
+.coach-career-reputation-list p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.coach-career-reputation-list dl { display: grid; grid-template-columns: repeat(2, minmax(68px, auto)); margin: 0; border: 1px solid var(--line-soft); }
+.coach-career-reputation-list dl div { padding: 6px 9px; border-right: 1px solid var(--line-soft); }
+.coach-career-reputation-list dl div:last-child { border-right: 0; }
+.coach-career-reputation-list dt, .coach-career-reputation-list dd { font-size: 12px; }
+.coach-career-reputation-list dt { color: var(--muted); }
+.coach-career-reputation-list dd { margin: 2px 0 0; font-weight: 700; }
+
+.coach-career-achievement-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.coach-career-achievement-grid article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 15px; border: 1px solid var(--line); background: var(--panel); }
+.coach-career-achievement-grid article > span { display: grid; width: 42px; height: 42px; place-items: center; color: var(--career-accent); border: 1px solid color-mix(in srgb, var(--career-accent) 24%, transparent); background: color-mix(in srgb, var(--career-accent) 6%, transparent); }
+.coach-career-achievement-grid h3 { margin: 3px 0; font-size: 15px; }
+.coach-career-achievement-grid p:last-of-type, .coach-career-achievement-grid em { color: var(--muted); font-size: 12px; }
+.coach-career-achievement-grid em { display: block; margin-top: 5px; line-height: 1.45; }
+.coach-career-achievement-grid > article > strong { color: var(--career-accent); font-size: 18px; }
+
+.coach-career-form, .coach-career-resign, .coach-career-interview-form { display: grid; gap: 16px; }
+.coach-career-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.coach-career-form > p, .coach-career-resign > p { color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
+.coach-career-form label, .coach-career-resign label { display: grid; gap: 7px; color: var(--ink-soft); font-size: 12px; font-weight: 600; }
+.coach-career-form label > span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.coach-career-form input, .coach-career-form select, .coach-career-form textarea, .coach-career-resign select, .coach-career-resign textarea, .coach-career-interview-form textarea { width: 100%; min-height: 40px; padding: 9px 11px; color: var(--ink); border: 1px solid #343840; border-radius: 2px; background: #111317; font-size: 13px; resize: vertical; }
+.coach-career-form input:focus, .coach-career-form select:focus, .coach-career-form textarea:focus, .coach-career-resign select:focus, .coach-career-resign textarea:focus, .coach-career-interview-form textarea:focus { border-color: var(--career-accent); }
+.coach-career-warning { display: flex; align-items: flex-start; gap: 9px; padding: 11px; color: #ffd0a1; border: 1px solid rgba(230,184,92,.26); border-left: 3px solid var(--amber); background: rgba(230,184,92,.07); }
+.coach-career-warning p { font-size: 12px; line-height: 1.5; }
+.coach-career-pending-objectives { padding: 11px; border: 1px solid var(--line); background: rgba(255,255,255,.015); }
+.coach-career-pending-objectives strong { font-size: 12px; }
+.coach-career-pending-objectives ul { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.coach-career-interview-form fieldset { margin: 0; padding: 16px; border: 1px solid var(--line); }
+.coach-career-interview-form legend { display: flex; align-items: center; gap: 9px; padding: 0 7px; color: var(--ink); font-size: 13px; font-weight: 600; }
+.coach-career-interview-form legend span { display: grid; width: 23px; height: 23px; place-items: center; color: var(--on-accent); border-radius: 50%; background: var(--career-accent); font-size: 12px; }
+.coach-career-interview-form fieldset > p { margin: 0 0 11px; color: var(--muted); font-size: 12px; }
+.coach-career-interview-options { display: grid; gap: 7px; }
+.coach-career-interview-options label { display: flex; min-height: 42px; align-items: center; gap: 9px; padding: 8px 11px; color: var(--ink-soft); border: 1px solid var(--line); background: #131519; font-size: 12px; cursor: pointer; }
+.coach-career-interview-options label:has(input:checked) { color: var(--ink); border-color: color-mix(in srgb, var(--career-accent) 48%, var(--line)); background: color-mix(in srgb, var(--career-accent) 7%, #131519); }
+.coach-career-interview-options input { accent-color: var(--career-accent); }
+
+.coach-career-interview-chat { display: grid; min-height: 330px; gap: 14px; }
+.coach-career-interview-setup { display: grid; max-width: 680px; justify-items: center; gap: 17px; margin: auto; padding: 22px; text-align: center; }
+.coach-career-interview-setup > svg { color: var(--career-accent); }
+.coach-career-interview-setup h3 { margin-bottom: 6px; font-size: 18px; }
+.coach-career-interview-setup p { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.coach-career-interview-depth { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.coach-career-interview-depth button { display: grid; min-height: 76px; align-content: center; gap: 5px; padding: 10px; color: var(--ink-soft); border: 1px solid var(--line); background: #131519; cursor: pointer; }
+.coach-career-interview-depth button:hover { border-color: color-mix(in srgb, var(--career-accent) 38%, var(--line)); }
+.coach-career-interview-depth button[aria-checked="true"] { color: var(--ink); border-color: var(--career-accent); background: color-mix(in srgb, var(--career-accent) 8%, #131519); }
+.coach-career-interview-depth strong { font-size: 13px; }
+.coach-career-interview-depth span { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.coach-career-interview-chat__header { display: grid; grid-template-columns: auto minmax(100px, 1fr) auto; align-items: center; gap: 14px; padding: 11px 13px; border: 1px solid var(--line); background: rgba(255,255,255,.012); }
+.coach-career-interview-chat__header > div:first-child { display: grid; gap: 3px; }
+.coach-career-interview-chat__header > div:first-child span { color: var(--muted); font-size: 12px; }
+.coach-career-interview-chat__header > div:first-child strong { font-size: 13px; }
+.coach-career-interview-progress { height: 4px; overflow: hidden; background: #282c32; }
+.coach-career-interview-progress span { display: block; height: 100%; background: var(--career-accent); transition: width .25s ease; }
+.coach-career-interview-transcript { display: flex; max-height: min(48vh, 520px); min-height: 220px; flex-direction: column; gap: 10px; overflow-y: auto; padding: 15px; border: 1px solid var(--line); background: #101216; scrollbar-gutter: stable; }
+.coach-career-interview-message { display: grid; max-width: min(78%, 680px); gap: 7px; padding: 11px 13px; border: 1px solid var(--line-soft); background: #17191e; }
+.coach-career-interview-message > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.coach-career-interview-message strong { font-size: 12px; }
+.coach-career-interview-message > div span { color: var(--muted); font-size: 12px; text-transform: capitalize; }
+.coach-career-interview-message p { color: var(--ink-soft); font-size: 13px; line-height: 1.58; white-space: pre-wrap; }
+.coach-career-interview-message--board { align-self: flex-start; border-left: 3px solid var(--career-accent); }
+.coach-career-interview-message--coach { align-self: flex-end; border-color: color-mix(in srgb, var(--blue) 28%, var(--line-soft)); border-right: 3px solid var(--blue); background: rgba(102,163,255,.055); }
+.coach-career-interview-thinking { display: flex; align-items: center; gap: 8px; align-self: flex-start; padding: 8px 10px; color: var(--muted); font-size: 12px; }
+.coach-career-interview-composer { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.012); }
+.coach-career-interview-composer textarea { width: 100%; min-height: 96px; padding: 11px 12px; color: var(--ink); border: 1px solid #343840; background: #111317; font: inherit; font-size: 13px; line-height: 1.5; resize: vertical; }
+.coach-career-interview-composer textarea:focus { border-color: var(--career-accent); outline: 0; }
+.coach-career-interview-composer textarea:disabled { opacity: .65; cursor: wait; }
+.coach-career-interview-composer > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.coach-career-interview-composer > div > span { color: var(--muted); font-size: 12px; }
+.coach-career-interview-evaluation { display: grid; gap: 14px; padding: 15px; border: 1px solid color-mix(in srgb, var(--career-accent) 28%, var(--line)); background: color-mix(in srgb, var(--career-accent) 3%, var(--panel)); }
+.coach-career-interview-evaluation > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.coach-career-interview-evaluation h3 { margin-top: 3px; font-size: 27px; }
+.coach-career-interview-evaluation__summary { color: var(--ink-soft); font-size: 13px; line-height: 1.6; }
+.coach-career-interview-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+.coach-career-interview-metrics > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; }
+.coach-career-interview-metrics span, .coach-career-interview-metrics strong { font-size: 12px; }
+.coach-career-interview-metrics > div > span { color: var(--muted); }
+.coach-career-interview-metrics i { grid-column: 1 / -1; height: 3px; overflow: hidden; background: #282c32; }
+.coach-career-interview-metrics i span { display: block; height: 100%; background: var(--career-accent); }
+.coach-career-interview-findings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.coach-career-interview-findings > div { padding: 11px; border: 1px solid var(--line-soft); }
+.coach-career-interview-findings strong { font-size: 12px; }
+.coach-career-interview-findings ul { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 18px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+.coach-career-interview-findings p { margin-top: 7px; color: var(--muted); font-size: 12px; }
+.coach-career-interview-impact { display: grid; gap: 8px; }
+.coach-career-interview-impact > strong { font-size: 12px; }
+.coach-career-interview-impact > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.coach-career-interview-impact span { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; color: var(--muted); border: 1px solid var(--line-soft); font-size: 12px; }
+.coach-career-interview-impact b.is-positive { color: var(--green); }
+.coach-career-interview-impact b.is-negative { color: var(--red); }
+.coach-career-interview-negotiation { border: 1px solid var(--line-soft); }
+.coach-career-interview-negotiation summary { padding: 10px; color: var(--ink-soft); font-size: 12px; font-weight: 700; cursor: pointer; }
+.coach-career-interview-negotiation[open] summary { border-bottom: 1px solid var(--line-soft); }
+.coach-career-interview-negotiation > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.coach-career-interview-negotiation span { display: flex; justify-content: space-between; gap: 8px; padding: 9px 10px; color: var(--muted); border-right: 1px solid var(--line-soft); font-size: 12px; }
+.coach-career-interview-negotiation span:last-child { border-right: 0; }
+.coach-career-interview-negotiation p { padding: 9px 10px; color: var(--ink-soft); border-top: 1px solid var(--line-soft); font-size: 12px; line-height: 1.5; }
+
+.coach-career-lifecycle {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.coach-career-lifecycle__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.coach-career-lifecycle__header h2 { margin: 3px 0 4px; font-size: 18px; }
+.coach-career-lifecycle__header p { margin: 0; color: var(--ink-soft); font-size: 12px; }
+.coach-career-lifecycle__form {
+  display: grid;
+  grid-template-columns: minmax(150px, .7fr) minmax(150px, .7fr) minmax(240px, 1.6fr);
+  gap: 10px;
+}
+.coach-career-lifecycle label, .professional-cycle-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.coach-career-lifecycle input, .coach-career-lifecycle select,
+.professional-cycle-card input, .professional-cycle-card select, .professional-cycle-card textarea {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--deep);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.coach-career-lifecycle__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.professional-cycle-card {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  padding: 13px;
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--panel) 88%, var(--deep));
+}
+.professional-cycle-card__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.professional-cycle-card__heading > span { display: grid; gap: 3px; }
+.professional-cycle-card__heading small { color: var(--ink-soft); font-size: 12px; letter-spacing: .12em; }
+.professional-cycle-card__heading strong { font-size: 13px; line-height: 1.35; }
+.professional-cycle-actions, .professional-cycle-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.professional-cycle-check { display: flex !important; align-items: center; grid-template-columns: auto 1fr; text-transform: none !important; }
+.professional-cycle-check input { min-height: auto; }
+.professional-cycle-facts { display: grid; gap: 5px; margin: 0; }
+.professional-cycle-facts > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.professional-cycle-facts dt { color: var(--ink-soft); }
+.professional-cycle-facts dd { margin: 0; text-align: right; }
+.professional-cycle-inline-form { display: flex; gap: 8px; }
+.professional-cycle-inline-form input { flex: 1; }
+.coach-career-preferred-staff__list { display: flex; flex-wrap: wrap; gap: 8px; }
+.coach-career-preferred-staff__list > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  min-width: 180px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-soft);
+}
+.coach-career-preferred-staff__list strong { font-size: 12px; }
+.coach-career-preferred-staff__list small { color: var(--ink-soft); font-size: 12px; }
+.coach-career-preferred-staff__list button { grid-column: 2; grid-row: 1 / 3; border: 0; background: transparent; color: var(--ink-soft); cursor: pointer; }
+.coach-career-preferred-staff__list p { margin: 0; color: var(--ink-soft); font-size: 12px; }
+.coach-career-lifecycle__timeline { display: grid; border: 1px solid var(--line-soft); }
+.coach-career-lifecycle__timeline > span { display: grid; grid-template-columns: auto minmax(130px, .5fr) 1fr; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
+.coach-career-lifecycle__timeline > span:last-child { border-bottom: 0; }
+.coach-career-lifecycle__timeline strong { font-size: 12px; }
+.coach-career-lifecycle__timeline small { color: var(--ink-soft); font-size: 12px; }
+
+.theme-light .coach-career-tabs, .theme-light .coach-career-history-tabs, .theme-light .coach-career-form input, .theme-light .coach-career-form select, .theme-light .coach-career-form textarea, .theme-light .coach-career-resign select, .theme-light .coach-career-resign textarea, .theme-light .coach-career-interview-form textarea, .theme-light .coach-career-interview-options label, .theme-light .coach-career-interview-depth button, .theme-light .coach-career-interview-transcript, .theme-light .coach-career-interview-message, .theme-light .coach-career-interview-composer textarea { background: var(--raised); }
+
+@media (max-width: 1050px) {
+  .coach-career-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coach-career-metrics article:nth-child(2) { border-right: 0; }
+  .coach-career-metrics article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .coach-career-overview__grid, .coach-career-card-grid { grid-template-columns: 1fr; }
+  .coach-career-spell-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coach-career-spell-facts div:nth-child(2n) { border-right: 0; }
+  .coach-career-spell-facts div:nth-child(-n+6) { border-bottom: 1px solid var(--line-soft); }
+  .coach-career-lifecycle__grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .coach-career-tabs { display: flex; overflow-x: auto; }
+  .coach-career-tabs button { min-width: 150px; flex: 1 0 auto; }
+  .coach-career-hero { align-items: flex-start; flex-direction: column; padding: 20px; }
+  .coach-career-hero__actions { justify-content: flex-start; }
+  .coach-career-restriction { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-restriction > .badge { grid-column: 2; justify-self: start; }
+  .coach-career-form-grid { grid-template-columns: 1fr; }
+  .coach-career-metrics { grid-template-columns: 1fr; }
+  .coach-career-metrics article { border-right: 0; border-bottom: 1px solid var(--line); }
+  .coach-career-metrics article:last-child { border-bottom: 0; }
+  .coach-career-card > header { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-card > header > .badge { grid-column: 1 / -1; }
+  .coach-career-process-list article { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-process-list article > .badge, .coach-career-process-list article > .button { grid-column: 2; justify-self: start; }
+  .coach-career-history > article { grid-template-columns: 30px minmax(0, 1fr); padding-inline: 13px; }
+  .coach-career-history > article > .club-mark { display: none; }
+  .coach-career-history__main dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coach-career-history__main dl div:nth-child(2) { border-right: 0; }
+  .coach-career-history__main dl div:nth-child(-n+2) { border-bottom: 1px solid var(--line-soft); }
+  .coach-career-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coach-career-history-summary article:nth-child(2n) { border-right: 0; }
+  .coach-career-history-summary article:nth-child(-n+6) { border-bottom: 1px solid var(--line); }
+  .coach-career-unemployment-list > article { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-unemployment-list dl { grid-column: 2; justify-self: start; }
+  .coach-career-club-spells > article > header { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-club-spells > article > header > .badge { grid-column: 2; justify-self: start; }
+  .coach-career-title-grid, .coach-career-achievement-grid { grid-template-columns: 1fr; }
+  .coach-career-reputation-list article { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-reputation-list dl, .coach-career-reputation-list article > .badge { grid-column: 2; justify-self: start; }
+  .coach-career-negotiation-values { grid-column: 2; text-align: left; }
+  .coach-career-interview-chat__header { grid-template-columns: minmax(0, 1fr) auto; }
+  .coach-career-interview-progress { grid-column: 1 / -1; grid-row: 2; }
+  .coach-career-interview-message { max-width: 92%; }
+  .coach-career-interview-impact > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coach-career-lifecycle__header { flex-direction: column; }
+  .coach-career-lifecycle__form { grid-template-columns: 1fr; }
+  .coach-career-lifecycle__timeline > span { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-lifecycle__timeline small { grid-column: 2; }
+  .coach-career-security-dimensions { grid-template-columns: 1fr; }
+  .coach-career-security-classics { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .coach-career-security-classics small { grid-column: 2; }
+}
+
+@media (max-width: 480px) {
+  .coach-career-card__facts { grid-template-columns: 1fr; }
+  .coach-career-card__facts > span { border-right: 0; }
+  .coach-career-vacancy-profile__facts, .coach-career-candidate-fit__factors { grid-template-columns: 1fr; }
+  .coach-career-panel-actions, .coach-career-card > footer { align-items: stretch; flex-direction: column; }
+  .coach-career-panel-actions .button, .coach-career-card > footer .button { width: 100%; }
+  .coach-career-interview-depth, .coach-career-interview-metrics, .coach-career-interview-findings, .coach-career-interview-impact > div, .coach-career-interview-negotiation > div { grid-template-columns: 1fr; }
+  .coach-career-interview-negotiation span { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .coach-career-interview-negotiation span:last-child { border-bottom: 0; }
+  .coach-career-interview-message { max-width: 100%; }
+  .coach-career-interview-composer > div { align-items: stretch; flex-direction: column; }
+  .coach-career-interview-composer .button { width: 100%; }
+  .coach-career-history-summary { grid-template-columns: 1fr; }
+  .coach-career-history-summary article { border-right: 0; border-bottom: 1px solid var(--line) !important; }
+  .coach-career-history-summary article:last-child { border-bottom: 0 !important; }
+  .coach-career-unemployment-list dl { width: 100%; grid-template-columns: 1fr; }
+  .coach-career-unemployment-list dl div { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .coach-career-unemployment-list dl div:last-child { border-bottom: 0; }
+  .coach-career-permanent-timeline > li { grid-template-columns: 28px minmax(0, 1fr); padding-inline: 9px; }
+  .coach-career-permanent-timeline header, .coach-career-spell-period { align-items: flex-start; flex-direction: column; }
+  .coach-career-spell-facts { grid-template-columns: 1fr; }
+  .coach-career-spell-facts div { border-right: 0; border-bottom: 1px solid var(--line-soft) !important; }
+  .coach-career-spell-facts div:last-child { border-bottom: 0 !important; }
+  .coach-career-spell-contracts article { grid-template-columns: 1fr; }
+  .coach-career-spell-contracts em { grid-column: auto; }
+  .coach-career-achievement-grid article { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-achievement-grid > article > strong { grid-column: 2; }
+  .coach-career-security-metrics { grid-template-columns: 1fr; }
+  .coach-career-security-metric, .coach-career-security-metric:nth-child(2n), .coach-career-security-metric:nth-last-child(-n+2) { grid-column: auto; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .coach-career-security-metric:last-child { border-bottom: 0; }
+  .coach-career-ultimatum header { grid-template-columns: auto minmax(0, 1fr); }
+  .coach-career-ultimatum header > .badge { grid-column: 2; justify-self: start; }
+  .coach-career-ultimatum footer { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .coach-career-security-history li { grid-template-columns: 18px minmax(0, 1fr); }
+  .coach-career-security-history time { grid-column: 2; }
+}

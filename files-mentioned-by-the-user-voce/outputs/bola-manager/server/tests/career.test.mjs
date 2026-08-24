@@ -4,7 +4,7 @@ import { io as createClient } from "socket.io-client";
 import { createRoomSchema, parseOrThrow } from "../schemas.mjs";
 import { MemoryRoomPersistence } from "../store/roomPersistence.mjs";
 import { RoomStore } from "../store/roomStore.mjs";
-import { startTestServer } from "./testHarness.mjs";
+import { automaticallyReadyAtHalftime, startTestServer } from "./testHarness.mjs";
 
 function storeWith(persistence = new MemoryRoomPersistence()) {
   return new RoomStore({
@@ -172,6 +172,7 @@ test("match:finished aponta primeiro jogo da nova temporada ilimitada", async (c
     });
   }
   const finished = new Promise((resolve) => client.once("match:finished", resolve));
+  automaticallyReadyAtHalftime(client);
   await client.timeout(1_000).emitWithAck("match:ready", { code: created.room.code, ready: true });
   const result = await finished;
 

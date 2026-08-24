@@ -5,7 +5,8 @@ import { extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { initializeFirebaseAdmin } from "../server/config.mjs";
-import { createCatalogMediaService } from "../server/services/catalogMedia.mjs";
+import { calculatePlayerOverall } from "../server/game/lineupStrength.mjs";
+import { createMediaService } from "../server/services/mediaService.mjs";
 import { parseBrasfootSource } from "./lib/brasfoot-binary.mjs";
 
 const attributeSchema = z.record(z.coerce.number().finite()).default({});
@@ -103,15 +104,103 @@ function hashText(value) {
   return hash >>> 0;
 }
 
-function toInternalAttribute(value) {
+const INTERNAL_ATTRIBUTE_MIN = 1;
+const INTERNAL_ATTRIBUTE_MAX = 20;
+const BRASFOOT_ATTRIBUTE_SCALE = 100;
+const ATTRIBUTE_SCALE_DIVISOR = BRASFOOT_ATTRIBUTE_SCALE / INTERNAL_ATTRIBUTE_MAX;
+
+const GOALKEEPER_ATTRIBUTES = ["reflexos", "posicionamentoGol", "saidaGol", "penaltis"];
+
+function attributeProfile({ high = [], medium = [], low = [], veryLow = [] }) {
+  return Object.freeze(Object.fromEntries([
+    ...high.map((attribute) => [attribute, "high"]),
+    ...medium.map((attribute) => [attribute, "medium"]),
+    ...low.map((attribute) => [attribute, "low"]),
+    ...veryLow.map((attribute) => [attribute, "veryLow"]),
+  ]));
+}
+
+const fullbackProfile = attributeProfile({
+  high: ["velocidade", "defesa", "passe", "resistencia"],
+  medium: ["drible", "nocao", "peBom", "forca", "impulsao"],
+  low: ["chute", "peRuim"],
+  veryLow: GOALKEEPER_ATTRIBUTES,
+});
+const wingerProfile = attributeProfile({
+  high: ["velocidade", "chute", "drible", "peBom"],
+  medium: ["nocao", "passe", "forca", "resistencia", "impulsao"],
+  low: ["defesa", "peRuim"],
+  veryLow: GOALKEEPER_ATTRIBUTES,
+});
+const POSITION_ATTRIBUTE_TIERS = Object.freeze({
+  GOL: attributeProfile({
+    high: ["reflexos", "posicionamentoGol", "saidaGol"],
+    medium: ["nocao", "passe", "peBom", "forca", "resistencia", "impulsao", "penaltis"],
+    low: ["velocidade", "defesa", "peRuim"],
+    veryLow: ["chute", "drible"],
+  }),
+  ZAG: attributeProfile({
+    high: ["nocao", "defesa", "forca", "impulsao"],
+    medium: ["velocidade", "passe", "peBom", "resistencia"],
+    low: ["chute", "drible", "peRuim"],
+    veryLow: GOALKEEPER_ATTRIBUTES,
+  }),
+  LD: fullbackProfile,
+  LE: fullbackProfile,
+  VOL: attributeProfile({
+    high: ["nocao", "defesa", "passe", "forca", "resistencia"],
+    medium: ["velocidade", "drible", "peBom", "impulsao"],
+    low: ["chute", "peRuim"],
+    veryLow: GOALKEEPER_ATTRIBUTES,
+  }),
+  MC: attributeProfile({
+    high: ["nocao", "passe", "resistencia"],
+    medium: ["velocidade", "chute", "drible", "defesa", "peBom", "forca", "impulsao"],
+    low: ["peRuim"],
+    veryLow: GOALKEEPER_ATTRIBUTES,
+  }),
+  MEI: attributeProfile({
+    high: ["chute", "drible", "nocao", "passe", "peBom"],
+    medium: ["velocidade", "forca", "resistencia", "impulsao"],
+    low: ["defesa", "peRuim"],
+    veryLow: GOALKEEPER_ATTRIBUTES,
+  }),
+  PD: wingerProfile,
+  PE: wingerProfile,
+  ATA: attributeProfile({
+    high: ["chute", "drible", "nocao", "forca", "impulsao"],
+    medium: ["velocidade", "passe", "peBom", "resistencia"],
+    low: ["defesa", "peRuim"],
+    veryLow: GOALKEEPER_ATTRIBUTES,
+  }),
+});
+
+function usesBrasfootAttributeScale(player) {
+  if (Number(player.attributeScale) === BRASFOOT_ATTRIBUTE_SCALE) return true;
+  return [player.overall, ...Object.values(player.attributes)]
+    .some((value) => Number.isFinite(Number(value)) && Number(value) > INTERNAL_ATTRIBUTE_MAX);
+}
+
+function toInternalAttribute(value, brasfootScale = false) {
   const numeric = Number(value);
-  const scaled = numeric <= 20 ? numeric : numeric / 5;
-  return Math.max(1, Math.min(20, Math.round(scaled)));
+  const scaled = brasfootScale ? numeric / ATTRIBUTE_SCALE_DIVISOR : numeric;
+  return Math.max(
+    INTERNAL_ATTRIBUTE_MIN,
+    Math.min(INTERNAL_ATTRIBUTE_MAX, Math.round(scaled)),
+  );
 }
 
 function generatedAttribute(player, attributeName, overall) {
-  const variance = (hashText(`${player.name}|${player.position}|${attributeName}`) % 7) - 3;
-  return Math.max(1, Math.min(20, overall + variance));
+  const variance = (hashText(`${player.name}|${player.position}|${attributeName}`) % 3) - 1;
+  const tier = POSITION_ATTRIBUTE_TIERS[player.position]?.[attributeName] ?? "medium";
+  const target = tier === "high"
+    ? overall + 1
+    : tier === "low"
+      ? Math.round(overall * 0.5)
+      : tier === "veryLow"
+        ? Math.round(overall * 0.25)
+        : overall - 1;
+  return Math.max(1, Math.min(20, target + variance));
 }
 
 function ageFactor(age) {
@@ -142,23 +231,30 @@ export function normalizeDataset(rawData) {
       throw new Error(`Jogador ${player.id} referencia clube inexistente: ${player.clubId}`);
     }
   }
-  const requiredAttributes = ["velocidade", "chute", "drible", "nocao", "defesa", "passe", "peBom", "peRuim"];
+  const requiredAttributes = [
+    "velocidade", "chute", "drible", "nocao", "defesa", "passe", "peBom", "peRuim",
+    "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
+  ];
   const players = parsed.players.map((player) => {
-    const sourceValues = Object.values(player.attributes).map(toInternalAttribute);
+    const brasfootScale = usesBrasfootAttributeScale(player);
+    const { attributeScale: _sourceAttributeScale, ...normalizedPlayer } = player;
+    const sourceValues = Object.values(player.attributes)
+      .map((value) => toInternalAttribute(value, brasfootScale));
     const sourceOverall = player.overall == null
       ? sourceValues.reduce((sum, value) => sum + value, 0) / Math.max(1, sourceValues.length)
-      : toInternalAttribute(player.overall);
-    const overall = Math.max(1, Math.min(20, Math.round(sourceOverall || 10)));
+      : toInternalAttribute(player.overall, brasfootScale);
+    const seedOverall = Math.max(1, Math.min(20, Math.round(sourceOverall || 10)));
     const attributes = Object.fromEntries(requiredAttributes.map((key) => [
       key,
       player.attributes[key] == null
-        ? generatedAttribute(player, key, overall)
-        : toInternalAttribute(player.attributes[key]),
+        ? generatedAttribute(player, key, seedOverall)
+        : toInternalAttribute(player.attributes[key], brasfootScale),
     ]));
+    const overall = calculatePlayerOverall({ position: player.position, attributes }, seedOverall);
     const stars = Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key, Math.ceil(value / 2)]));
     const clubReputation = clubsById.get(player.clubId)?.reputation ?? 10;
     const marketValue = Math.round(overall * ageFactor(player.age) * clubReputation * 100_000);
-    return { ...player, overall, attributes, stars, marketValue };
+    return { ...normalizedPlayer, overall, attributes, stars, marketValue };
   });
   return { ...parsed, players };
 }
@@ -233,7 +329,7 @@ export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, rep
         });
         club.crestImageUrl = media.url;
         club.crestImagePath = media.path;
-        uploadedMedia.push(media);
+        uploadedMedia.push({ ...media, recordId: String(club.id) });
         report.assets.uploaded += 1;
       } catch (error) {
         report.assets.failed += 1;
@@ -298,6 +394,7 @@ function compactReport(report) {
       failed: report.assets?.failed ?? 0,
       cleanedUp: report.assets?.cleanedUp ?? 0,
       cleanupFailed: report.assets?.cleanupFailed ?? 0,
+      preserved: report.assets?.preserved ?? 0,
     },
   };
 }
@@ -363,7 +460,7 @@ export async function executeImportCommit({
         report.assets.uploadSkipped = detectedCrests;
         report.warnings.push({
           code: "CREST_STORAGE_UNAVAILABLE",
-          message: `Firebase Storage nao configurado; ${detectedCrests} escudo(s) nao foram enviados`,
+          message: `Armazenamento de imagens nao configurado; ${detectedCrests} escudo(s) nao foram enviados`,
         });
       } else {
         await persistProgress("uploading-assets");
@@ -406,10 +503,25 @@ export async function executeImportCommit({
     });
     return { runId, progress };
   } catch (error) {
-    await cleanupUploadedAssets(mediaService, uploadedMedia, report);
+    const committedClubIds = new Set(
+      data.clubs
+        .slice(0, progress.collections.clubs.committed)
+        .map((club) => String(club.id)),
+    );
+    const cleanupCandidates = uploadedMedia.filter((media) => !committedClubIds.has(String(media.recordId)));
+    const preservedMedia = uploadedMedia.length - cleanupCandidates.length;
+    report.assets.preserved = preservedMedia;
+    if (preservedMedia > 0) {
+      report.warnings.push({
+        code: "CREST_CLEANUP_SKIPPED_COMMITTED",
+        message: `${preservedMedia} escudo(s) foram preservados porque seus clubes ja estavam gravados`,
+      });
+    }
+    await cleanupUploadedAssets(mediaService, cleanupCandidates, report);
     progress.phase = "failed";
     progress.assets.cleanedUp = report.assets.cleanedUp ?? 0;
     progress.assets.cleanupFailed = report.assets.cleanupFailed ?? 0;
+    progress.assets.preserved = preservedMedia;
     const failedAt = now();
     report.commit = {
       runId,
@@ -492,7 +604,8 @@ export async function runImport(options, env = process.env) {
     const firebase = await initializeFirebaseAdmin(env);
     if (!firebase.enabled) throw new Error(`Firebase Admin indisponivel: ${firebase.reason}`);
     const database = firebase.firestore ?? (await import("firebase-admin/firestore")).getFirestore(firebase.app);
-    const mediaService = firebase.bucket ? createCatalogMediaService({ bucket: firebase.bucket }) : null;
+    const configuredMediaService = createMediaService({ env, bucket: firebase.bucket });
+    const mediaService = configuredMediaService.configured ? configuredMediaService : null;
     const commit = await executeImportCommit({
       database,
       data,

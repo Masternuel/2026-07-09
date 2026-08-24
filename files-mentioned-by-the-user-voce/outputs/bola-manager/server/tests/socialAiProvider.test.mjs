@@ -93,20 +93,74 @@ test("chama Gemini no servidor, valida JSON e reutiliza cache", async () => {
   assert.equal(service.hasReusableResult(input), false);
 });
 
-test("falha do provedor nao vaza erro e retorna contrato de fallback", async () => {
-  let warnings = 0;
+test("repete falha transitoria e usa modelo reserva antes do fallback local", async () => {
+  const requestedModels = [];
   const service = createSocialAiService({
     apiKey: "test-key",
-    fetchImpl: async () => ({ ok: false, async json() { return { secret: "provider-detail" }; } }),
-    logger: { warn() { warnings += 1; } },
+    model: "gemini-primary",
+    fallbackModels: ["gemini-backup"],
+    retriesPerModel: 1,
+    retryDelayMs: 0,
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      requestedModels.push(request.model);
+      if (request.model === "gemini-primary") {
+        return {
+          ok: false,
+          status: 500,
+          async json() { return { error: { status: "api_error", message: "temporary detail" } }; },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            output_text: JSON.stringify({
+              teamComment: { author: "Central da Rodada", role: "imprensa", text: "Aurora em pauta.", sentiment: "neutro" },
+              replies: [{
+                postId: "player-1",
+                comments: [{ author: "Torcida", role: "torcida", text: "Resposta recuperada com sucesso.", sentiment: "positivo" }],
+              }],
+            }),
+          };
+        },
+      };
+    },
     idFactory: idFactory(),
   });
 
   const result = await service.generate(input);
+  assert.deepEqual(requestedModels, ["gemini-primary", "gemini-primary", "gemini-backup"]);
+  assert.equal(result.source, "gemini");
+  assert.equal(result.model, "gemini-backup");
+  assert.equal(result.replies[0].comments[0].text, "Resposta recuperada com sucesso.");
+});
+
+test("falha do provedor nao vaza erro e retorna contrato de fallback", async () => {
+  let warnings = 0;
+  let calls = 0;
+  let warningPayload = null;
+  const service = createSocialAiService({
+    apiKey: "test-key",
+    model: "gemini-primary",
+    fallbackModels: ["gemini-backup"],
+    retriesPerModel: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return { ok: false, status: 503, async json() { return { secret: "provider-detail" }; } };
+    },
+    logger: { warn(...args) { warnings += 1; warningPayload = args; } },
+    idFactory: idFactory(),
+  });
+
+  const result = await service.generate(input);
+  assert.equal(calls, 2);
   assert.equal(warnings, 1);
   assert.equal(result.source, "fallback");
   assert.equal(result.replies.length, 1);
   assert.doesNotMatch(JSON.stringify(result), /provider-detail|test-key/);
+  assert.doesNotMatch(JSON.stringify(warningPayload), /provider-detail|test-key/);
 });
 
 test("saida malformada da IA e descartada pelo validador", async () => {

@@ -23,6 +23,7 @@ export interface AuthContextValue {
   signInGoogle: () => Promise<void>;
   startDemo: () => void;
   signOut: () => Promise<void>;
+  updateDisplayName: (displayName: string) => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   clearError: () => void;
 }
@@ -69,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [demoIdentity, setDemoIdentity] = useState<ManagerIdentity | null>(null);
   const [loading, setLoading] = useState(Boolean(firebaseAuth));
   const [error, setError] = useState<string | null>(null);
+  const [profileRevision, setProfileRevision] = useState(0);
 
   useEffect(() => {
     void initializeFirebaseAnalytics();
@@ -139,12 +141,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (firebaseAuth?.currentUser) await firebaseSignOut(firebaseAuth);
   }, []);
 
+  const updateDisplayName = useCallback(async (value: string) => {
+    const displayName = value.trim();
+    if (displayName.length < 2 || displayName.length > 80) {
+      throw new Error('O nome de exibição deve ter entre 2 e 80 caracteres.');
+    }
+    setError(null);
+
+    if (demoIdentity) {
+      setDemoIdentity((current) => current ? { ...current, displayName } : current);
+      return;
+    }
+
+    const user = firebaseAuth?.currentUser;
+    if (!user) {
+      const message = 'Sua sessão expirou. Entre novamente para alterar o perfil.';
+      setError(message);
+      throw new Error(message);
+    }
+
+    try {
+      await updateProfile(user, { displayName });
+      await user.getIdToken(true);
+      setFirebaseUser(user);
+      setProfileRevision((revision) => revision + 1);
+    } catch (nextError) {
+      const message = authMessage(nextError);
+      setError(message);
+      throw new Error(message);
+    }
+  }, [demoIdentity]);
+
   const getIdToken = useCallback(async (forceRefresh = false) => {
     if (demoIdentity) return null;
     return firebaseAuth?.currentUser ? firebaseAuth.currentUser.getIdToken(forceRefresh) : null;
   }, [demoIdentity]);
 
-  const identity = demoIdentity ?? (firebaseUser ? firebaseIdentity(firebaseUser) : null);
+  const identity = useMemo(
+    () => demoIdentity ?? (firebaseUser ? firebaseIdentity(firebaseUser) : null),
+    [demoIdentity, firebaseUser, profileRevision],
+  );
   const status: AuthStatus = loading && !demoIdentity ? 'loading' : identity ? 'authenticated' : 'anonymous';
   const value = useMemo<AuthContextValue>(() => ({
     status,
@@ -156,9 +192,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signInGoogle,
     startDemo,
     signOut,
+    updateDisplayName,
     getIdToken,
     clearError: () => setError(null),
-  }), [status, identity, error, signInEmail, createEmailAccount, signInGoogle, startDemo, signOut, getIdToken]);
+  }), [status, identity, error, signInEmail, createEmailAccount, signInGoogle, startDemo, signOut, updateDisplayName, getIdToken]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

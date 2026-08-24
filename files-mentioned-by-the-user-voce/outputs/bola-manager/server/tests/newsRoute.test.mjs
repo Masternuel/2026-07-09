@@ -139,6 +139,65 @@ test("gera radar, publica post autenticado e hidrata feed da sala", async (conte
   assert.equal(invalid.status, 400);
 });
 
+test("reprocessa comentario fallback de post do manager quando o provedor volta", async (context) => {
+  let providerSource = "fallback";
+  const calls = [];
+  const socialAi = {
+    configured: true,
+    model: "gemini-test",
+    hasReusableResult() { return false; },
+    async generate(input) {
+      calls.push(input);
+      return {
+        source: providerSource,
+        model: providerSource === "gemini" ? "gemini-backup" : null,
+        cached: false,
+        teamComment: { id: "team", author: "Central da Rodada", role: "imprensa", text: "Radar da rodada.", sentiment: "neutro" },
+        replies: input.posts.map((post) => ({
+          postId: post.id,
+          comments: [{
+            id: `${providerSource}-${post.id}`,
+            author: "Arquibancada",
+            role: "torcida",
+            text: providerSource === "gemini" ? "Resposta recuperada pelo provedor." : "Resposta generica.",
+            sentiment: "neutro",
+          }],
+        })),
+        newsArticle: { publish: false, source: "", sourceType: "imprensa", headline: "", body: "", tag: "" },
+      };
+    },
+  };
+  const newsStore = new NewsStore({ idFactory: () => "manager-fallback" });
+  const { server, url } = await startTestServer({ newsStore, socialAi });
+  context.after(() => server.close());
+  const room = await createRoom(url);
+
+  const publishResponse = await jsonRequest(`${url}/api/news/${room.code}/posts`, "owner-token", {
+    method: "POST",
+    body: { message: "Vamos time!" },
+  });
+  assert.equal(publishResponse.status, 201);
+  const published = await publishResponse.json();
+  assert.equal(published.post.comments[0].text, "Resposta generica.");
+  assert.equal((await newsStore.get(room.code, "manager-fallback")).aiSource, "fallback");
+
+  providerSource = "gemini";
+  const analysisResponse = await jsonRequest(`${url}/api/news/${room.code}/ai`, "owner-token", {
+    method: "POST",
+    body: { posts: [{ id: "n3", source: "Fonte", sourceType: "jogador", headline: "Foco", body: "Vamos." }] },
+  });
+  assert.equal(analysisResponse.status, 200);
+  const analysis = await analysisResponse.json();
+  const recovered = analysis.posts.find((post) => post.id === "manager-fallback");
+  assert.equal(recovered.comments[0].text, "Resposta recuperada pelo provedor.");
+  assert.equal(analysis.replies.some((reply) => reply.postId.startsWith("recover-manager-")), false);
+  assert.equal(calls.at(-1).posts.some((post) => post.id.startsWith("recover-manager-") && post.sourceType === "manager"), true);
+
+  const persisted = await newsStore.get(room.code, "manager-fallback");
+  assert.equal(persisted.aiSource, "gemini");
+  assert.equal(persisted.comments[0].text, "Resposta recuperada pelo provedor.");
+});
+
 test("novo post e transmitido em tempo real aos membros da sala", async (context) => {
   const calls = [];
   const newsStore = new NewsStore({ idFactory: () => "post-live" });
@@ -369,4 +428,82 @@ test("manager responde comentario e conversa fica persistida", async (context) =
   );
   assert.equal(hidden.status, 404);
   assert.equal(calls.length, callsBeforeIntruder);
+});
+
+test("requestId torna publicacao e resposta idempotentes sem bloquear payload legado", async (context) => {
+  const calls = [];
+  const ids = ["idempotent-post", "legacy-post"];
+  const newsStore = new NewsStore({ idFactory: () => ids.shift() });
+  const { server, url } = await startTestServer({ newsStore, socialAi: fakeSocialAi(calls) });
+  context.after(() => server.close());
+  const room = await createRoom(url);
+
+  const publishBody = {
+    message: "Seguimos focados para vencer.",
+    requestId: "publish-request-01",
+  };
+  const firstPublish = await jsonRequest(`${url}/api/news/${room.code}/posts`, "owner-token", {
+    method: "POST",
+    body: publishBody,
+  });
+  assert.equal(firstPublish.status, 201);
+  const firstPayload = await firstPublish.json();
+  const callsAfterPublish = calls.length;
+
+  const repeatedPublish = await jsonRequest(`${url}/api/news/${room.code}/posts`, "owner-token", {
+    method: "POST",
+    body: publishBody,
+  });
+  assert.equal(repeatedPublish.status, 200);
+  assert.equal((await repeatedPublish.json()).post.id, firstPayload.post.id);
+  assert.equal(calls.length, callsAfterPublish);
+  assert.equal((await newsStore.list(room.code)).filter((post) => post.sourceType === "manager").length, 1);
+
+  const publishConflict = await jsonRequest(`${url}/api/news/${room.code}/posts`, "owner-token", {
+    method: "POST",
+    body: { ...publishBody, message: "Conteudo diferente." },
+  });
+  assert.equal(publishConflict.status, 409);
+  assert.equal((await publishConflict.json()).error.code, "NEWS_REQUEST_CONFLICT");
+
+  const parentCommentId = firstPayload.post.comments[0].id;
+  const replyBody = {
+    message: "Vamos transformar foco em resultado.",
+    parentCommentId,
+    requestId: "reply-request-0001",
+  };
+  const firstReply = await jsonRequest(
+    `${url}/api/news/${room.code}/posts/${firstPayload.post.id}/comments`,
+    "owner-token",
+    { method: "POST", body: replyBody },
+  );
+  assert.equal(firstReply.status, 201);
+  const firstConversation = await firstReply.json();
+  const callsAfterReply = calls.length;
+
+  const repeatedReply = await jsonRequest(
+    `${url}/api/news/${room.code}/posts/${firstPayload.post.id}/comments`,
+    "owner-token",
+    { method: "POST", body: replyBody },
+  );
+  assert.equal(repeatedReply.status, 200);
+  const repeatedConversation = await repeatedReply.json();
+  assert.equal(repeatedConversation.post.comments.length, firstConversation.post.comments.length);
+  assert.deepEqual(repeatedConversation.comments, firstConversation.comments);
+  assert.equal(calls.length, callsAfterReply);
+
+  const replyConflict = await jsonRequest(
+    `${url}/api/news/${room.code}/posts/${firstPayload.post.id}/comments`,
+    "owner-token",
+    { method: "POST", body: { ...replyBody, message: "Outra resposta." } },
+  );
+  assert.equal(replyConflict.status, 409);
+  assert.equal((await replyConflict.json()).error.code, "NEWS_REQUEST_CONFLICT");
+
+  const legacyPublish = await jsonRequest(`${url}/api/news/${room.code}/posts`, "owner-token", {
+    method: "POST",
+    body: { message: "Payload antigo continua valido." },
+  });
+  assert.equal(legacyPublish.status, 429);
+  assert.equal((await legacyPublish.json()).error.code, "SOCIAL_RATE_LIMITED");
 });

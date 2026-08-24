@@ -1,4 +1,5 @@
-import { Archive, ChevronRight, CircleOff, Database, MoveHorizontal, Search, Shield, Trophy, UserRound } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { Archive, ChevronRight, CircleOff, Database, MoveHorizontal, Search, Shield, Trash2, Trophy, UserRound, X } from 'lucide-react';
 import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { ClubMark } from '../shared/ClubMark';
@@ -10,6 +11,7 @@ interface EditorEntityListProps {
   entity: EditorEntity;
   records: EditorRecord[];
   selectedId: string | null;
+  selectedIds: ReadonlySet<string>;
   query: string;
   status: 'all' | 'active' | 'archived';
   contextualFilter: string;
@@ -19,10 +21,15 @@ interface EditorEntityListProps {
   loadingMore: boolean;
   hasMore: boolean;
   totalCount: number;
+  bulkPending: boolean;
   onQueryChange: (query: string) => void;
   onStatusChange: (status: 'all' | 'active' | 'archived') => void;
   onContextualFilterChange: (value: string) => void;
   onSelect: (record: EditorRecord) => void;
+  onToggleSelection: (record: EditorRecord) => void;
+  onToggleVisible: (records: EditorRecord[], selected: boolean) => void;
+  onClearSelection: () => void;
+  onRequestBulkDelete: () => void;
   onLoadMore: () => void;
 }
 
@@ -79,7 +86,7 @@ function tournamentColumns(record: EditorTournament) {
 function RecordIcon({ entity, record }: { entity: EditorEntity; record: EditorRecord }) {
   if (entity === 'clubs') {
     const club = record as EditorClub;
-    return <ClubMark code={club.abbreviation || club.id.slice(0, 3)} color={club.colors[0]} imageUrl={club.crestImageUrl} size="sm" />;
+    return <ClubMark code={club.abbreviation || club.id.slice(0, 3)} color={club.colors[0]} darkThemeColor={club.darkThemeColor} lightThemeColor={club.lightThemeColor} imageUrl={club.crestImageUrl} size="sm" />;
   }
   if (entity === 'players') {
     const player = record as EditorPlayer;
@@ -101,6 +108,7 @@ export function EditorEntityList({
   entity,
   records,
   selectedId,
+  selectedIds,
   query,
   status,
   contextualFilter,
@@ -110,13 +118,26 @@ export function EditorEntityList({
   loadingMore,
   hasMore,
   totalCount,
+  bulkPending,
   onQueryChange,
   onStatusChange,
   onContextualFilterChange,
   onSelect,
+  onToggleSelection,
+  onToggleVisible,
+  onClearSelection,
+  onRequestBulkDelete,
   onLoadMore,
 }: EditorEntityListProps) {
   const copy = entityCopy[entity];
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const allVisibleSelected = records.length > 0 && records.every((record) => selectedIds.has(record.id));
+  const someVisibleSelected = records.some((record) => selectedIds.has(record.id));
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected;
+    }
+  }, [allVisibleSelected, someVisibleSelected]);
   return (
     <section className="editor-list" aria-label={`Lista de ${copy.plural}`}>
       <div className="editor-list__tools">
@@ -158,6 +179,14 @@ export function EditorEntityList({
             </label>
           )}
         </div>
+        {selectedIds.size > 0 && (
+          <div className="editor-bulk-actions">
+            <strong aria-live="polite">{selectedIds.size} selecionado{selectedIds.size === 1 ? '' : 's'}</strong>
+            <span>Máximo de 100 por operação</span>
+            <Button type="button" size="sm" variant="ghost" icon={<X size={13} />} disabled={bulkPending} onClick={onClearSelection}>Limpar</Button>
+            <Button type="button" size="sm" variant="danger" icon={<Trash2 size={13} />} disabled={bulkPending} onClick={onRequestBulkDelete}>Excluir selecionados</Button>
+          </div>
+        )}
       </div>
 
       <p className="editor-table-scroll-hint" id="editor-table-scroll-hint" role="note">
@@ -174,6 +203,16 @@ export function EditorEntityList({
         <table className="editor-table">
           <thead>
             <tr>
+              <th className="editor-table__checkbox">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  disabled={records.length === 0 || bulkPending}
+                  aria-label={`Selecionar todos os ${copy.plural} exibidos`}
+                  onChange={(event) => onToggleVisible(records, event.target.checked)}
+                />
+              </th>
               <th>{copy.singular}</th>
               <th>{entity === 'leagues' ? 'País' : entity === 'clubs' ? 'Sede' : entity === 'players' ? 'Clube' : 'Formato'}</th>
               <th>{entity === 'players' ? 'Perfil' : entity === 'tournaments' ? 'Participantes' : 'Vínculo'}</th>
@@ -183,8 +222,20 @@ export function EditorEntityList({
             </tr>
           </thead>
           <tbody>
-            {records.map((record) => (
-              <tr key={record.id} className={selectedId === record.id ? 'is-selected' : undefined}>
+            {records.map((record) => {
+              const checked = selectedIds.has(record.id);
+              const classes = [selectedId === record.id ? 'is-selected' : '', checked ? 'is-checked' : ''].filter(Boolean).join(' ');
+              return (
+              <tr key={record.id} className={classes || undefined}>
+                <td className="editor-table__checkbox">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={bulkPending || (!checked && selectedIds.size >= 100)}
+                    aria-label={`Selecionar ${record.name}`}
+                    onChange={() => onToggleSelection(record)}
+                  />
+                </td>
                 <td>
                   <button className="editor-table__select" onClick={() => onSelect(record)} aria-label={recordActionLabel('Editar', entity, record)}>
                     <RecordIcon entity={entity} record={record} />
@@ -207,7 +258,8 @@ export function EditorEntityList({
                 <td><Badge tone={record.active ? 'positive' : 'warning'} dot>{record.active ? 'Ativo' : 'Arquivado'}</Badge></td>
                 <td><button className="editor-table__open" onClick={() => onSelect(record)} aria-label={recordActionLabel('Abrir', entity, record)}><ChevronRight size={15} /></button></td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         {!loading && records.length === 0 && (
@@ -219,7 +271,7 @@ export function EditorEntityList({
         )}
         {loading && (
           <div className="editor-list__loading" aria-live="polite">
-            <span className="button-spinner" /> Sincronizando catálogo global…
+            <span className="button-spinner" /> Sincronizando sua base…
           </div>
         )}
       </div>

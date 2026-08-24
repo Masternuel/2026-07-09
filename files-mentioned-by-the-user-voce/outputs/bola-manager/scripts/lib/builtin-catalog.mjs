@@ -1,3 +1,5 @@
+import { calculatePlayerOverall } from "../../server/game/lineupStrength.mjs";
+
 const LEAGUE_ID = "BR-A";
 
 const CLUB_SEEDS = Object.freeze([
@@ -43,13 +45,21 @@ const PLAYER_SEEDS = Object.freeze([
   ["p20", "Wesley Santana", 23, "MC", 31, 6_000_000, [6, 6, 6, 8, 7, 8, 8, 7], false, 5],
 ]);
 
-const ATTRIBUTE_KEYS = Object.freeze([
+const CORE_ATTRIBUTE_KEYS = Object.freeze([
   "velocidade", "chute", "drible", "nocao", "defesa", "passe", "peBom", "peRuim",
 ]);
 
+const EXTENDED_ATTRIBUTE_KEYS = Object.freeze([
+  "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
+]);
+
 function playerRecord([id, name, shirtNumber, position, age, marketValue, scores, isStar, worldStar]) {
-  const attributes = Object.fromEntries(ATTRIBUTE_KEYS.map((key, index) => [key, scores[index] * 2]));
-  const overall = Math.round(Object.values(attributes).reduce((sum, value) => sum + value, 0) / ATTRIBUTE_KEYS.length);
+  const coreAttributes = Object.fromEntries(CORE_ATTRIBUTE_KEYS.map((key, index) => [key, scores[index] * 2]));
+  const attributes = {
+    ...coreAttributes,
+    ...Object.fromEntries(EXTENDED_ATTRIBUTE_KEYS.map((key) => [key, 10])),
+  };
+  const overall = calculatePlayerOverall({ position, attributes });
   return {
     id,
     clubId: "AUR",
@@ -78,6 +88,7 @@ export function buildBuiltinCatalog() {
       country: "Brasil",
       level: 1,
       division: "Serie A",
+      legs: "double",
       active: true,
     }],
     clubs: CLUB_SEEDS.map(([id, name, abbreviation, color, city, state, stadium, reputation, budget]) => ({
