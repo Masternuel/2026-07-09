@@ -17,8 +17,12 @@ const MAX_ACTIVE_OFFERS_PER_MANAGER = 20;
 const MAX_CAREER_HISTORY = 500;
 const MAX_SQUAD_SIZE = 60;
 const MAX_AI_TRANSFER_TICKS = 500;
+const MAX_AI_MARKET_HISTORY = 100;
+const MAX_AI_NEGOTIATION_STEPS = 8;
+const MAX_AI_AUCTION_BIDS = 12;
 const AI_TRANSFER_INTERVAL_ROUNDS = 4;
 const AI_MIN_SQUAD_AFTER_TRANSFER = 18;
+const AI_STRATEGY_VERSION = 3;
 const DEFAULT_CONTRACT_SEASONS = 3;
 const FREE_AGENT_CLUB_ID = "__FREE_AGENT__";
 
@@ -158,6 +162,20 @@ function availableTransferFinance(state, room, clubId) {
   const { finance, profile } = financeLimitsFor(state, room, clubId);
   const allocated = Math.max(0, integer(profile?.transferBudget, 0, MAX_MONEY) - integer(finance?.committed));
   return Math.min(availableFinance(finance), allocated);
+}
+
+function aiClubFinancialContext(room, state, clubId) {
+  const { finance, payroll, profile } = financeLimitsFor(state, room, clubId);
+  const allocated = Math.max(
+    0,
+    integer(profile?.transferBudget, 0, MAX_MONEY) - integer(finance?.committed),
+  );
+  return {
+    finance,
+    payroll,
+    profile,
+    availableBudget: Math.min(availableFinance(finance), allocated),
+  };
 }
 
 function reserveTransfer(state, room, clubId, amount) {
@@ -459,6 +477,9 @@ export function ensureMarketState(room, now = new Date()) {
     aiTransferTickKeys: [...new Set(
       Array.isArray(raw.aiTransferTickKeys) ? raw.aiTransferTickKeys.map(identifier).filter(Boolean) : [],
     )].slice(-MAX_AI_TRANSFER_TICKS),
+    aiMarketHistory: Array.isArray(raw.aiMarketHistory)
+      ? raw.aiMarketHistory.slice(-MAX_AI_MARKET_HISTORY).map((item) => structuredClone(item))
+      : [],
     lastAiTransferTick: raw.lastAiTransferTick && typeof raw.lastAiTransferTick === "object"
       ? structuredClone(raw.lastAiTransferTick)
       : null,
@@ -1060,6 +1081,8 @@ function transactionRecord(room, player, {
   amount,
   terms,
   contractTerms,
+  offerId = null,
+  listingId = null,
   completedAt,
   status = "completed",
 }) {
@@ -1075,6 +1098,8 @@ function transactionRecord(room, player, {
     amount,
     ...(terms ? { loanTerms: structuredClone(terms) } : {}),
     ...(contractTerms ? { contractTerms: structuredClone(contractTerms) } : {}),
+    ...(offerId ? { offerId } : {}),
+    ...(listingId ? { listingId } : {}),
     effectiveSeason: contractTerms?.effectiveSeason ?? currentSeason(room),
     status,
     completedAt,
@@ -1321,6 +1346,8 @@ function completeDeal(room, state, {
     amount,
     terms,
     contractTerms: normalizedContractTerms,
+    offerId,
+    listingId,
     completedAt,
   });
   replaceOrAppendTransaction(state, transaction);
@@ -1771,12 +1798,7 @@ function respondOfferInternal(room, managerId, input, now = new Date()) {
   return { offer, transaction, cancelled };
 }
 
-function placeBidInternal(room, managerId, input, now = new Date()) {
-  const state = ensureMarketState(room, now);
-  const duplicate = previousRequest(state, managerId, "bid", input.requestId);
-  if (duplicate) return { duplicate: true, ...resultReferences(state, duplicate) };
-  const bidder = managerFor(room, managerId);
-  const listing = state.activeListings.find((candidate) => candidate.id === input.listingId);
+function placeClubBid(room, state, listing, bidder, amountValue, now = new Date()) {
   if (!listing) throw new MarketError("Leilao nao encontrado", "MARKET_LISTING_NOT_FOUND", 404);
   if (listing.mode !== "auction") throw new MarketError("Anuncio nao e leilao", "MARKET_NOT_AUCTION", 409);
   if (listing.status !== "open") throw new MarketError("Leilao encerrado", "MARKET_LISTING_CLOSED", 409);
@@ -1786,27 +1808,28 @@ function placeBidInternal(room, managerId, input, now = new Date()) {
   if (clubKey(listing.sellerClubId) === clubKey(bidder.clubId)) {
     throw new MarketError("Vendedor nao pode dar lance", "MARKET_SELF_DEAL", 409);
   }
-  const amount = money(input.amount);
+  const amount = money(amountValue);
+  const bidIncrement = Math.max(1, integer(listing.bidIncrement, 500_000, MAX_MONEY));
   const minimum = listing.currentBid === null
     ? listing.minimumBid
-    : listing.currentBid + 500_000;
+    : listing.currentBid + bidIncrement;
   if (amount < minimum) {
     throw new MarketError("Lance abaixo do minimo", "MARKET_BID_TOO_LOW", 409, { minimum });
   }
   const bidderFinance = financeFor(state, room, bidder.clubId);
   const reservedAmount = amount + integer(listing.loanTerms?.purchaseObligation, 0, MAX_MONEY);
-  if (listing.highestBid?.managerId === managerId) {
+  if (listing.highestBid && identifiersEqual(listing.highestBid.clubId, bidder.clubId)) {
     release(bidderFinance, listing.highestBid.reservedAmount ?? listing.highestBid.amount);
   }
   reserveTransfer(state, room, bidder.clubId, reservedAmount);
-  if (listing.highestBid && listing.highestBid.managerId !== managerId) {
+  if (listing.highestBid && !identifiersEqual(listing.highestBid.clubId, bidder.clubId)) {
     release(
       financeFor(state, room, listing.highestBid.clubId),
       listing.highestBid.reservedAmount ?? listing.highestBid.amount,
     );
   }
   listing.highestBid = {
-    managerId,
+    managerId: identifier(bidder.managerId) || null,
     clubId: bidder.clubId,
     clubName: clubName(room, bidder.clubId),
     amount,
@@ -1816,11 +1839,46 @@ function placeBidInternal(room, managerId, input, now = new Date()) {
   listing.currentBid = amount;
   listing.bidCount = integer(listing.bidCount) + 1;
   listing.revision = state.revision + 1;
+  return listing;
+}
+
+function placeBidInternal(room, managerId, input, now = new Date()) {
+  const state = ensureMarketState(room, now);
+  const duplicate = previousRequest(state, managerId, "bid", input.requestId);
+  if (duplicate) return { duplicate: true, ...resultReferences(state, duplicate) };
+  const manager = managerFor(room, managerId);
+  const listing = state.activeListings.find((candidate) => candidate.id === input.listingId);
+  placeClubBid(room, state, listing, {
+    managerId,
+    clubId: manager.clubId,
+  }, input.amount, now);
   touch(state, now);
-  activity(state, `${bidder.name} deu lance por ${listing.player.name}.`, now, "bid", bidder.name);
+  activity(state, `${manager.name} deu lance por ${listing.player.name}.`, now, "bid", manager.name);
   const requestResult = { listingId: listing.id };
   rememberRequest(state, managerId, "bid", input.requestId, requestResult);
   return { listing };
+}
+
+function settleAuctionListing(room, state, listing, now = new Date()) {
+  if (!listing?.highestBid) {
+    throw new MarketError("Leilao sem lance vencedor", "MARKET_AUCTION_NO_BID", 409);
+  }
+  const bidderFinance = financeFor(state, room, listing.highestBid.clubId);
+  release(bidderFinance, listing.highestBid.reservedAmount ?? listing.highestBid.amount);
+  const transaction = completeDeal(room, state, {
+    player: listing.playerSnapshot,
+    fromClubId: listing.sellerClubId,
+    toClubId: listing.highestBid.clubId,
+    dealType: listing.dealType,
+    amount: listing.highestBid.amount,
+    loanTerms: listing.loanTerms,
+    contractTerms: listing.contractTerms,
+    listingId: listing.id,
+    now,
+  });
+  listing.status = "completed";
+  listing.revision = state.revision + 1;
+  return transaction;
 }
 
 function expireOffers(room, state, now) {
@@ -1846,20 +1904,8 @@ function settleExpiredMarketInternal(room, now = new Date()) {
   for (const listing of state.activeListings) {
     if (listing.status !== "open" || new Date(listing.expiresAt).getTime() > nowMs) continue;
     if (listing.mode === "auction" && listing.highestBid) {
-      const bidderFinance = financeFor(state, room, listing.highestBid.clubId);
-      release(bidderFinance, listing.highestBid.reservedAmount ?? listing.highestBid.amount);
-      const transaction = completeDeal(room, state, {
-        player: listing.playerSnapshot,
-        fromClubId: listing.sellerClubId,
-        toClubId: listing.highestBid.clubId,
-        dealType: listing.dealType,
-        amount: listing.highestBid.amount,
-        loanTerms: listing.loanTerms,
-        listingId: listing.id,
-        now,
-      });
+      const transaction = settleAuctionListing(room, state, listing, now);
       transactions.push(transaction);
-      listing.status = "completed";
     } else {
       closeLinkedOffers(room, state, listing.id, "expired", now);
       listing.status = "expired";
@@ -2337,6 +2383,514 @@ function stableAiScore(value) {
   return hash >>> 0;
 }
 
+const AI_POSITION_TARGETS = Object.freeze({
+  goalkeeper: 2,
+  defense: 7,
+  midfield: 7,
+  attack: 4,
+});
+const AI_CLUB_STYLES = Object.freeze([
+  "balanced",
+  "possession",
+  "counter",
+  "pressing",
+  "defensive",
+  "attacking",
+]);
+const AI_MARKET_METHODS = new Set(["negotiation", "loan", "free-agent", "auction"]);
+
+function aiClamp(value, minimum = 0, maximum = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return minimum;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function aiCompactFactor(value) {
+  return Math.round(aiClamp(value) * 1_000) / 1_000;
+}
+
+function aiRating(value, fallback = 10) {
+  let parsed = Number(value);
+  if (!Number.isFinite(parsed)) parsed = fallback;
+  if (parsed > 20) parsed /= 5;
+  return aiClamp(parsed, 1, 20);
+}
+
+function aiNormalizedText(value) {
+  return identifier(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR");
+}
+
+function aiPositionGroup(player) {
+  const position = aiNormalizedText(
+    player?.position ?? player?.primaryPosition ?? player?.role,
+  ).toLocaleUpperCase("pt-BR");
+  if (["GOL", "GK", "GOALKEEPER"].some((value) => position.includes(value))) return "goalkeeper";
+  if (["ZAG", "DC", "CB", "LD", "LE", "RB", "LB", "DEF"].some((value) => position.includes(value))) {
+    return "defense";
+  }
+  if (["ATA", "CA", "ST", "CF", "PE", "PD", "LW", "RW", "ATT"].some((value) => position.includes(value))) {
+    return "attack";
+  }
+  return "midfield";
+}
+
+function aiAttributeRating(player, names, fallback) {
+  const attributes = player?.attributes && typeof player.attributes === "object"
+    ? player.attributes
+    : {};
+  const normalized = new Map(Object.entries(attributes).map(([key, value]) => [
+    aiNormalizedText(key).replaceAll(/[^a-z0-9]/g, ""),
+    value,
+  ]));
+  for (const name of names) {
+    const direct = player?.[name];
+    if (Number.isFinite(Number(direct))) return aiRating(direct, fallback);
+    const key = aiNormalizedText(name).replaceAll(/[^a-z0-9]/g, "");
+    if (normalized.has(key)) return aiRating(normalized.get(key), fallback);
+  }
+  return aiRating(fallback, 10);
+}
+
+function aiPlayerOverall(player) {
+  return aiRating(player?.overall ?? player?.rating ?? player?.currentAbility, 10);
+}
+
+function aiPlayerPotential(player) {
+  return aiRating(
+    player?.potential
+      ?? player?.potentialOverall
+      ?? player?.potentialAbility
+      ?? player?.attributes?.potential,
+    aiPlayerOverall(player),
+  );
+}
+
+function aiClubReputation(club) {
+  return aiRating(club?.reputation ?? club?.prestige ?? club?.rating, 10);
+}
+
+function aiStyleForClub(club) {
+  const explicit = aiNormalizedText([
+    club?.playingStyle,
+    club?.tacticalStyle,
+    club?.preferredStyle,
+    club?.style,
+    club?.philosophy,
+  ].filter(Boolean).join(" "));
+  if (explicit) return explicit;
+  return AI_CLUB_STYLES[stableAiScore(club?.id ?? club?.code) % AI_CLUB_STYLES.length];
+}
+
+function aiStyleFit(player, styleValue) {
+  const style = aiNormalizedText(styleValue);
+  const overall = aiPlayerOverall(player);
+  let names;
+  if (style.includes("posse") || style.includes("possession") || style.includes("tiki")) {
+    names = ["passing", "passe", "technique", "tecnica", "vision", "visao"];
+  } else if (style.includes("contra") || style.includes("counter") || style.includes("vertical")) {
+    names = ["pace", "velocidade", "acceleration", "aceleracao", "dribbling", "drible"];
+  } else if (style.includes("press") || style.includes("intens")) {
+    names = ["stamina", "resistencia", "workRate", "trabalho", "aggression", "agressividade"];
+  } else if (style.includes("defens")) {
+    names = ["tackling", "desarme", "marking", "marcacao", "positioning", "posicionamento"];
+  } else if (style.includes("attack") || style.includes("ofens")) {
+    names = ["finishing", "finalizacao", "offBall", "movimentacao", "creativity", "criatividade"];
+  } else {
+    names = aiPositionGroup(player) === "attack"
+      ? ["finishing", "finalizacao", "dribbling", "drible"]
+      : aiPositionGroup(player) === "defense"
+        ? ["tackling", "desarme", "marking", "marcacao"]
+        : aiPositionGroup(player) === "goalkeeper"
+          ? ["reflexes", "reflexos", "handling", "manuseio"]
+          : ["passing", "passe", "vision", "visao"];
+  }
+  const ratings = names.map((name) => aiAttributeRating(player, [name], overall));
+  const average = ratings.reduce((sum, value) => sum + value, 0) / Math.max(1, ratings.length);
+  return aiClamp((average - 4) / 16);
+}
+
+/** Pure strategic fit scorer used by the autonomous market. */
+export function scoreAiTransferFit(player, context = {}) {
+  const roster = Array.isArray(context.buyerRoster) ? context.buyerRoster : [];
+  const club = context.buyerClub && typeof context.buyerClub === "object" ? context.buyerClub : {};
+  const group = aiPositionGroup(player);
+  const targetDepth = AI_POSITION_TARGETS[group];
+  const groupPlayers = roster.filter((candidate) => aiPositionGroup(candidate) === group);
+  const overall = aiPlayerOverall(player);
+  const potential = Math.max(overall, aiPlayerPotential(player));
+  const age = aiClamp(Number(player?.age) || 24, 14, 45);
+  const groupAverage = groupPlayers.length > 0
+    ? groupPlayers.reduce((sum, candidate) => sum + aiPlayerOverall(candidate), 0) / groupPlayers.length
+    : Math.max(1, overall - 2);
+  const value = Math.max(1, marketValueForPlayer(player));
+  const wage = Math.max(1, defaultWage(player));
+  const availableBudget = Math.max(0, Number(context.availableBudget) || 0);
+  const wageBudget = Math.max(0, Number(context.wageBudget) || 0);
+  const currentPayroll = Math.max(0, Number(context.currentPayroll) || 0);
+  const wageHeadroom = Math.max(0, wageBudget - currentPayroll);
+  const clubReputation = aiClubReputation(club);
+  const stature = (overall * 0.7) + (potential * 0.3);
+  const baselineValue = Math.max(1_000_000, overall * 2_000_000);
+  const components = {
+    positionalNeed: aiClamp((targetDepth + 1 - groupPlayers.length) / (targetDepth + 1)),
+    depth: aiClamp(1 - (groupPlayers.length / Math.max(1, targetDepth * 1.75))),
+    quality: aiClamp((overall - groupAverage + 4) / 8),
+    age: aiClamp(1 - (Math.abs(age - 24) / 15)),
+    potential: aiClamp((potential - overall + 2) / 8),
+    value: aiClamp((baselineValue / value) / 1.35),
+    wage: wageHeadroom > 0 ? aiClamp(1 - (wage / wageHeadroom)) : 0,
+    budget: availableBudget > 0 ? aiClamp(availableBudget / Math.max(value, 1)) : 0,
+    reputation: aiClamp(1 - (Math.max(0, stature - clubReputation - 2) / 12)),
+    style: aiStyleFit(player, context.buyerStyle ?? aiStyleForClub(club)),
+  };
+  const score = (
+    components.positionalNeed * 0.20
+    + components.depth * 0.08
+    + components.quality * 0.18
+    + components.age * 0.07
+    + components.potential * 0.12
+    + components.value * 0.10
+    + components.wage * 0.07
+    + components.budget * 0.08
+    + components.reputation * 0.04
+    + components.style * 0.06
+  ) * 100;
+  return {
+    score: Math.round(score * 100) / 100,
+    positionGroup: group,
+    components: Object.fromEntries(Object.entries(components).map(([key, value]) => [
+      key,
+      aiCompactFactor(value),
+    ])),
+  };
+}
+
+function scoreAiSellerRelease(room, state, player, club, roster, financialContext = null) {
+  const group = aiPositionGroup(player);
+  const groupPlayers = roster.filter((candidate) => aiPositionGroup(candidate) === group);
+  const targetDepth = AI_POSITION_TARGETS[group];
+  const overall = aiPlayerOverall(player);
+  const potential = Math.max(overall, aiPlayerPotential(player));
+  const age = aiClamp(Number(player?.age) || 24, 14, 45);
+  const average = groupPlayers.length > 0
+    ? groupPlayers.reduce((sum, candidate) => sum + aiPlayerOverall(candidate), 0) / groupPlayers.length
+    : overall;
+  const { finance, profile } = financialContext ?? financeLimitsFor(state, room, club.id);
+  const referenceBudget = Math.max(1, defaultBalance(room, club.id));
+  const value = marketValueForPlayer(player);
+  const wage = defaultWage(player);
+  const components = {
+    positionalSurplus: aiClamp((groupPlayers.length - targetDepth) / Math.max(1, targetDepth)),
+    depth: aiClamp((roster.length - AI_MIN_SQUAD_AFTER_TRANSFER) / 12),
+    quality: aiClamp((average - overall + 3) / 7),
+    age: aiClamp((age - 25) / 10),
+    potential: aiClamp(1 - ((potential - overall + 1) / 7)),
+    value: aiClamp(value / Math.max(1, referenceBudget * 0.25)),
+    wage: aiClamp(wage / Math.max(1, Number(profile?.wageBudget) * 0.08 || wage * 2)),
+    budget: aiClamp(1 - (Math.min(Number(finance?.balance) || 0, Number(profile?.transferBudget) || 0) / referenceBudget)),
+    reputation: aiClamp((aiClubReputation(club) - overall + 4) / 10),
+    style: aiClamp(1 - aiStyleFit(player, aiStyleForClub(club))),
+  };
+  const protectedRole = player?.star === true
+    || player?.isStar === true
+    || player?.starPlayer === true
+    || ["key_player", "important", "starter"].includes(
+      aiNormalizedText(player?.squadStatus ?? player?.squadRole ?? player?.importance).replace(/\s+/g, "_"),
+    );
+  const score = (
+    components.positionalSurplus * 0.22
+    + components.depth * 0.10
+    + components.quality * 0.16
+    + components.age * 0.08
+    + components.potential * 0.10
+    + components.value * 0.08
+    + components.wage * 0.08
+    + components.budget * 0.08
+    + components.reputation * 0.04
+    + components.style * 0.06
+  ) * 100 - (protectedRole ? 28 : 0);
+  return {
+    score: Math.round(score * 100) / 100,
+    positionGroup: group,
+    components: Object.fromEntries(Object.entries(components).map(([key, value]) => [
+      key,
+      aiCompactFactor(value),
+    ])),
+  };
+}
+
+function aiRoundMoney(value) {
+  const parsed = Math.max(1, Math.min(MAX_MONEY, Math.round(Number(value) || 1)));
+  const step = parsed >= 10_000_000 ? 100_000 : 50_000;
+  return Math.max(step, Math.min(MAX_MONEY, Math.round(parsed / step) * step));
+}
+
+function aiRoundWage(value) {
+  const parsed = Math.max(1_000, Math.min(MAX_MONEY, Math.round(Number(value) || 1_000)));
+  return Math.max(1_000, Math.round(parsed / 1_000) * 1_000);
+}
+
+function aiContractTerms(player, fit, seed) {
+  const age = Math.max(14, Math.min(45, integer(player?.age, 24, 45)));
+  const potential = aiPlayerPotential(player);
+  const overall = aiPlayerOverall(player);
+  const durationBase = age <= 23 || potential >= overall + 2 ? 4 : age >= 31 ? 2 : 3;
+  const durationDelta = stableAiScore(`${seed}:contract-duration`) % 3 - 1;
+  const wageMultiplier = 0.94
+    + (aiClamp(fit?.score / 100) * 0.22)
+    + ((stableAiScore(`${seed}:contract-wage`) % 9) / 100);
+  return {
+    wage: Math.max(1_000, Math.min(MAX_MONEY, Math.round(defaultWage(player) * wageMultiplier / 1_000) * 1_000)),
+    durationSeasons: Math.max(2, Math.min(5, durationBase + durationDelta)),
+  };
+}
+
+function simulateAiContractNegotiation({ seed, player, buyer }) {
+  const baseWage = Math.max(1_000, defaultWage(player));
+  const fit = aiClamp(buyer.fit.score / 100);
+  const wageHeadroom = Math.max(0, integer(buyer.wageHeadroom, 0, MAX_MONEY));
+  const maximumWage = Math.max(0, Math.floor(Math.min(
+    wageHeadroom,
+    baseWage * (1.02 + fit * 0.30 + ((stableAiScore(`${seed}:wage-limit`) % 8) / 100)),
+  ) / 1_000) * 1_000);
+  const agentFloor = aiRoundWage(baseWage * (0.90 + ((1 - fit) * 0.08)));
+  let agentAsk = aiRoundWage(baseWage * (1.02 + ((stableAiScore(`${seed}:wage-ask`) % 13) / 100)));
+  let clubOffer = aiRoundWage(Math.min(
+    maximumWage,
+    baseWage * (0.84 + fit * 0.14),
+  ));
+  const age = Math.max(14, Math.min(45, integer(player?.age, 24, 45)));
+  const baseDuration = age <= 23 || aiPlayerPotential(player) >= aiPlayerOverall(player) + 2
+    ? 4
+    : age >= 31 ? 2 : 3;
+  const requestedDuration = Math.max(2, Math.min(5,
+    baseDuration + (stableAiScore(`${seed}:duration-request`) % 2),
+  ));
+  let offeredDuration = Math.max(2, Math.min(5,
+    baseDuration + (stableAiScore(`${seed}:duration-offer`) % 3) - 1,
+  ));
+  const maxRounds = 2 + (stableAiScore(`${seed}:contract-round-limit`) % 3);
+  const history = [];
+  let wage = null;
+  let durationSeasons = null;
+  if (wageHeadroom < agentFloor || maximumWage < agentFloor) {
+    return {
+      agreed: false,
+      terms: null,
+      appealScore: 0,
+      maxRounds,
+      roundsUsed: 0,
+      limitReached: true,
+      history: [{ round: 0, actor: "club", action: "withdraw", reason: "wage-budget" }],
+    };
+  }
+  for (let round = 1; round <= maxRounds; round += 1) {
+    history.push({
+      round,
+      actor: "club",
+      action: round === 1 ? "offer" : "counter",
+      wage: clubOffer,
+      durationSeasons: offeredDuration,
+    });
+    if (clubOffer >= agentAsk && offeredDuration >= requestedDuration - 1) {
+      wage = clubOffer;
+      durationSeasons = offeredDuration;
+      history.push({ round, actor: "agent", action: "accept", wage, durationSeasons });
+      break;
+    }
+    history.push({
+      round,
+      actor: "agent",
+      action: "counter",
+      wage: agentAsk,
+      durationSeasons: requestedDuration,
+    });
+    const remaining = Math.max(1, maxRounds - round + 1);
+    agentAsk = aiRoundWage(Math.max(agentFloor, agentAsk - ((agentAsk - agentFloor) / remaining)));
+    clubOffer = aiRoundWage(Math.min(
+      maximumWage,
+      clubOffer + Math.max(1_000, (agentAsk - clubOffer) * (round === maxRounds - 1 ? 1 : 0.6)),
+    ));
+    if (offeredDuration < requestedDuration && round >= 1) offeredDuration += 1;
+  }
+  if (wage === null && maximumWage >= agentFloor) {
+    const finalWage = aiRoundWage(Math.min(maximumWage, Math.max(agentFloor, agentAsk)));
+    if (finalWage >= agentFloor) {
+      wage = finalWage;
+      durationSeasons = Math.max(offeredDuration, requestedDuration - 1);
+      history.push({
+        round: maxRounds,
+        actor: "club",
+        action: "final-offer",
+        wage,
+        durationSeasons,
+      });
+      history.push({
+        round: maxRounds,
+        actor: "agent",
+        action: "accept",
+        wage,
+        durationSeasons,
+      });
+    }
+  }
+  const wageAppeal = wage ? aiClamp(wage / Math.max(baseWage * 1.2, 1)) : 0;
+  const durationAppeal = durationSeasons ? aiClamp(durationSeasons / 5) : 0;
+  const clubAppeal = aiClamp(aiClubReputation(buyer.club) / 20);
+  return {
+    agreed: wage !== null,
+    terms: wage === null ? null : { wage, durationSeasons },
+    appealScore: Math.round((wageAppeal * 55 + durationAppeal * 20 + clubAppeal * 25) * 100) / 100,
+    maxRounds,
+    roundsUsed: new Set(history.map((entry) => entry.round)).size,
+    limitReached: wage === null,
+    history: history.slice(-MAX_AI_NEGOTIATION_STEPS),
+  };
+}
+
+function simulateAiNegotiation({
+  seed,
+  baseAmount,
+  buyerScore,
+  sellerScore,
+  buyerBudget,
+  agent = false,
+}) {
+  const base = Math.max(1, Number(baseAmount) || 1);
+  const buyerStrength = aiClamp(buyerScore / 100);
+  const sellerRelease = aiClamp(sellerScore / 100);
+  const maxRounds = 2 + (stableAiScore(`${seed}:round-limit`) % 3);
+  const sellerFloor = aiRoundMoney(base * (agent
+    ? 0.88 + ((1 - buyerStrength) * 0.08)
+    : 0.78 + ((1 - sellerRelease) * 0.14)));
+  let sellerAsk = aiRoundMoney(base * (agent
+    ? 1.03 + ((stableAiScore(`${seed}:agent-ask`) % 10) / 100)
+    : 0.94 + ((1 - sellerRelease) * 0.16)));
+  const buyerLimit = aiRoundMoney(Math.min(
+    Math.max(1, buyerBudget),
+    base * (agent ? 1.04 + buyerStrength * 0.18 : 0.88 + buyerStrength * 0.30),
+  ));
+  let buyerOffer = aiRoundMoney(Math.min(
+    buyerLimit,
+    base * (0.76 + buyerStrength * 0.12),
+  ));
+  const history = [];
+  let amount = null;
+  for (let round = 1; round <= maxRounds; round += 1) {
+    history.push({ round, actor: "buyer", action: round === 1 ? "offer" : "counter", amount: buyerOffer });
+    if (buyerOffer >= sellerAsk) {
+      amount = buyerOffer;
+      history.push({ round, actor: agent ? "agent" : "seller", action: "accept", amount });
+      break;
+    }
+    const remaining = Math.max(1, maxRounds - round + 1);
+    const concession = Math.max(50_000, Math.round((sellerAsk - sellerFloor) / remaining));
+    sellerAsk = aiRoundMoney(Math.max(sellerFloor, sellerAsk - concession));
+    history.push({
+      round,
+      actor: agent ? "agent" : "seller",
+      action: "counter",
+      amount: sellerAsk,
+    });
+    if (buyerLimit < sellerAsk && round === maxRounds) break;
+    const closingPressure = round === maxRounds - 1 ? 1 : 0.55;
+    buyerOffer = aiRoundMoney(Math.min(
+      buyerLimit,
+      buyerOffer + Math.max(50_000, (sellerAsk - buyerOffer) * closingPressure),
+    ));
+  }
+  if (amount === null && buyerLimit >= sellerFloor) {
+    const finalAmount = aiRoundMoney(Math.min(buyerLimit, Math.max(sellerFloor, sellerAsk)));
+    if (finalAmount >= sellerFloor) {
+      amount = finalAmount;
+      history.push({ round: maxRounds, actor: "buyer", action: "accept", amount });
+    }
+  }
+  return {
+    agreed: amount !== null,
+    amount,
+    maxRounds,
+    roundsUsed: new Set(history.map((entry) => entry.round)).size,
+    limitReached: amount === null,
+    history: history.slice(-MAX_AI_NEGOTIATION_STEPS),
+  };
+}
+
+function simulateAiAuction({ seed, player, sellerScore, buyers }) {
+  const value = marketValueForPlayer(player);
+  const reservePrice = aiRoundMoney(value * (0.80 + ((1 - aiClamp(sellerScore / 100)) * 0.14)));
+  let bidIncrement = aiRoundMoney(Math.max(250_000, value * (0.025 + ((stableAiScore(`${seed}:increment`) % 4) / 100))));
+  const contenders = buyers.map((buyer) => {
+    const contractNegotiation = simulateAiContractNegotiation({
+      seed: `${seed}:contract:${clubKey(buyer.club.id)}`,
+      player,
+      buyer,
+    });
+    return {
+      ...buyer,
+      contractNegotiation,
+      maximumBid: aiRoundMoney(Math.min(
+        buyer.availableBudget,
+        value * (0.88 + (aiClamp(buyer.fit.score / 100) * 0.34)),
+      )),
+    };
+  }).filter((buyer) => buyer.maximumBid >= reservePrice)
+    .sort((left, right) => (
+      right.maximumBid - left.maximumBid
+      || stableAiScore(`${seed}:bidder:${right.club.id}`) - stableAiScore(`${seed}:bidder:${left.club.id}`)
+      || identifier(left.club.id).localeCompare(identifier(right.club.id))
+    ));
+  if (contenders.length < 2) return null;
+  const winner = contenders.find((candidate) => (
+    candidate.contractNegotiation.agreed
+    && candidate.maximumBid > reservePrice
+    && contenders.some((rival) => !identifiersEqual(rival.club.id, candidate.club.id))
+  ));
+  if (!winner) return null;
+  const rivals = contenders.filter((candidate) => (
+    !identifiersEqual(candidate.club.id, winner.club.id)
+  ));
+  const finalists = [winner, ...rivals].slice(0, MAX_AI_AUCTION_BIDS);
+  const runnerUp = rivals[0];
+  const maximumIncrement = winner.maximumBid - reservePrice;
+  if (maximumIncrement <= 0) return null;
+  bidIncrement = Math.max(1, Math.min(bidIncrement, maximumIncrement));
+  const winningBid = aiRoundMoney(Math.min(
+    winner.maximumBid,
+    Math.max(reservePrice, runnerUp.maximumBid + bidIncrement),
+  ));
+  const bidHistory = [{
+    round: 1,
+    bidderClubId: runnerUp.club.id,
+    amount: Math.max(reservePrice, Math.min(runnerUp.maximumBid, winningBid - bidIncrement)),
+    maximumBid: runnerUp.maximumBid,
+  }];
+  bidHistory.push({
+    round: bidHistory.length + 1,
+    bidderClubId: winner.club.id,
+    amount: winningBid,
+    maximumBid: winner.maximumBid,
+  });
+  const bidderCount = new Set(bidHistory.map((bid) => clubKey(bid.bidderClubId))).size;
+  return {
+    winner,
+    amount: winningBid,
+    reservePrice,
+    bidIncrement,
+    maxBids: MAX_AI_AUCTION_BIDS,
+    bidderCount,
+    bidHistory: bidHistory.slice(-MAX_AI_AUCTION_BIDS),
+    contractCompetition: finalists.map((contender) => ({
+      clubId: contender.club.id,
+      appealScore: contender.contractNegotiation.appealScore,
+      terms: structuredClone(contender.contractNegotiation.terms),
+    })),
+  };
+}
+
 function aiTransferClubs(room, leagueId) {
   const managedClubKeys = new Set((room.managers ?? [])
     .map((manager) => clubKey(manager?.clubId))
@@ -2350,7 +2904,7 @@ function aiTransferClubs(room, leagueId) {
       const clubId = identifier(club?.id);
       if (!clubId || managedClubKeys.has(clubKey(clubId))) continue;
       if (!clubs.some((candidate) => identifiersEqual(candidate.id, clubId))) {
-        clubs.push({ id: clubId, reputation: integer(club?.reputation, 10, 20) });
+        clubs.push({ ...structuredClone(club), id: clubId, reputation: integer(club?.reputation, 10, 20) });
       }
     }
   }
@@ -2359,18 +2913,356 @@ function aiTransferClubs(room, leagueId) {
 
 function aiTransferPlayerEligible(room, state, player, aiClubKeys) {
   const playerId = identifier(player?.id);
+  const negotiability = aiNormalizedText(
+    player?.negotiability ?? player?.transferStatus ?? player?.availability,
+  ).replace(/[\s-]+/g, "_");
   if (!playerId
     || player?.active === false
     || player?.academy === true
     || player?.youth === true
     || player?.retired === true
-    || player?.careerStage === "academy") return false;
+    || player?.careerStage === "academy"
+    || player?.notForSale === true
+    || player?.untransferable === true
+    || player?.untouchable === true
+    || ["not_for_sale", "inegociavel", "indisponivel"].includes(negotiability)) return false;
   const currentClubId = actualOwnership(room, player);
-  if (!aiClubKeys.has(clubKey(currentClubId))) return false;
+  const freeAgent = clubKey(currentClubId) === clubKey(FREE_AGENT_CLUB_ID);
+  if (!freeAgent && !aiClubKeys.has(clubKey(currentClubId))) return false;
   const registration = registrationForPlayer(room, playerId);
   if (registration?.loan || activeScheduledForPlayer(state, playerId)) return false;
   if (activeListingForPlayer(state, playerId) || activeOfferForPlayer(state, playerId)) return false;
   return true;
+}
+
+function aiRoundsRemaining(room, leagueId, round) {
+  const targetLeagueKey = clubKey(leagueId);
+  const rounds = (room.leagueFixtureSchedule ?? [])
+    .filter((fixture) => !targetLeagueKey || clubKey(fixture?.leagueId) === targetLeagueKey)
+    .map((fixture) => Number(fixture?.round))
+    .filter(Number.isInteger);
+  const configured = Number(room?.seasonTotalRounds ?? room?.totalRounds ?? room?.careerState?.totalRounds);
+  const maximum = rounds.length > 0
+    ? Math.max(...rounds)
+    : Number.isInteger(configured) && configured > 0
+      ? configured
+      : 38;
+  return Math.max(0, maximum - round);
+}
+
+function aiFixtureCompleted(room, fixture) {
+  if (fixture?.status === "completed" || fixture?.completedAt || fixture?.result) return true;
+  const completedIds = new Set([
+    ...(room.completedFixtureIds ?? []),
+    ...(room.leagueMatchResults ?? []).map((result) => (
+      result?.leagueFixtureId ?? result?.fixtureId ?? result?.id
+    )),
+  ].map(identifierKey).filter(Boolean));
+  const fixtureId = identifierKey(
+    fixture?.leagueFixtureId ?? fixture?.fixtureId ?? fixture?.id,
+  );
+  return Boolean(fixtureId && completedIds.has(fixtureId));
+}
+
+function aiClubLeagueIds(room, clubId) {
+  const ids = [];
+  for (const league of room.competitionCatalog ?? []) {
+    if (league?.active === false) continue;
+    if (!(league.clubs ?? []).some((club) => identifiersEqual(club?.id, clubId))) continue;
+    const leagueId = identifier(league?.id);
+    if (leagueId) ids.push(leagueId);
+  }
+  return [...new Set(ids.map(clubKey))];
+}
+
+function aiClubRoundsRemaining(room, clubId, fallbackLeagueId, fallbackRound) {
+  const leagueKeys = aiClubLeagueIds(room, clubId);
+  if (leagueKeys.length === 0) return aiRoundsRemaining(room, fallbackLeagueId, fallbackRound);
+  const values = leagueKeys.map((leagueKey) => {
+    const fixtures = (room.leagueFixtureSchedule ?? []).filter((fixture) => (
+      clubKey(fixture?.leagueId) === leagueKey
+      && (identifiersEqual(fixture?.homeClubId, clubId) || identifiersEqual(fixture?.awayClubId, clubId))
+    ));
+    const maximum = fixtures.reduce((value, fixture) => Math.max(value, integer(fixture?.round)), 0);
+    const completedRound = fixtures.reduce((value, fixture) => (
+      aiFixtureCompleted(room, fixture) ? Math.max(value, integer(fixture?.round)) : value
+    ), 0);
+    const currentRound = completedRound > 0 ? completedRound : fallbackRound;
+    return maximum > 0
+      ? Math.max(0, maximum - currentRound)
+      : aiRoundsRemaining(room, leagueKey, fallbackRound);
+  });
+  return Math.min(...values);
+}
+
+function aiLoanRoundsRemaining(room, fromClubId, toClubId, fallbackLeagueId, fallbackRound) {
+  return Math.min(
+    aiClubRoundsRemaining(room, fromClubId, fallbackLeagueId, fallbackRound),
+    aiClubRoundsRemaining(room, toClubId, fallbackLeagueId, fallbackRound),
+  );
+}
+
+function aiLoanTerms(player, buyer, seed, remainingRounds) {
+  const desiredDuration = 4 + (stableAiScore(`${seed}:loan-duration`) % 7);
+  const durationRounds = Math.max(3, Math.min(12, remainingRounds, desiredDuration));
+  const wageSharePercent = 40 + (stableAiScore(`${seed}:loan-wage-share`) % 9) * 5;
+  const playerValue = marketValueForPlayer(player);
+  const clauseRoll = stableAiScore(`${seed}:loan-clause`) % 100;
+  const purchaseAmount = aiRoundMoney(playerValue * (0.76 + (aiClamp(buyer.fit.score / 100) * 0.18)));
+  const terms = {
+    durationRounds,
+    wageSharePercent: Math.min(80, wageSharePercent),
+    purchaseOption: null,
+  };
+  if (clauseRoll < 38) terms.purchaseOption = purchaseAmount;
+  else if (clauseRoll >= 88 && buyer.availableBudget >= purchaseAmount) {
+    terms.purchaseObligation = purchaseAmount;
+  }
+  return terms;
+}
+
+function aiBuyerContexts(room, player, clubs, rosters, financialContexts, fromClubId) {
+  const maximum = Math.max(1, integer(room.maxSquadSize, MAX_SQUAD_SIZE, 200));
+  return clubs.filter((club) => !identifiersEqual(club.id, fromClubId)).flatMap((club) => {
+    const roster = rosters.get(clubKey(club.id)) ?? [];
+    if (roster.length >= maximum) return [];
+    const financial = financialContexts.get(clubKey(club.id));
+    if (!financial) return [];
+    const { payroll, profile, availableBudget } = financial;
+    const fit = scoreAiTransferFit(player, {
+      buyerClub: club,
+      buyerRoster: roster,
+      availableBudget,
+      wageBudget: integer(profile?.wageBudget, 0, MAX_MONEY),
+      currentPayroll: payroll.amount,
+      buyerStyle: aiStyleForClub(club),
+    });
+    return [{
+      club,
+      roster,
+      fit,
+      availableBudget,
+      wageBudget: integer(profile?.wageBudget, 0, MAX_MONEY),
+      currentPayroll: payroll.amount,
+      wageHeadroom: Math.max(0, integer(profile?.wageBudget, 0, MAX_MONEY) - payroll.amount),
+    }];
+  }).sort((left, right) => (
+    right.fit.score - left.fit.score
+    || identifier(left.club.id).localeCompare(identifier(right.club.id))
+  ));
+}
+
+export function scoreAiMarketMethodPreference(method, player, context = {}) {
+  const value = Math.max(1, marketValueForPlayer(player));
+  const affordability = aiClamp((Number(context.availableBudget) || 0) / Math.max(value * 2, 1));
+  const constrained = 1 - affordability;
+  const age = aiClamp(Number(player?.age) || 24, 14, 45);
+  const development = aiClamp(
+    ((aiPlayerPotential(player) - aiPlayerOverall(player)) / 5) + (age <= 23 ? 0.35 : 0),
+  );
+  const reputation = aiClamp(aiClubReputation(context.buyerClub) / 20);
+  const scores = {
+    negotiation: 30 + affordability * 48 + reputation * 10 - constrained * 12,
+    auction: 24 + affordability * 46 + reputation * 8 - constrained * 10,
+    loan: 24 + constrained * 38 + development * 34,
+    "free-agent": 30 + constrained * 45 + (age >= 22 && age <= 30 ? 10 : 3),
+  };
+  return Math.round(aiClamp(scores[method] ?? 0, 0, 100) * 100) / 100;
+}
+
+function aiMethodStrategyAdjustment(method, buyer, player, seed) {
+  const preference = scoreAiMarketMethodPreference(method, player, {
+    buyerClub: buyer.club,
+    availableBudget: buyer.availableBudget,
+  });
+  const variation = ((stableAiScore(`${seed}:method-variation`) % 3_001) / 100) - 15;
+  return ((preference - 50) * 0.28) + variation;
+}
+
+function aiNegotiatedAction({
+  seed,
+  method,
+  player,
+  fromClubId,
+  buyer,
+  seller,
+  remainingRounds,
+}) {
+  const value = marketValueForPlayer(player);
+  const baseAmount = method === "free-agent"
+    ? Math.max(250_000, defaultWage(player) * (5 + (stableAiScore(`${seed}:signing-months`) % 5)))
+    : method === "loan"
+      ? Math.max(500_000, value * (0.07 + ((stableAiScore(`${seed}:loan-fee`) % 7) / 100)))
+      : value;
+  const negotiation = simulateAiNegotiation({
+    seed,
+    baseAmount,
+    buyerScore: buyer.fit.score,
+    sellerScore: seller?.score ?? 100,
+    buyerBudget: Math.max(1, buyer.availableBudget),
+    agent: method === "free-agent",
+  });
+  if (!negotiation.agreed || !negotiation.amount || negotiation.amount > buyer.availableBudget) return null;
+  const contractNegotiation = method === "loan"
+    ? null
+    : simulateAiContractNegotiation({ seed: `${seed}:contract`, player, buyer });
+  if (contractNegotiation && !contractNegotiation.agreed) return null;
+  const contractTerms = contractNegotiation?.terms ?? aiContractTerms(player, buyer.fit, seed);
+  const loanTerms = method === "loan"
+    ? aiLoanTerms(player, buyer, seed, remainingRounds)
+    : null;
+  const obligation = integer(loanTerms?.purchaseObligation, 0, MAX_MONEY);
+  if (negotiation.amount + obligation > buyer.availableBudget) {
+    if (loanTerms) delete loanTerms.purchaseObligation;
+    else return null;
+  }
+  const sellerScore = seller?.score ?? 100;
+  return {
+    method,
+    initiative: method === "loan"
+      ? (stableAiScore(`${seed}:initiative`) % 100 < 50 ? "lender-offer" : "borrower-request")
+      : method === "free-agent"
+        ? "agent-competition"
+        : "buyer-offer",
+    player,
+    fromClubId,
+    buyer,
+    seller,
+    amount: negotiation.amount,
+    contractTerms,
+    loanTerms,
+    negotiation,
+    contractNegotiation,
+    strategicScore: (buyer.fit.score * 0.76)
+      + (sellerScore * 0.24)
+      + ((contractNegotiation?.appealScore ?? 50) - 50) * (method === "free-agent" ? 0.32 : 0.12)
+      + aiMethodStrategyAdjustment(method, buyer, player, seed),
+  };
+}
+
+function aiAuctionAction({ seed, player, fromClubId, buyers, seller }) {
+  const auction = simulateAiAuction({
+    seed,
+    player,
+    sellerScore: seller.score,
+    buyers,
+  });
+  if (!auction) return null;
+  return {
+    method: "auction",
+    initiative: "seller-auction",
+    player,
+    fromClubId,
+    buyer: auction.winner,
+    seller,
+    amount: auction.amount,
+    contractTerms: auction.winner.contractNegotiation.terms,
+    contractNegotiation: auction.winner.contractNegotiation,
+    loanTerms: null,
+    auction,
+    competingClubIds: auction.bidHistory.map((bid) => bid.bidderClubId),
+    strategicScore: (auction.winner.fit.score * 0.72)
+      + (seller.score * 0.18)
+      + Math.min(10, auction.bidderCount * 2)
+      + ((auction.winner.contractNegotiation.appealScore - 50) * 0.12)
+      + aiMethodStrategyAdjustment("auction", auction.winner, player, seed),
+  };
+}
+
+function compactAiDecision(action, { tickKey, seasonNumber, round, leagueId, policyMethod, now }) {
+  const competingClubIds = [...new Set(
+    (action.competingClubIds ?? [action.buyer.club.id]).map(identifier).filter(Boolean),
+  )];
+  return {
+    strategyVersion: AI_STRATEGY_VERSION,
+    tickKey,
+    seasonNumber,
+    round,
+    leagueId: leagueId === "all" ? null : leagueId,
+    generatedAt: timestamp(now),
+    playerId: identifier(action.player?.id),
+    positionGroup: action.buyer.fit.positionGroup,
+    fromClubId: publicFromClubId(action.fromClubId),
+    toClubId: action.buyer.club.id,
+    method: action.method,
+    initiative: action.initiative,
+    policyMethod,
+    competitionCount: competingClubIds.length,
+    competingClubIds,
+    strategicScore: Math.round(action.strategicScore * 100) / 100,
+    buyerScore: action.buyer.fit.score,
+    buyerFactors: structuredClone(action.buyer.fit.components),
+    sellerScore: action.seller?.score ?? null,
+    sellerFactors: action.seller?.components ? structuredClone(action.seller.components) : null,
+    contractAppealScore: action.contractNegotiation?.appealScore ?? null,
+  };
+}
+
+function attachAiTransactionMetadata(room, action, result, context) {
+  const transaction = result?.transaction;
+  if (!transaction) return null;
+  const decisionMetadata = compactAiDecision(action, context);
+  transaction.source = "ai";
+  transaction.method = action.method;
+  transaction.requestId = context.requestId;
+  transaction.decisionMetadata = decisionMetadata;
+  if (action.competingContractOffers?.length) {
+    transaction.competingContractOffers = structuredClone(action.competingContractOffers);
+  }
+  if (action.negotiation) {
+    transaction.negotiationHistory = structuredClone(
+      action.negotiation.history.slice(-MAX_AI_NEGOTIATION_STEPS),
+    );
+    transaction.negotiationLimits = {
+      maxRounds: action.negotiation.maxRounds,
+      roundsUsed: action.negotiation.roundsUsed,
+      limitReached: action.negotiation.limitReached,
+    };
+  }
+  if (action.contractNegotiation) {
+    transaction.contractNegotiationHistory = structuredClone(
+      action.contractNegotiation.history.slice(-MAX_AI_NEGOTIATION_STEPS),
+    );
+    transaction.contractNegotiationLimits = {
+      maxRounds: action.contractNegotiation.maxRounds,
+      roundsUsed: action.contractNegotiation.roundsUsed,
+      limitReached: action.contractNegotiation.limitReached,
+      appealScore: action.contractNegotiation.appealScore,
+    };
+  }
+  if (action.auction) {
+    transaction.bidHistory = structuredClone(action.auction.bidHistory.slice(-MAX_AI_AUCTION_BIDS));
+    transaction.auction = {
+      reservePrice: action.auction.reservePrice,
+      bidIncrement: action.auction.bidIncrement,
+      maxBids: action.auction.maxBids,
+      bidCount: action.auction.bidHistory.length,
+      bidderCount: action.auction.bidderCount,
+      contractCompetition: structuredClone(action.auction.contractCompetition ?? []),
+    };
+  }
+  const state = ensureMarketState(room, context.now);
+  const historyEntry = {
+    id: `ai-market-history:${context.requestId}`,
+    transactionId: transaction.id,
+    tickKey: context.tickKey,
+    method: action.method,
+    dealType: transaction.dealType,
+    playerId: transaction.player?.id,
+    fromClubId: transaction.fromClubId,
+    toClubId: transaction.toClubId,
+    amount: transaction.amount,
+    strategicScore: decisionMetadata.strategicScore,
+    competitionCount: decisionMetadata.competitionCount,
+    negotiationRounds: action.negotiation?.roundsUsed ?? 0,
+    bidCount: action.auction?.bidHistory.length ?? 0,
+    completedAt: transaction.completedAt,
+  };
+  state.aiMarketHistory = [
+    ...state.aiMarketHistory.filter((entry) => entry?.id !== historyEntry.id),
+    historyEntry,
+  ].slice(-MAX_AI_MARKET_HISTORY);
+  return transaction;
 }
 
 function runAiTransferTickInternal(room, input = {}, now = new Date()) {
@@ -2383,8 +3275,14 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
     AI_TRANSFER_INTERVAL_ROUNDS,
     38,
   ));
-  const tickKey = `${seasonNumber}:${clubKey(leagueId)}:${round}`;
-  if (state.aiTransferTickKeys.includes(tickKey)) {
+  const preferredMethod = AI_MARKET_METHODS.has(input.preferredMethod)
+    ? input.preferredMethod
+    : null;
+  const tickKey = `${seasonNumber}:global:${round}`;
+  const legacyTickProcessed = state.aiTransferTickKeys.some((key) => (
+    key.startsWith(`${seasonNumber}:`) && key.endsWith(`:${round}`)
+  ));
+  if (state.aiTransferTickKeys.includes(tickKey) || legacyTickProcessed) {
     return { changed: false, duplicate: true, tickKey };
   }
   state.aiTransferTickKeys.push(tickKey);
@@ -2412,81 +3310,265 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
   if (round % intervalRounds !== 0) return finish("cadence");
   if (!transferWindowIsOpen(room, now)) return finish("window-closed");
 
-  const aiClubs = aiTransferClubs(room, leagueId === "all" ? null : leagueId);
-  if (aiClubs.length < 2) return finish("not-enough-ai-clubs");
+  const aiClubs = aiTransferClubs(room, null);
+  if (aiClubs.length < 1) return finish("not-enough-ai-clubs");
   const aiClubKeys = new Set(aiClubs.map((club) => clubKey(club.id)));
-  const players = [];
-  const seen = new Set();
-  for (const player of Array.isArray(input.players) ? input.players : []) {
+  const playerMap = new Map();
+  const suppliedPlayers = Array.isArray(input.players) ? input.players : [];
+  for (const player of [...suppliedPlayers, ...careerPlayers(room)]) {
     const playerId = identifier(player?.id);
-    if (!playerId || seen.has(identifierKey(playerId))) continue;
-    seen.add(identifierKey(playerId));
-    if (aiTransferPlayerEligible(room, state, player, aiClubKeys)) players.push(player);
+    if (playerId) playerMap.set(identifierKey(playerId), player);
   }
+  const allPlayers = [...playerMap.values()];
   const rosters = new Map(aiClubs.map((club) => [clubKey(club.id), []]));
-  for (const player of players) {
+  for (const player of allPlayers) {
+    if (player?.active === false
+      || player?.academy === true
+      || player?.youth === true
+      || player?.retired === true
+      || player?.careerStage === "academy") continue;
     rosters.get(clubKey(actualOwnership(room, player)))?.push(player);
   }
+  const players = allPlayers.filter((player) => aiTransferPlayerEligible(room, state, player, aiClubKeys));
+  const financialContexts = new Map(aiClubs.map((club) => [
+    clubKey(club.id),
+    aiClubFinancialContext(room, state, club.id),
+  ]));
   const seed = `${room.id ?? room.code}:${tickKey}`;
+  let policyMethod = preferredMethod ?? "club-strategy";
   const orderedPlayers = players
-    .filter((player) => (
-      (rosters.get(clubKey(actualOwnership(room, player)))?.length ?? 0)
-        > AI_MIN_SQUAD_AFTER_TRANSFER
-    ))
+    .filter((player) => {
+      const fromClubId = actualOwnership(room, player);
+      return clubKey(fromClubId) === clubKey(FREE_AGENT_CLUB_ID)
+        || (rosters.get(clubKey(fromClubId))?.length ?? 0) > AI_MIN_SQUAD_AFTER_TRANSFER;
+    })
     .sort((left, right) => (
       stableAiScore(`${seed}:player:${left.id}`) - stableAiScore(`${seed}:player:${right.id}`)
       || identifier(left.id).localeCompare(identifier(right.id))
     ))
-    .slice(0, 24);
-
-  let attempts = 0;
-  playerSearch: for (const player of orderedPlayers) {
+    .slice(0, 96);
+  const actions = [];
+  const loanRoundsCache = new Map();
+  const pushCompetingActions = (candidates) => {
+    const viable = candidates.filter(Boolean);
+    const competingClubIds = [...new Set(viable.map((action) => identifier(action.buyer.club.id)))];
+    const competingContractOffers = viable.flatMap((action) => (
+      action.contractNegotiation?.agreed ? [{
+        clubId: action.buyer.club.id,
+        appealScore: action.contractNegotiation.appealScore,
+        offerScore: Math.round(action.strategicScore * 100) / 100,
+        terms: structuredClone(action.contractTerms),
+      }] : []
+    ));
+    for (const action of viable) {
+      action.competingClubIds = competingClubIds;
+      action.competingContractOffers = competingContractOffers;
+      if (!preferredMethod || preferredMethod === action.method) actions.push(action);
+    }
+  };
+  for (const player of orderedPlayers) {
     const fromClubId = actualOwnership(room, player);
-    const possibleBuyers = aiClubs
-      .filter((club) => !identifiersEqual(club.id, fromClubId))
-      .filter((club) => (rosters.get(clubKey(club.id))?.length ?? 0) < MAX_SQUAD_SIZE)
-      .sort((left, right) => (
-        stableAiScore(`${seed}:${player.id}:buyer:${left.id}`)
-          - stableAiScore(`${seed}:${player.id}:buyer:${right.id}`)
-        || identifier(left.id).localeCompare(identifier(right.id))
-      ));
-    const amount = Math.min(
-      MAX_MONEY,
-      Math.max(1_000_000, Math.round(marketValueForPlayer(player) * 0.8)),
-    );
-    for (const buyer of possibleBuyers) {
-      if (attempts >= 12) break playerSearch;
-      const latestState = ensureMarketState(room, now);
-      if (availableTransferFinance(latestState, room, buyer.id) < amount) continue;
-      attempts += 1;
-      const requestId = `ai-market:${tickKey}:${identifier(player.id)}:${clubKey(fromClubId)}:${clubKey(buyer.id)}`;
-      try {
-        const result = executeAiTransfer(room, {
-          requestId,
-          toClubId: buyer.id,
-          amount,
-          dealType: "transfer",
-          contractTerms: {
-            wage: Math.max(1_000, Math.round(defaultWage(player) * 1.05)),
-            durationSeasons: DEFAULT_CONTRACT_SEASONS,
-          },
-        }, player, now);
-        result.transaction.source = "ai";
-        result.transaction.requestId = requestId;
-        return finish("completed", {
-          transactionId: result.transaction.id,
-          playerId: identifier(player.id),
+    const freeAgent = clubKey(fromClubId) === clubKey(FREE_AGENT_CLUB_ID);
+    const buyers = aiBuyerContexts(room, player, aiClubs, rosters, financialContexts, fromClubId)
+      .filter((buyer) => buyer.fit.score >= 20)
+      .slice(0, 16);
+    if (buyers.length === 0) continue;
+    const sellerClub = freeAgent
+      ? null
+      : aiClubs.find((club) => identifiersEqual(club.id, fromClubId));
+    const seller = sellerClub
+      ? scoreAiSellerRelease(
+        room,
+        state,
+        player,
+        sellerClub,
+        rosters.get(clubKey(fromClubId)) ?? [],
+        financialContexts.get(clubKey(fromClubId)),
+      )
+      : null;
+    const playerSeed = `${seed}:${identifier(player.id)}`;
+    if (freeAgent) {
+      pushCompetingActions(buyers.slice(0, 4).map((buyer) => aiNegotiatedAction({
+        seed: `${playerSeed}:free-agent:${clubKey(buyer.club.id)}`,
+        method: "free-agent",
+        player,
+        fromClubId,
+        buyer,
+        seller,
+        remainingRounds: 0,
+      })));
+      continue;
+    }
+
+    const sellerOpenToPermanent = seller && seller.score >= 25;
+    const negotiations = sellerOpenToPermanent
+      ? buyers.slice(0, 4).map((buyer) => aiNegotiatedAction({
+        seed: `${playerSeed}:negotiation:${clubKey(buyer.club.id)}`,
+        method: "negotiation",
+        player,
+        fromClubId,
+        buyer,
+        seller,
+        remainingRounds: 0,
+      }))
+      : [];
+    pushCompetingActions(negotiations);
+    const sellerGroupDepth = (rosters.get(clubKey(fromClubId)) ?? [])
+      .filter((candidate) => aiPositionGroup(candidate) === aiPositionGroup(player)).length;
+    const loanEligible = Number(player?.age ?? 24) <= 25
+      && aiPlayerPotential(player) >= aiPlayerOverall(player) + 1
+      && sellerGroupDepth > AI_POSITION_TARGETS[aiPositionGroup(player)];
+    const loans = loanEligible
+      ? buyers.slice(0, 4).map((buyer) => {
+        const loanRoundsKey = [clubKey(fromClubId), clubKey(buyer.club.id)].sort().join(":");
+        if (!loanRoundsCache.has(loanRoundsKey)) {
+          loanRoundsCache.set(loanRoundsKey, aiLoanRoundsRemaining(
+            room,
+            fromClubId,
+            buyer.club.id,
+            leagueId === "all" ? null : leagueId,
+            round,
+          ));
+        }
+        const remainingRounds = loanRoundsCache.get(loanRoundsKey);
+        return remainingRounds >= 3 ? aiNegotiatedAction({
+          seed: `${playerSeed}:loan:${clubKey(buyer.club.id)}`,
+          method: "loan",
+          player,
           fromClubId,
-          toClubId: buyer.id,
-          amount,
-        });
-      } catch (error) {
-        if (error instanceof MarketError) continue;
-        throw error;
+          buyer,
+          seller: { ...seller, score: Math.max(45, 100 - seller.score) },
+          remainingRounds,
+        }) : null;
+      })
+      : [];
+    pushCompetingActions(loans);
+    const auction = buyers.length >= 2 && sellerOpenToPermanent
+      ? aiAuctionAction({
+        seed: `${playerSeed}:auction`,
+        player,
+        fromClubId,
+        buyers,
+        seller,
+      })
+      : null;
+    if (auction && (!preferredMethod || preferredMethod === "auction")) actions.push(auction);
+  }
+  actions.sort((left, right) => (
+    right.strategicScore - left.strategicScore
+    || stableAiScore(`${seed}:action:${left.method}:${left.player.id}:${left.buyer.club.id}`)
+      - stableAiScore(`${seed}:action:${right.method}:${right.player.id}:${right.buyer.club.id}`)
+    || identifier(left.player.id).localeCompare(identifier(right.player.id))
+  ));
+  let orderedActions = actions;
+  if (!preferredMethod && actions.length > 0) {
+    const bestByMethod = [...AI_MARKET_METHODS].flatMap((method) => {
+      const action = actions.find((candidate) => candidate.method === method);
+      return action ? [{ method, score: action.strategicScore }] : [];
+    });
+    const minimumScore = Math.min(...bestByMethod.map((entry) => entry.score));
+    const weighted = bestByMethod.map((entry) => ({
+      ...entry,
+      weight: Math.max(5, Math.round((entry.score - minimumScore) + 5)),
+    }));
+    const totalWeight = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+    let roll = stableAiScore(`${seed}:method-selection`) % totalWeight;
+    policyMethod = weighted.at(-1).method;
+    for (const entry of weighted) {
+      if (roll < entry.weight) {
+        policyMethod = entry.method;
+        break;
       }
+      roll -= entry.weight;
+    }
+    orderedActions = [
+      ...actions.filter((action) => action.method === policyMethod).slice(0, 4),
+      ...actions.filter((action) => action.method !== policyMethod),
+    ];
+  }
+
+  const maxDeals = Math.max(1, Math.min(4, integer(
+    input.maxDeals,
+    Math.ceil(aiClubs.length / 8),
+    4,
+  )));
+  const maxAttempts = Math.min(48, Math.max(12, maxDeals * 12));
+  const completedDeals = [];
+  const failedAttempts = [];
+  const usedPlayerKeys = new Set();
+  const usedClubKeys = new Set();
+  let attempts = 0;
+  for (const action of orderedActions) {
+    if (attempts >= maxAttempts || completedDeals.length >= maxDeals) break;
+    const playerKey = identifierKey(action.player.id);
+    const buyerKey = clubKey(action.buyer.club.id);
+    const sellerKey = clubKey(action.fromClubId);
+    if (usedPlayerKeys.has(playerKey)
+      || usedClubKeys.has(buyerKey)
+      || (sellerKey !== clubKey(FREE_AGENT_CLUB_ID) && usedClubKeys.has(sellerKey))) continue;
+    attempts += 1;
+    const requestId = `ai-market:${tickKey}:${action.method}:${identifier(action.player.id)}:${clubKey(action.fromClubId)}:${clubKey(action.buyer.club.id)}`;
+    try {
+      const result = action.method === "auction"
+        ? withRoomRollback(room, () => executeAiAuctionInternal(room, {
+          requestId,
+          expectedFromClubId: action.fromClubId,
+        }, action, now))
+        : executeAiTransfer(room, {
+          requestId,
+          expectedFromClubId: action.fromClubId,
+          toClubId: action.buyer.club.id,
+          amount: action.amount,
+          dealType: action.method === "loan" ? "loan" : "transfer",
+          contractTerms: action.contractTerms,
+          ...(action.loanTerms ? { loanTerms: action.loanTerms } : {}),
+        }, action.player, now);
+      const transaction = attachAiTransactionMetadata(room, action, result, {
+        tickKey,
+        seasonNumber,
+        round,
+        leagueId,
+        requestId,
+        policyMethod,
+        now,
+      });
+      if (!transaction) continue;
+      usedPlayerKeys.add(playerKey);
+      usedClubKeys.add(buyerKey);
+      if (sellerKey !== clubKey(FREE_AGENT_CLUB_ID)) usedClubKeys.add(sellerKey);
+      completedDeals.push({
+        transactionId: transaction.id,
+        playerId: identifier(action.player.id),
+        fromClubId: publicFromClubId(action.fromClubId),
+        toClubId: action.buyer.club.id,
+        amount: action.amount,
+        method: action.method,
+        policyMethod,
+        negotiationRounds: action.negotiation?.roundsUsed ?? 0,
+        bidCount: action.auction?.bidHistory.length ?? 0,
+      });
+    } catch (error) {
+      if (error instanceof MarketError) {
+        failedAttempts.push({ method: action.method, code: error.code });
+        continue;
+      }
+      throw error;
     }
   }
-  return finish("no-deal");
+  if (completedDeals.length > 0) {
+    return finish("completed", {
+      ...completedDeals[0],
+      deals: completedDeals,
+      dealCount: completedDeals.length,
+      attempts,
+    });
+  }
+  return finish("no-deal", {
+    attempts,
+    preferredMethod,
+    policyMethod,
+    failedAttempts: failedAttempts.slice(-8),
+  });
 }
 
 function executeAiTransferInternal(room, input, player, now = new Date()) {
@@ -2499,10 +3581,22 @@ function executeAiTransferInternal(room, input, player, now = new Date()) {
   if (!fromClubId || !toClubId) {
     throw new MarketError("Clubes da transferencia IA invalidos", "MARKET_AI_CLUB_INVALID", 400);
   }
+  const expectedFromClubId = identifier(input.expectedFromClubId);
+  if (expectedFromClubId && !identifiersEqual(expectedFromClubId, fromClubId)) {
+    throw new MarketError(
+      "Jogador nao pertence mais ao clube esperado pela IA",
+      "MARKET_PLAYER_CLUB_CHANGED",
+      409,
+      { expectedFromClubId, currentClubId: publicFromClubId(fromClubId) },
+    );
+  }
   if (identifiersEqual(fromClubId, toClubId)) {
     throw new MarketError("Nao e possivel transferir para o mesmo clube", "MARKET_SELF_DEAL", 409);
   }
   const dealType = input.dealType === "loan" ? "loan" : "transfer";
+  if (dealType === "loan" && clubKey(fromClubId) === clubKey(FREE_AGENT_CLUB_ID)) {
+    throw new MarketError("Agente livre nao pode ser emprestado", "MARKET_FREE_AGENT_LOAN", 409);
+  }
   const transaction = completeDeal(room, state, {
     player,
     fromClubId,
@@ -2518,6 +3612,74 @@ function executeAiTransferInternal(room, input, player, now = new Date()) {
     transactionId: transaction.id,
   });
   return { transaction };
+}
+
+function executeAiAuctionInternal(room, input, action, now = new Date()) {
+  const state = ensureMarketState(room, now);
+  const operationOwner = `ai:${identifier(action.buyer.club.id)}`;
+  const duplicate = previousRequest(state, operationOwner, "ai-auction", input.requestId);
+  if (duplicate) return { duplicate: true, ...resultReferences(state, duplicate) };
+  const fromClubId = actualOwnership(room, action.player);
+  if (identifier(input.expectedFromClubId) && !identifiersEqual(input.expectedFromClubId, fromClubId)) {
+    throw new MarketError(
+      "Jogador nao pertence mais ao clube esperado pela IA",
+      "MARKET_PLAYER_CLUB_CHANGED",
+      409,
+    );
+  }
+  if (activeListingForPlayer(state, action.player.id) || activeOfferForPlayer(state, action.player.id)) {
+    throw new MarketError("Jogador ja possui negociacao ativa", "MARKET_PLAYER_BUSY", 409);
+  }
+  if (state.activeListings.filter((listing) => listing.status === "open").length >= MAX_LISTINGS) {
+    throw new MarketError("Limite de anuncios ativos atingido", "MARKET_LISTING_LIMIT", 409);
+  }
+  const listing = {
+    id: randomUUID(),
+    mode: "auction",
+    dealType: "transfer",
+    status: "open",
+    source: "ai",
+    player: marketPlayerSummary(room, action.player, fromClubId),
+    playerSnapshot: structuredClone(action.player),
+    sellerClubId: fromClubId,
+    sellerClubName: clubName(room, fromClubId),
+    sellerManagerId: null,
+    askingPrice: null,
+    minimumBid: action.auction.reservePrice,
+    bidIncrement: action.auction.bidIncrement,
+    currentBid: null,
+    bidCount: 0,
+    highestBid: null,
+    expiresAt: timestamp(new Date(new Date(now).getTime() + 60_000)),
+    loanTerms: null,
+    contractTerms: structuredClone(action.contractTerms),
+    createdAt: timestamp(now),
+    revision: state.revision + 1,
+  };
+  state.activeListings = boundedDeals(
+    [...state.activeListings, listing],
+    MAX_LISTINGS,
+    (candidate) => candidate?.status === "open",
+  );
+  for (const bid of action.auction.bidHistory) {
+    placeClubBid(room, state, listing, {
+      managerId: null,
+      clubId: bid.bidderClubId,
+    }, bid.amount, now);
+  }
+  const transaction = settleAuctionListing(room, state, listing, now);
+  touch(state, now);
+  activity(
+    state,
+    `${listing.player.name} foi arrematado por ${listing.highestBid.clubName}.`,
+    now,
+    "auction-settlement",
+  );
+  rememberRequest(state, operationOwner, "ai-auction", input.requestId, {
+    listingId: listing.id,
+    transactionId: transaction.id,
+  });
+  return { listing, transaction };
 }
 
 function publicOffer(offer, managerId) {

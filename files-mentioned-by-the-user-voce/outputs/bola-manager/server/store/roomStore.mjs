@@ -962,6 +962,35 @@ function resultForLeagueFixture(room, leagueFixtureId) {
   );
 }
 
+function advanceCompletedLeagueLoanRounds(room, previousResultIds, seasonNumber, now) {
+  const resultIds = new Set((room.leagueMatchResults ?? [])
+    .map((result) => fixtureResultKey(result?.leagueFixtureId))
+    .filter(Boolean));
+  const completedRounds = new Map();
+  for (const resultId of resultIds) {
+    if (previousResultIds.has(resultId)) continue;
+    const fixture = (room.leagueFixtureSchedule ?? []).find(
+      (candidate) => fixtureResultKey(candidate?.leagueFixtureId) === resultId,
+    );
+    if (!fixture?.leagueId || !Number.isInteger(fixture?.round)) continue;
+    completedRounds.set(`${clubKey(fixture.leagueId)}:${fixture.round}`, {
+      leagueId: fixture.leagueId,
+      round: fixture.round,
+    });
+  }
+  for (const { leagueId, round } of [...completedRounds.values()].sort((left, right) => (
+    left.round - right.round || clubKey(left.leagueId).localeCompare(clubKey(right.leagueId))
+  ))) {
+    const fixtures = (room.leagueFixtureSchedule ?? []).filter((fixture) => (
+      clubKey(fixture?.leagueId) === clubKey(leagueId) && fixture?.round === round
+    ));
+    if (fixtures.length === 0 || !fixtures.every((fixture) => (
+      resultIds.has(fixtureResultKey(fixture?.leagueFixtureId))
+    ))) continue;
+    advanceMarketLoans(room, seasonNumber, round, now, leagueId);
+  }
+}
+
 function compactLeagueResult({
   leagueFixtureId,
   score,
@@ -3236,18 +3265,6 @@ export class RoomStore {
         current.careerState.players = training.players;
         trainingEffects = training.effects;
       }
-      if (Number.isInteger(humanFixture?.round)) {
-        advanceMarketLoans(
-          current,
-          current.currentSeason,
-          humanFixture.round,
-          completedAt,
-          humanFixture.leagueId,
-        );
-      }
-      // Contratos existentes avancam antes da liquidacao: um emprestimo
-      // fechado neste mesmo fim de rodada nao perde uma rodada imediatamente.
-      settleExpiredMarket(current, completedAt);
       const leagueFixtureId = humanFixture?.leagueFixtureId ?? null;
       const leagueScore = humanFixture?.leagueFixtureReversed
         ? [...scorePair(result.score)].reverse()
@@ -3294,6 +3311,16 @@ export class RoomStore {
       }
       recordCompetitionFixture(current, humanFixture, result, completedAt);
       simulateAvailableCompetitionAi(current, completedAt, aiRosters);
+      // Avance uma vez cada rodada realmente concluida, inclusive nas ligas
+      // simuladas pela IA. Liquide depois para nao consumir imediatamente uma
+      // rodada de emprestimos fechados neste mesmo ciclo.
+      advanceCompletedLeagueLoanRounds(
+        current,
+        previousLeagueResultIds,
+        current.currentSeason,
+        completedAt,
+      );
+      settleExpiredMarket(current, completedAt);
       const competitionAwards = awardCompletedCompetitionPrizes(current, {
         occurredAt: careerCompletedAt,
       }).filter((award) => award.title?.created || award.prize?.applied);
@@ -3480,7 +3507,7 @@ export class RoomStore {
       upcomingFixtureId = nextAfterCoachChanges?.fixtureId ?? null;
       summary.nextFixtureId = upcomingFixtureId;
 
-      // Uma unica negociacao conservadora a cada quatro rodadas completas.
+      // Uma unica operacao autonoma de mercado a cada quatro rodadas completas.
       // Falhas do mercado ficam isoladas: nunca impedem salvar o resultado ou
       // avancar calendario/temporada.
       if (summary.roundSummary.complete && Number.isInteger(humanFixture?.round)) {
