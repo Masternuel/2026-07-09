@@ -28,6 +28,8 @@ export function registerRoomHandlers(io, socket, {
   matchSessionStore,
   deletingRooms,
   deletedRooms,
+  distributedLocks,
+  matchLockTtlMs,
 }) {
   const user = socket.data.user;
 
@@ -110,19 +112,33 @@ export function registerRoomHandlers(io, socket, {
     }
     deletingRooms.add(code);
     try {
-      if (matchSessions.has(code) || await matchSessionStore.has(code)) {
-        throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
+      const removeRoom = async () => {
+        if (matchSessions.has(code) || await matchSessionStore.has(code)) {
+          throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
+        }
+        const deletedRoom = await store.deleteRoom(code, user.uid);
+        deletedRooms.add(code);
+        const deleted = { code };
+        let recipients = io.to(channelForRoom(code));
+        for (const managerId of deletedRoom.managerIds) {
+          recipients = recipients.to(channelForManager(managerId));
+        }
+        recipients.emit("room:deleted", deleted);
+        io.in(channelForRoom(code)).socketsLeave(channelForRoom(code));
+        return deleted;
+      };
+      if (!distributedLocks) return await removeRoom();
+      try {
+        return await distributedLocks.withLock(`match:${code}`, removeRoom, {
+          ttlMs: matchLockTtlMs,
+          waitTimeoutMs: 0,
+        });
+      } catch (error) {
+        if (["DISTRIBUTED_LOCK_TIMEOUT", "DISTRIBUTED_LOCK_LOST"].includes(error?.code)) {
+          throw roomError("A partida em andamento precisa terminar antes de excluir a temporada", "MATCH_IN_PROGRESS");
+        }
+        throw error;
       }
-      const deletedRoom = await store.deleteRoom(code, user.uid);
-      deletedRooms.add(code);
-      const deleted = { code };
-      let recipients = io.to(channelForRoom(code));
-      for (const managerId of deletedRoom.managerIds) {
-        recipients = recipients.to(channelForManager(managerId));
-      }
-      recipients.emit("room:deleted", deleted);
-      io.in(channelForRoom(code)).socketsLeave(channelForRoom(code));
-      return deleted;
     } finally {
       deletingRooms.delete(code);
     }

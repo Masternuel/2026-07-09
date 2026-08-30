@@ -181,12 +181,10 @@ limpeza sem reativar o save nem liberar o codigo.
 
 #### Regra de deploy no Railway
 
-`railway.json` fixa `numReplicas: 1` e `overlapSeconds: 0`. Mantenha exatamente
-uma replica. Room v2 e partidas ativas sao persistidos no Firestore, mas ownership
-do playback, mapa Socket.IO e sessoes temporarias de importacao ainda sao locais
-ao processo. Duas replicas poderiam reproduzir a mesma partida ou separar cliente
-e sessao. Escala horizontal exige antes lock distribuido de playback, adapter
-Socket.IO compartilhado e armazenamento compartilhado para imports.
+`railway.json` usa duas replicas e `/ready`. Redis compartilhado fornece adapter
+Socket.IO, rate-limit e ownership do playback com TTL/fencing. Firestore e Storage
+guardam partidas e importacoes. Configure `REDIS_URL` e Firebase Storage antes de
+escalar; veja `docs/MULTI_REPLICA.md`.
 
 Torneios ficam em `tournaments` e usam `format` (`league`, `knockout` ou `groups_knockout`), `teamCount`, `legs` (`single` ou `double`), `tiebreakers`, `teamIds`, imagem de trofeu opcional e `active`. IDs de times precisam existir em `brasfootClubs`; um torneio ativo exige exatamente `teamCount` IDs e todos os clubes precisam estar ativos. O backend valida as referencias em lote quando `getAll` esta disponivel e impede arquivar um clube ainda usado por torneio ativo. Duplicatas, criterios repetidos e combinacoes incoerentes como `away_goals` com jogo unico sao recusados. A colecao `tournaments` nao permite leitura direta pelas regras do cliente; o contrato publico e somente `GET /api/tournaments`.
 
@@ -270,6 +268,6 @@ eventos, quando presentes. Sem partida iniciada ou concluida, a resposta usa
 
 O Editor envia `.ban`, `.cfg` e `.png` por sessoes temporarias da base pessoal. O fluxo usa `POST /api/editor/brasfoot-import/sessions`, `PUT .../files`, `POST .../preview`, `POST .../commit` e `DELETE` para descarte. Cada sessao pertence ao UID que a criou, grava somente na base desse UID, expira em 30 minutos e aceita ate 200 arquivos, 32 MB por arquivo e 256 MB no total. O commit e bloqueado quando a previa possui erros, salvo confirmacao explicita de importacao parcial.
 
-As sessoes ficam no disco temporario do processo. Em producao, mantenha uma replica durante cada upload ou configure afinidade de sessao antes de escalar horizontalmente. O commit monta uma geracao isolada, ativa tudo em uma unica transacao, aplica merge idempotente e compensa escudos enviados quando ocorre rollback.
+Em producao, sessoes e metadados ficam no Firestore e arquivos temporarios no Firebase Storage. Disco local existe somente como fallback de desenvolvimento/teste. O commit monta uma geracao isolada, ativa tudo em uma unica transacao, aplica merge idempotente e compensa escudos enviados quando ocorre rollback.
 
 Como alternativa de automacao, `scripts/import-brasfoot.mjs` recebe JSON normalizado, `.ban`, `.cfg`, `teams` ou a raiz do Brasfoot. O leitor de Java Serialization e data-only e nao instancia classes. Consulte [o guia do importador](../scripts/BRASFOOT_IMPORT.md) para o modo CLI, limites e reconciliacao.

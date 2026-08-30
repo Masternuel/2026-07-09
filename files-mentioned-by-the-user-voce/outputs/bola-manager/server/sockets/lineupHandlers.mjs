@@ -26,20 +26,38 @@ function lineupError(message, code, status = 409, details) {
   return error;
 }
 
+async function withLineupMutationLock(distributedLocks, code, ttlMs, mutation) {
+  if (!distributedLocks) return mutation();
+  try {
+    return await distributedLocks.withLock(`match:${code}`, mutation, {
+      ttlMs,
+      waitTimeoutMs: 0,
+    });
+  } catch (error) {
+    if (["DISTRIBUTED_LOCK_TIMEOUT", "DISTRIBUTED_LOCK_LOST"].includes(error?.code)) {
+      throw lineupError("Nao altere a escalacao durante uma partida", "MATCH_IN_PROGRESS");
+    }
+    throw error;
+  }
+}
+
 export function registerLineupHandlers(io, socket, {
   store,
   catalogStore,
   matchSessions,
   matchSessionStore,
+  distributedLocks,
+  matchLockTtlMs,
 }) {
   const user = socket.data.user;
 
   registerSafe(socket, "lineup:save", async (payload) => {
     const data = parseOrThrow(lineupSaveSchema, payload);
-    if (matchSessions.has(data.code) || await matchSessionStore.has(data.code)) {
-      throw lineupError("Nao altere a escalacao durante uma partida", "MATCH_IN_PROGRESS");
-    }
-    const currentRoom = await store.requireMembership(data.code, user.uid);
+    return withLineupMutationLock(distributedLocks, data.code, matchLockTtlMs, async () => {
+      if (matchSessions.has(data.code) || await matchSessionStore.has(data.code)) {
+        throw lineupError("Nao altere a escalacao durante uma partida", "MATCH_IN_PROGRESS");
+      }
+      const currentRoom = await store.requireMembership(data.code, user.uid);
     const manager = currentRoom.managers.find((candidate) => candidate.id === user.uid);
     if (!manager?.clubId) throw lineupError("Escolha um clube antes de escalar", "CLUB_REQUIRED");
     const roomCatalog = await catalogForOwner(
@@ -146,5 +164,6 @@ export function registerLineupHandlers(io, socket, {
     } finally {
       if (matchSessions.get(data.code) === reservation) matchSessions.delete(data.code);
     }
+    });
   });
 }

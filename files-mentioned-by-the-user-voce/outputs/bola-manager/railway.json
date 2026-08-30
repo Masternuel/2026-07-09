@@ -3,10 +3,10 @@
   "build": { "builder": "NIXPACKS" },
   "deploy": {
     "startCommand": "npm run server",
-    "numReplicas": 1,
+    "numReplicas": 2,
     "multiRegionConfig": null,
-    "overlapSeconds": 0,
-    "healthcheckPath": "/health",
+    "overlapSeconds": 30,
+    "healthcheckPath": "/ready",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5

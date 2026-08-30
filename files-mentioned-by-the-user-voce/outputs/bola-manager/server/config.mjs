@@ -3,6 +3,11 @@ function nonNegativeInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = nonNegativeInteger(value, fallback);
+  return parsed > 0 ? parsed : fallback;
+}
+
 function enabled(value) {
   return String(value ?? "").trim().toLowerCase() === "true";
 }
@@ -39,6 +44,20 @@ export function getServerConfig(env = process.env) {
     allowLocalEditor: ["development", "test"].includes(explicitNodeEnv) && requestedLocalEditor,
     editorAdminUids: commaSeparatedValues(env.EDITOR_ADMIN_UIDS),
     roomStoreMode: env.ROOM_STORE?.trim().toLowerCase() || (requestedDemoAuth ? "memory" : "firestore"),
+    redisUrl: env.REDIS_URL?.trim() || "",
+    instanceId: env.INSTANCE_ID?.trim()
+      || env.RAILWAY_REPLICA_ID?.trim()
+      || env.HOSTNAME?.trim()
+      || `local-${process.pid}`,
+    lockTtlMs: positiveInteger(env.LOCK_TTL_MS, 15_000),
+    lockWaitMs: nonNegativeInteger(env.LOCK_WAIT_MS, 2_000),
+    lockRetryMs: positiveInteger(env.LOCK_RETRY_MS, 100),
+    rateLimitWindowMs: positiveInteger(env.RATE_LIMIT_WINDOW_MS, 60_000),
+    rateLimitHttpMax: positiveInteger(env.RATE_LIMIT_HTTP_MAX, 240),
+    rateLimitSocketMax: positiveInteger(env.RATE_LIMIT_SOCKET_MAX, 120),
+    dependencyTimeoutMs: positiveInteger(env.DEPENDENCY_TIMEOUT_MS, 2_500),
+    shutdownTimeoutMs: positiveInteger(env.SHUTDOWN_TIMEOUT_MS, 10_000),
+    importObjectTtlDays: positiveInteger(env.IMPORT_OBJECT_TTL_DAYS, 1),
   };
 }
 

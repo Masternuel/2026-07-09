@@ -1,9 +1,11 @@
 import { createServer as createHttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import { Server as SocketIOServer } from "socket.io";
+import { createAdapter as createRedisAdapter } from "@socket.io/redis-adapter";
 import { createExpressAuthMiddleware, createSocketAuthMiddleware } from "./auth.mjs";
 import { getServerConfig, loadLocalEnvironment } from "./config.mjs";
 import { createRoomsRouter } from "./routes/rooms.mjs";
@@ -28,6 +30,23 @@ import { catalogForOwner } from "./store/catalogScope.mjs";
 import { createRoomPersistence } from "./store/roomPersistence.mjs";
 import { createMatchSessionPersistence } from "./store/matchSessionPersistence.mjs";
 import { RoomStore } from "./store/roomStore.mjs";
+import { createDistributedLock } from "./infrastructure/distributedLock.mjs";
+import {
+  createDistributedRateLimiter,
+  createRateLimitMiddleware,
+} from "./infrastructure/distributedRateLimit.mjs";
+import {
+  createHttpMetricsMiddleware,
+  createMetricsRegistry,
+  createStructuredLogger,
+} from "./infrastructure/observability.mjs";
+import {
+  createFirestoreReadinessCheck,
+  createLivenessPayload,
+  createReadinessChecker,
+  createRedisReadinessCheck,
+} from "./infrastructure/readiness.mjs";
+import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure/redisRuntime.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -41,16 +60,68 @@ export async function createBolaManagerServer({
   mediaService: injectedMediaService,
   brasfootImportService: injectedBrasfootImportService,
   matchSessionStore: injectedMatchSessionStore,
+  redisRuntime: injectedRedisRuntime,
+  distributedLocks: injectedDistributedLocks,
+  rateLimiter: injectedRateLimiter,
+  readinessCheck: injectedReadinessCheck,
+  metrics: injectedMetrics,
+  structuredLogger: injectedStructuredLogger,
+  socketAdapterFactory = createRedisAdapter,
 } = {}) {
   const config = getServerConfig(env);
+  const metrics = injectedMetrics ?? createMetricsRegistry();
+  const structuredLogger = injectedStructuredLogger ?? createStructuredLogger({
+    output: logger,
+    instanceId: config.instanceId,
+    level: config.nodeEnv === "development" ? "debug" : "info",
+  });
+  let redisRuntime = injectedRedisRuntime;
+  if (!redisRuntime) {
+    try {
+      redisRuntime = await createRedisRuntime({
+        url: config.redisUrl,
+        connectTimeoutMs: config.dependencyTimeoutMs,
+        logger: structuredLogger,
+      });
+    } catch (error) {
+      structuredLogger.error("redis.startup_unavailable", { error });
+      redisRuntime = createDisabledRedisRuntime("connection-failed");
+    }
+  }
+  const distributedLocks = injectedDistributedLocks ?? (redisRuntime.enabled
+    ? createDistributedLock({
+      client: redisRuntime.client,
+      defaultTtlMs: config.lockTtlMs,
+      defaultWaitTimeoutMs: config.lockWaitMs,
+      retryMinMs: config.lockRetryMs,
+      retryMaxMs: Math.max(config.lockRetryMs, config.lockRetryMs * 4),
+      commandTimeoutMs: config.dependencyTimeoutMs,
+      instanceId: config.instanceId,
+      logger: structuredLogger,
+      metrics,
+    })
+    : null);
+  const rateLimiter = injectedRateLimiter ?? (redisRuntime.enabled
+    ? createDistributedRateLimiter({
+      client: redisRuntime.client,
+      limit: config.rateLimitHttpMax,
+      windowMs: config.rateLimitWindowMs,
+      commandTimeoutMs: config.dependencyTimeoutMs,
+      metrics,
+    })
+    : null);
   const firebase = injectedFirebase ?? await initializeFirebaseAdmin(env);
   const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore: firebase.firestore });
-  await catalogStore?.ensureInitialized?.();
+  try {
+    await catalogStore?.ensureInitialized?.();
+  } catch (error) {
+    structuredLogger.error("firestore.catalog_startup_unavailable", { error });
+  }
   const coachInterviewAi = injectedCoachInterviewAi ?? createCoachInterviewAiService({
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
-    logger,
+    logger: structuredLogger,
   });
   const store = injectedStore ?? new RoomStore({
     persistence: createRoomPersistence({
@@ -79,30 +150,76 @@ export async function createBolaManagerServer({
     },
     credentials: true,
   };
-  const io = new SocketIOServer(httpServer, { cors: corsOptions });
+  const io = new SocketIOServer(httpServer, {
+    cors: corsOptions,
+    ...(config.nodeEnv === "production" ? { transports: ["websocket"] } : {}),
+  });
+  if (redisRuntime.enabled) {
+    io.adapter(socketAdapterFactory(redisRuntime.publisher, redisRuntime.subscriber, {
+      requestsTimeout: config.dependencyTimeoutMs,
+    }));
+  }
   const newsStore = injectedNewsStore ?? new NewsStore({ firestore: firebase.firestore });
   const mediaService = injectedMediaService ?? createMediaService({ env, bucket: firebase.bucket });
   const brasfootImportService = injectedBrasfootImportService ?? createBrasfootImportSessionService({
     database: firebase.firestore,
     databaseForOwner: async (ownerId) => catalogForOwner(catalogStore, ownerId),
+    bucket: firebase.bucket,
     mediaService,
-    logger,
+    logger: structuredLogger,
+    nodeEnv: config.nodeEnv,
   });
   const socialAi = injectedSocialAi ?? createSocialAiService({
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
-    logger,
+    logger: structuredLogger,
+  });
+
+  let draining = false;
+  const liveness = createLivenessPayload({ instanceId: config.instanceId });
+  const firestoreRequired = !injectedStore && config.roomStoreMode === "firestore";
+  const productionCoordinationRequired = config.nodeEnv === "production" && !injectedStore;
+  const redisRequired = productionCoordinationRequired || Boolean(config.redisUrl);
+  const readinessCheck = injectedReadinessCheck ?? createReadinessChecker({
+    checks: {
+      ...(firestoreRequired || firebase.firestore
+        ? { firestore: createFirestoreReadinessCheck(firebase.firestore, { timeoutMs: config.dependencyTimeoutMs }) }
+        : {}),
+      ...(redisRequired || redisRuntime.enabled
+        ? { redis: createRedisReadinessCheck(redisRuntime, { timeoutMs: config.dependencyTimeoutMs }) }
+        : {}),
+    },
+    timeoutMs: config.dependencyTimeoutMs,
+    metrics,
   });
 
   app.disable("x-powered-by");
+  app.set("trust proxy", 1);
   app.use(cors(corsOptions));
+  app.use((request, response, next) => {
+    const startedAt = Date.now();
+    request.requestId = String(request.headers["x-request-id"] ?? randomUUID()).slice(0, 128);
+    response.setHeader("X-Request-Id", request.requestId);
+    response.once("finish", () => structuredLogger.info("http.request", {
+      requestId: request.requestId,
+      method: request.method,
+      path: request.path,
+      status: response.statusCode,
+      durationMs: Date.now() - startedAt,
+    }));
+    if (draining && !["/health", "/ready", "/metrics"].includes(request.path)) {
+      response.status(503).json({ error: { code: "SERVER_DRAINING", message: "Servidor encerrando" } });
+      return;
+    }
+    next();
+  });
+  app.use(createHttpMetricsMiddleware(metrics));
   app.use(express.json({ limit: "256kb" }));
 
   app.get("/health", (_request, response) => {
     response.json({
-      status: "ok",
-      service: "bola-manager-server",
+      ...liveness(),
       firebase: firebase.enabled ? "connected" : "disabled",
       auth: config.allowDemoAuth ? "firebase-or-explicit-demo" : "firebase",
       roomStore: config.roomStoreMode,
@@ -111,6 +228,37 @@ export async function createBolaManagerServer({
       timestamp: new Date().toISOString(),
     });
   });
+
+  app.get("/ready", async (_request, response) => {
+    if (draining) {
+      response.status(503).json({ status: "draining", instanceId: config.instanceId });
+      return;
+    }
+    const readiness = await readinessCheck();
+    structuredLogger[readiness.ok ? "debug" : "warn"]("dependencies.readiness", readiness);
+    response.status(readiness.ok ? 200 : 503).json({
+      ...readiness,
+      instanceId: config.instanceId,
+    });
+  });
+
+  app.get("/metrics", (_request, response) => {
+    response.json({ instanceId: config.instanceId, ...metrics.snapshot() });
+  });
+
+  if (rateLimiter) {
+    app.use(createRateLimitMiddleware(rateLimiter, {
+      keyResolver: (request) => `http:${request.ip || request.socket?.remoteAddress || "unknown"}`,
+      limit: config.rateLimitHttpMax,
+      windowMs: config.rateLimitWindowMs,
+    }));
+  } else if (productionCoordinationRequired) {
+    app.use((_request, response) => {
+      response.status(503).json({
+        error: { code: "REDIS_REQUIRED", message: "Coordenacao distribuida indisponivel" },
+      });
+    });
+  }
 
   const expressAuth = createExpressAuthMiddleware({
     auth: firebase.auth,
@@ -128,7 +276,7 @@ export async function createBolaManagerServer({
   app.use("/api/matches", expressAuth, createMatchRouter(store));
   app.use("/api/market", expressAuth, createMarketRouter(store));
   app.use("/api/news", expressAuth, createNewsRouter(store, newsStore, socialAi, {
-    logger,
+    logger: structuredLogger,
     broadcast(post) {
       io.to(channelForRoom(post.roomCode)).emit("news:post", post);
     },
@@ -150,7 +298,7 @@ export async function createBolaManagerServer({
   });
   app.use((error, _request, response, _next) => {
     const status = Number.isInteger(error.status) ? error.status : 500;
-    if (status >= 500) logger.error(error);
+    if (status >= 500) structuredLogger.error("http.request_error", { error });
     response.status(status).json({
       error: {
         code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
@@ -160,6 +308,26 @@ export async function createBolaManagerServer({
     });
   });
 
+  if (rateLimiter) {
+    io.use(async (socket, next) => {
+      try {
+        const result = await rateLimiter.consume(
+          `socket-connect:${socket.handshake.address || "unknown"}`,
+          { limit: config.rateLimitSocketMax, windowMs: config.rateLimitWindowMs },
+        );
+        if (!result.allowed) {
+          const error = new Error("Muitas conexoes em tempo real");
+          error.data = { code: "RATE_LIMITED", retryAfterMs: result.retryAfterMs };
+          next(error);
+          return;
+        }
+        next();
+      } catch (error) {
+        error.data ??= { code: "RATE_LIMIT_UNAVAILABLE" };
+        next(error);
+      }
+    });
+  }
   io.use(createSocketAuthMiddleware({
     auth: firebase.auth,
     allowDemoAuth: config.allowDemoAuth,
@@ -171,7 +339,28 @@ export async function createBolaManagerServer({
     mediaService,
     matchDelayMs: config.matchEventDelayMs,
     matchSessionStore,
+    distributedLocks,
+    matchLockTtlMs: config.lockTtlMs,
+    matchLockWaitMs: config.lockWaitMs,
+    rateLimiter,
+    socketRateLimit: config.rateLimitSocketMax,
+    rateLimitWindowMs: config.rateLimitWindowMs,
+    metrics,
+    logger: structuredLogger,
   });
+
+  io.on("connection", (socket) => {
+    metrics.increment("socket_connections_total");
+    metrics.setGauge("socket_connections_active", io.engine.clientsCount);
+    structuredLogger.info("socket.connected", { socketId: socket.id });
+    socket.once("disconnect", () => {
+      metrics.increment("socket_disconnections_total");
+      metrics.setGauge("socket_connections_active", io.engine.clientsCount);
+      structuredLogger.info("socket.disconnected", { socketId: socket.id });
+    });
+  });
+
+  let closePromise = null;
 
   return {
     app,
@@ -185,6 +374,10 @@ export async function createBolaManagerServer({
     socialAi,
     store,
     matchSessionStore,
+    redisRuntime,
+    distributedLocks,
+    rateLimiter,
+    metrics,
     async listen(port = config.port) {
       await new Promise((resolveListen, reject) => {
         httpServer.once("error", reject);
@@ -196,9 +389,41 @@ export async function createBolaManagerServer({
       return httpServer.address();
     },
     async close() {
-      sockets.close();
-      await new Promise((resolveClose) => io.close(() => resolveClose()));
-      await brasfootImportService.close?.();
+      if (!closePromise) {
+        draining = true;
+        metrics.setGauge("server_ready", 0);
+        closePromise = (async () => {
+          const graceful = (async () => {
+            await sockets.close();
+            await new Promise((resolveClose) => io.close(() => resolveClose()));
+            await brasfootImportService.close?.();
+            await redisRuntime.close?.();
+            structuredLogger.info("server.shutdown_complete");
+          })();
+          let timer;
+          try {
+            await Promise.race([
+              graceful,
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(Object.assign(new Error("Shutdown timeout"), {
+                  code: "SHUTDOWN_TIMEOUT",
+                })), config.shutdownTimeoutMs);
+              }),
+            ]);
+          } catch (error) {
+            structuredLogger.error("server.shutdown_forced", { error });
+            io.disconnectSockets(true);
+            httpServer.closeAllConnections?.();
+            redisRuntime.subscriber?.disconnect?.();
+            redisRuntime.publisher?.disconnect?.();
+            redisRuntime.client?.disconnect?.();
+            throw error;
+          } finally {
+            clearTimeout(timer);
+          }
+        })();
+      }
+      return closePromise;
     },
   };
 }
@@ -215,8 +440,13 @@ if (isDirectExecution()) {
   console.log(`Firebase Admin: ${server.firebase.enabled ? "ativo" : "desativado"}`);
 
   const shutdown = async () => {
-    await server.close();
-    process.exit(0);
+    try {
+      await server.close();
+      process.exitCode = 0;
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);

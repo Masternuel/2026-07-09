@@ -77,13 +77,13 @@ O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootCl
 - Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
 - Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). `GEMINI_FALLBACK_MODELS` aceita modelos reserva separados por vírgula e usa `gemini-3.1-flash-lite` por padrão. Nunca use prefixo `VITE_` nessas chaves.
 - O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
-- Em **Settings → Scale → Regions**, mantenha exatamente **1 réplica**. O runtime persiste a partida ativa no Firestore, mas o lock do playback ainda é local ao processo.
+- Adicione Redis/Valkey compartilhado, configure `REDIS_URL` e use duas ou mais réplicas. O health check é `/ready`; detalhes em [docs/MULTI_REPLICA.md](./docs/MULTI_REPLICA.md).
 - Configure Cloudinary por **um** método: `CLOUDINARY_URL` ou o trio `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Se uma chave aparecer em chat, log ou arquivo rastreável, gere outra, atualize Railway/`.env.local`, teste e revogue a antiga.
 
 ## Limites desta vertical slice
 
 O projeto comprova o ciclo principal e mantém temporadas sucessivas, mas não reproduz todos os regulamentos internacionais nem oferece gestão jogável de seleções. Os clubes e jogadores da demo são fictícios/sem licença.
 
-O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados, eventos emitidos, velocidade, intervalo, planos e prontidão da partida ativa são persistidos no Firestore. Depois de reiniciar o Railway, o primeiro `match:sync` reidrata o cursor e continua sem repetir o primeiro tempo. O playback ainda exige uma única réplica até existir lock distribuído e adapter Socket.io entre processos.
+O fluxo Auth → sala → prontidão → temporada → partida já está conectado. Salas, resultados, eventos emitidos, velocidade, intervalo, planos e prontidão da partida ativa são persistidos no Firestore. Lock Redis com fencing garante um playback por sala; adapter Redis sincroniza broadcasts entre réplicas.
 
-Também permanecem como próximas etapas: adapter Socket.io entre réplicas, balanceamento avançado, regras nacionais adicionais, gestão completa de seleções e testes E2E com dois navegadores reais.
+Também permanecem como próximas etapas: balanceamento avançado, regras nacionais adicionais, gestão completa de seleções e E2E multi-processo com Redis real no pipeline.

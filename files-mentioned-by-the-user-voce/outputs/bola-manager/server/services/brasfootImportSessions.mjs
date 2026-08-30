@@ -16,6 +16,10 @@ const ALLOWED_EXTENSIONS = new Set([".ban", ".cfg", ".png"]);
 const FILE_SAMPLE_LIMIT = 30;
 const CLUB_SAMPLE_LIMIT = 12;
 const ISSUE_SAMPLE_LIMIT = 30;
+const SESSION_COLLECTION = "brasfootImportSessions";
+const SESSION_LOCK_COLLECTION = "brasfootImportSessionLocks";
+const STORAGE_PREFIX = "brasfoot-import-sessions";
+const DOWNLOAD_CONCURRENCY = 8;
 
 export class BrasfootImportSessionError extends Error {
   constructor(message, code, status = 400, details) {
@@ -162,10 +166,45 @@ function mebibytes(bytes) {
   return Math.round(bytes / (1024 * 1024));
 }
 
+function supportsDistributedSessions(database, bucket) {
+  return Boolean(
+    database
+    && typeof database.collection === "function"
+    && typeof database.runTransaction === "function"
+    && bucket
+    && typeof bucket.file === "function",
+  );
+}
+
+function documentId(value) {
+  return createHash("sha256").update(String(value)).digest("hex");
+}
+
+async function mapConcurrent(values, maximum, operation) {
+  const queue = [...values];
+  const results = new Array(queue.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(maximum, queue.length) }, async () => {
+    while (cursor < queue.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await operation(queue[index], index);
+    }
+  }));
+  return results;
+}
+
+function storageContentType(path) {
+  if (path.toLowerCase().endsWith(".png")) return "image/png";
+  if (path.toLowerCase().endsWith(".json")) return "application/json";
+  return "application/octet-stream";
+}
+
 export class BrasfootImportSessionService {
   constructor({
     database = null,
     databaseForOwner = null,
+    bucket = null,
     mediaService = null,
     logger = console,
     tempDirectory = tmpdir(),
@@ -176,9 +215,15 @@ export class BrasfootImportSessionService {
     normalize = normalizeDataset,
     commitImport = executeImportCommit,
     scheduleCleanup = true,
+    nodeEnv = process.env.NODE_ENV,
+    allowLocalFallback = String(nodeEnv ?? "development").toLowerCase() !== "production",
+    sessionCollection = SESSION_COLLECTION,
+    sessionLockCollection = SESSION_LOCK_COLLECTION,
+    storagePrefix = STORAGE_PREFIX,
   } = {}) {
     this.database = database;
     this.databaseForOwner = databaseForOwner;
+    this.bucket = bucket ?? mediaService?.firebase?.bucket ?? mediaService?.bucket ?? null;
     this.mediaService = mediaService;
     this.logger = logger;
     this.tempDirectory = resolve(tempDirectory);
@@ -188,15 +233,25 @@ export class BrasfootImportSessionService {
     this.parseSource = parseSource;
     this.normalize = normalize;
     this.commitImport = commitImport;
+    this.sessionCollection = String(sessionCollection);
+    this.sessionLockCollection = String(sessionLockCollection);
+    this.storagePrefix = String(storagePrefix).replace(/^\/+|\/+$/g, "");
+    this.storageMode = supportsDistributedSessions(this.database, this.bucket)
+      ? "firestore-storage"
+      : allowLocalFallback
+        ? "local"
+        : "unavailable";
     this.sessions = new Map();
     this.ownerCommits = new Set();
+    this.activeJobs = new Set();
     this.root = null;
     this.closed = false;
+    this.closePromise = null;
     this.cleanupTimer = null;
     if (scheduleCleanup) {
       const interval = Math.max(1_000, Math.min(60_000, this.limits.ttlMs));
       this.cleanupTimer = setInterval(() => {
-        void this.cleanupExpired().catch((error) => this.#logError(error));
+        void this.#track(this.cleanupExpired()).catch((error) => this.#logError(error));
       }, interval);
       this.cleanupTimer.unref?.();
     }
@@ -214,6 +269,29 @@ export class BrasfootImportSessionService {
     }
   }
 
+  #assertAvailable() {
+    if (this.closed) {
+      throw sessionError("Servico de importacao encerrado", "BRASFOOT_IMPORT_CLOSED", 503);
+    }
+    if (this.storageMode === "unavailable") {
+      throw sessionError(
+        "Firestore e Firebase Storage sao obrigatorios para importar em producao",
+        "BRASFOOT_IMPORT_DISTRIBUTED_STORAGE_REQUIRED",
+        503,
+      );
+    }
+  }
+
+  #track(job) {
+    const promise = Promise.resolve(job);
+    this.activeJobs.add(promise);
+    promise.then(
+      () => this.activeJobs.delete(promise),
+      () => this.activeJobs.delete(promise),
+    );
+    return promise;
+  }
+
   async #ensureRoot() {
     if (this.closed) throw sessionError("Servico de importacao encerrado", "BRASFOOT_IMPORT_CLOSED", 503);
     if (!this.root) {
@@ -221,6 +299,170 @@ export class BrasfootImportSessionService {
       this.root = await mkdtemp(join(this.tempDirectory, "bola-manager-brasfoot-"));
     }
     return this.root;
+  }
+
+  #sessionReference(sessionId) {
+    return this.database.collection(this.sessionCollection).doc(String(sessionId));
+  }
+
+  #lockReference(ownerId) {
+    return this.database.collection(this.sessionLockCollection).doc(documentId(ownerId));
+  }
+
+  async #saveStorage(path, bytes) {
+    await this.bucket.file(path).save(bytes, {
+      resumable: false,
+      metadata: { contentType: storageContentType(path), cacheControl: "private, no-store" },
+    });
+  }
+
+  async #downloadStorage(path) {
+    try {
+      const result = await this.bucket.file(path).download();
+      const bytes = Array.isArray(result) ? result[0] : result;
+      return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    } catch (error) {
+      throw sessionError(
+        "Arquivo temporario da importacao nao esta disponivel",
+        "BRASFOOT_IMPORT_STORAGE_UNAVAILABLE",
+        503,
+        { cause: error?.code ?? "storage-read-failed" },
+      );
+    }
+  }
+
+  async #deleteStorage(path) {
+    if (!path) return;
+    await this.bucket.file(path).delete({ ignoreNotFound: true });
+  }
+
+  async #distributedFiles(reference) {
+    const snapshot = await reference.collection("files").get();
+    return snapshot.docs
+      .map((document) => ({ id: document.id, ...document.data() }))
+      .sort((left, right) => left.path.localeCompare(right.path, "pt-BR"));
+  }
+
+  async #materializeFiles(session, files, operation, { downloadFiles = true } = {}) {
+    const root = await this.#ensureRoot();
+    const directory = resolve(root, `${session.id}-${randomUUID()}`);
+    if (!pathWithin(root, directory)) throw new Error("ID de sessao gerou caminho inseguro");
+    await mkdir(directory, { recursive: false });
+    try {
+      if (downloadFiles) {
+        await mapConcurrent(files, DOWNLOAD_CONCURRENCY, async (file) => {
+          const target = resolve(directory, ...file.path.split("/"));
+          if (!pathWithin(directory, target)) {
+            throw sessionError("Caminho de arquivo invalido", "BRASFOOT_IMPORT_PATH_INVALID", 400);
+          }
+          const bytes = await this.#downloadStorage(file.storagePath);
+          const checksum = createHash("sha256").update(bytes).digest("hex");
+          if (bytes.length !== file.size || checksum !== file.sha256) {
+            throw sessionError(
+              "Arquivo temporario da importacao falhou na verificacao de integridade",
+              "BRASFOOT_IMPORT_STORAGE_CORRUPT",
+              503,
+            );
+          }
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, bytes, { flag: "wx" });
+        });
+      }
+      return await operation(directory);
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async #findDistributed(sessionId, ownerId) {
+    const reference = this.#sessionReference(sessionId);
+    const snapshot = await reference.get();
+    const session = snapshot.exists ? snapshot.data() : null;
+    if (!session || session.ownerId !== String(ownerId) || session.expiresAt <= this.#nowMs()) {
+      throw sessionError("Sessao de importacao nao encontrada", "BRASFOOT_IMPORT_SESSION_NOT_FOUND", 404);
+    }
+    return { ...session, id: snapshot.id, reference };
+  }
+
+  async #claimDistributed(sessionId, ownerId, status = "busy") {
+    const reference = this.#sessionReference(sessionId);
+    const token = String(this.idFactory());
+    const nowMs = this.#nowMs();
+    const session = await this.database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      const current = snapshot.exists ? snapshot.data() : null;
+      if (!current || current.ownerId !== String(ownerId) || current.expiresAt <= nowMs) {
+        throw sessionError("Sessao de importacao nao encontrada", "BRASFOOT_IMPORT_SESSION_NOT_FOUND", 404);
+      }
+      if (current.busyToken && current.busyUntil > nowMs) {
+        throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
+      }
+      transaction.update(reference, {
+        status,
+        busyToken: token,
+        busyUntil: nowMs + this.limits.ttlMs,
+        updatedAt: nowMs,
+      });
+      return current;
+    });
+    return { ...session, id: String(sessionId), reference, token };
+  }
+
+  async #releaseDistributed(lease, { touch = true } = {}) {
+    const nowMs = this.#nowMs();
+    await this.database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(lease.reference);
+      if (!snapshot.exists || snapshot.data().busyToken !== lease.token) return;
+      transaction.update(lease.reference, {
+        status: "ready",
+        busyToken: null,
+        busyUntil: null,
+        updatedAt: nowMs,
+        ...(touch ? { expiresAt: nowMs + this.limits.ttlMs } : {}),
+      });
+    });
+  }
+
+  async #useDistributed(sessionId, ownerId, operation) {
+    const lease = await this.#claimDistributed(sessionId, ownerId);
+    let succeeded = false;
+    try {
+      const result = await operation(lease);
+      succeeded = true;
+      return result;
+    } finally {
+      await this.#releaseDistributed(lease, { touch: succeeded }).catch((error) => this.#logError(error));
+    }
+  }
+
+  async #acquireOwnerLock(ownerId) {
+    const reference = this.#lockReference(ownerId);
+    const token = String(this.idFactory());
+    const nowMs = this.#nowMs();
+    await this.database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      if (snapshot.exists && snapshot.data().expiresAt > nowMs) {
+        throw sessionError(
+          "Ja existe uma importacao Brasfoot em andamento nesta base",
+          "BRASFOOT_IMPORT_IN_PROGRESS",
+          409,
+        );
+      }
+      transaction.set(reference, {
+        ownerId: String(ownerId),
+        token,
+        createdAt: nowMs,
+        expiresAt: nowMs + this.limits.ttlMs,
+      });
+    });
+    return { reference, token };
+  }
+
+  async #releaseOwnerLock(lock) {
+    await this.database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(lock.reference);
+      if (snapshot.exists && snapshot.data().token === lock.token) transaction.delete(lock.reference);
+    });
   }
 
   #touch(session) {
@@ -253,8 +495,315 @@ export class BrasfootImportSessionService {
     }
   }
 
+  async #createDistributedSession(ownerId) {
+    const nowMs = this.#nowMs();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const id = String(this.idFactory());
+      const reference = this.#sessionReference(id);
+      try {
+        await reference.create({
+          ownerId: String(ownerId),
+          status: "ready",
+          busyToken: null,
+          busyUntil: null,
+          fileCount: 0,
+          totalBytes: 0,
+          revision: 0,
+          preview: null,
+          createdAt: nowMs,
+          updatedAt: nowMs,
+          expiresAt: nowMs + this.limits.ttlMs,
+        });
+        return {
+          sessionId: id,
+          id,
+          createdAt: iso(nowMs),
+          expiresAt: iso(nowMs + this.limits.ttlMs),
+          limits: publicLimits(this.limits),
+        };
+      } catch (error) {
+        if (![6, "6", "already-exists"].includes(error?.code)) throw error;
+      }
+    }
+    throw new Error("Nao foi possivel gerar ID unico para sessao Brasfoot");
+  }
+
+  async #uploadDistributed({ sessionId, ownerId, normalizedPath, bytes }) {
+    return this.#useDistributed(sessionId, ownerId, async (session) => {
+      const fileReference = session.reference.collection("files").doc(documentId(normalizedPath));
+      const previousSnapshot = await fileReference.get();
+      const previous = previousSnapshot.exists ? previousSnapshot.data() : null;
+      const nextFileCount = session.fileCount + (previous ? 0 : 1);
+      const nextTotalBytes = session.totalBytes - (previous?.size ?? 0) + bytes.length;
+      if (nextFileCount > this.limits.maxFiles) {
+        throw sessionError(
+          `Sessao excede o limite de ${this.limits.maxFiles} arquivos`,
+          "BRASFOOT_IMPORT_TOO_MANY_FILES",
+          413,
+          { maximumFiles: this.limits.maxFiles },
+        );
+      }
+      if (nextTotalBytes > this.limits.maxTotalBytes) {
+        throw sessionError(
+          `Sessao excede o limite total de ${mebibytes(this.limits.maxTotalBytes)} MB`,
+          "BRASFOOT_IMPORT_TOTAL_TOO_LARGE",
+          413,
+          { maximumBytes: this.limits.maxTotalBytes },
+        );
+      }
+      const extension = extname(normalizedPath).toLowerCase();
+      const storagePath = `${this.storagePrefix}/${session.id}/files/${randomUUID()}${extension}`;
+      const file = {
+        path: normalizedPath,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        storagePath,
+      };
+      await this.#saveStorage(storagePath, bytes);
+      try {
+        await this.database.runTransaction(async (transaction) => {
+          const snapshot = await transaction.get(session.reference);
+          const current = snapshot.exists ? snapshot.data() : null;
+          if (!current || current.busyToken !== session.token) {
+            throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
+          }
+          transaction.set(fileReference, file);
+          transaction.update(session.reference, {
+            fileCount: nextFileCount,
+            totalBytes: nextTotalBytes,
+            revision: current.revision + 1,
+            preview: null,
+            updatedAt: this.#nowMs(),
+          });
+        });
+      } catch (error) {
+        await this.#deleteStorage(storagePath).catch((cleanupError) => this.#logError(cleanupError));
+        throw error;
+      }
+      await this.#deleteStorage(previous?.storagePath).catch((error) => this.#logError(error));
+      await this.#deleteStorage(session.preview?.storagePath).catch((error) => this.#logError(error));
+      return {
+        sessionId: session.id,
+        id: session.id,
+        file: { path: file.path, size: file.size, sha256: file.sha256 },
+        fileCount: nextFileCount,
+        totalBytes: nextTotalBytes,
+        previewValid: false,
+      };
+    });
+  }
+
+  async #previewDistributed({ sessionId, ownerId }) {
+    return this.#useDistributed(sessionId, ownerId, async (session) => {
+      const files = await this.#distributedFiles(session.reference);
+      const sourceFiles = files.filter((file) => [".ban", ".cfg"].includes(extname(file.path).toLowerCase()));
+      if (sourceFiles.length === 0) {
+        throw sessionError(
+          "Envie ao menos um arquivo .ban ou .cfg",
+          "BRASFOOT_IMPORT_SOURCE_REQUIRED",
+          400,
+        );
+      }
+      return this.#materializeFiles(session, files, async (directory) => {
+        const parsedSource = await this.parseSource(directory, {
+          maxFiles: this.limits.maxFiles,
+          maxBytes: this.limits.maxFileBytes,
+        });
+        parsedSource.report.inputPath = `editor-session:${session.id}`;
+        const data = this.normalize(parsedSource.dataset);
+        const summary = summarizeDataset(data);
+        const response = {
+          sessionId: session.id,
+          id: session.id,
+          revision: session.revision,
+          summary,
+          report: compactReport(parsedSource.report),
+          clubs: clubSample(data),
+          files: files.slice(0, FILE_SAMPLE_LIMIT).map(({ path, size, sha256 }) => ({ path, size, sha256 })),
+          fileCount: files.length,
+          totalBytes: session.totalBytes,
+        };
+        const storagePath = `${this.storagePrefix}/${session.id}/previews/${randomUUID()}.json`;
+        const artifact = Buffer.from(JSON.stringify({
+          revision: session.revision,
+          data,
+          report: parsedSource.report,
+        }));
+        await this.#saveStorage(storagePath, artifact);
+        const persistedPreview = JSON.parse(JSON.stringify({
+          revision: session.revision,
+          storagePath,
+          summary,
+          response,
+        }));
+        try {
+          await this.database.runTransaction(async (transaction) => {
+            const snapshot = await transaction.get(session.reference);
+            const current = snapshot.exists ? snapshot.data() : null;
+            if (!current || current.busyToken !== session.token || current.revision !== session.revision) {
+              throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
+            }
+            transaction.update(session.reference, {
+              preview: persistedPreview,
+              updatedAt: this.#nowMs(),
+            });
+          });
+        } catch (error) {
+          await this.#deleteStorage(storagePath).catch((cleanupError) => this.#logError(cleanupError));
+          throw error;
+        }
+        await this.#deleteStorage(session.preview?.storagePath).catch((error) => this.#logError(error));
+        return structuredClone(response);
+      });
+    });
+  }
+
+  async #removeDistributed(session) {
+    const files = await this.#distributedFiles(session.reference);
+    await mapConcurrent(
+      [...files.map((file) => file.storagePath), session.preview?.storagePath].filter(Boolean),
+      DOWNLOAD_CONCURRENCY,
+      (path) => this.#deleteStorage(path),
+    );
+    const batch = this.database.batch();
+    for (const file of files) batch.delete(session.reference.collection("files").doc(file.id));
+    batch.delete(session.reference);
+    await batch.commit();
+  }
+
+  async #cleanupDistributed() {
+    const nowMs = this.#nowMs();
+    const snapshot = await this.database
+      .collection(this.sessionCollection)
+      .where("expiresAt", "<=", nowMs)
+      .limit(25)
+      .get();
+    let removed = 0;
+    for (const document of snapshot.docs) {
+      const token = String(this.idFactory());
+      const claimed = await this.database.runTransaction(async (transaction) => {
+        const currentSnapshot = await transaction.get(document.ref);
+        if (!currentSnapshot.exists) return null;
+        const current = currentSnapshot.data();
+        if (current.expiresAt > nowMs || (current.busyToken && current.busyUntil > nowMs)) return null;
+        transaction.update(document.ref, {
+          status: "cleanup",
+          busyToken: token,
+          busyUntil: nowMs + this.limits.ttlMs,
+        });
+        return { ...current, id: document.id, reference: document.ref, token };
+      });
+      if (!claimed) continue;
+      try {
+        await this.#removeDistributed(claimed);
+        removed += 1;
+      } catch (error) {
+        this.#logError(error);
+      }
+    }
+    return removed;
+  }
+
+  async #commitDistributed({ sessionId, ownerId, allowPartial, importAssets }) {
+    const ownerLock = await this.#acquireOwnerLock(ownerId);
+    let lease;
+    let removed = false;
+    try {
+      lease = await this.#claimDistributed(sessionId, ownerId, "committing");
+      const preview = lease.preview;
+      if (!preview || preview.revision !== lease.revision) {
+        throw sessionError(
+          "Gere uma pre-visualizacao valida antes de importar",
+          "BRASFOOT_IMPORT_PREVIEW_REQUIRED",
+          409,
+        );
+      }
+      const artifactBytes = await this.#downloadStorage(preview.storagePath);
+      let artifact;
+      try {
+        artifact = JSON.parse(artifactBytes.toString("utf8"));
+      } catch {
+        throw sessionError(
+          "Pre-visualizacao temporaria esta corrompida",
+          "BRASFOOT_IMPORT_STORAGE_CORRUPT",
+          503,
+        );
+      }
+      if (artifact.revision !== lease.revision || !artifact.data || !artifact.report) {
+        throw sessionError(
+          "Pre-visualizacao temporaria esta desatualizada",
+          "BRASFOOT_IMPORT_PREVIEW_REQUIRED",
+          409,
+        );
+      }
+      const errorCount = artifact.report.errors?.length ?? 0;
+      if (errorCount > 0 && allowPartial !== true) {
+        throw sessionError(
+          "A pre-visualizacao contem erros; confirme a importacao parcial para continuar",
+          "BRASFOOT_IMPORT_PARTIAL_CONFIRMATION_REQUIRED",
+          409,
+          { errors: errorCount },
+        );
+      }
+      const files = await this.#distributedFiles(lease.reference);
+      const response = await this.#materializeFiles(
+        lease,
+        files,
+        async (directory) => {
+          const target = this.databaseForOwner
+            ? await this.databaseForOwner(ownerId)
+            : this.database;
+          const catalogStore = typeof target?.importBrasfootData === "function" ? target : null;
+          const targetDatabase = catalogStore?.importLogFirestore ?? catalogStore?.firestore ?? target;
+          if (!targetDatabase) {
+            throw sessionError(
+              "Firestore indisponivel para importacao",
+              "BRASFOOT_IMPORT_FIRESTORE_UNAVAILABLE",
+              503,
+            );
+          }
+          const parsedSource = { report: structuredClone(artifact.report), assetRoot: directory };
+          const result = await this.commitImport({
+            database: targetDatabase,
+            catalogStore,
+            data: structuredClone(artifact.data),
+            summary: structuredClone(preview.summary),
+            parsedSource,
+            options: {
+              allowPartial: allowPartial === true,
+              skipAssets: importAssets !== true,
+              batchSize: 400,
+            },
+            mediaService: importAssets === true ? this.mediaService : null,
+            runId: lease.id,
+          });
+          return {
+            sessionId: lease.id,
+            id: lease.id,
+            runId: result.runId,
+            generationId: result.generationId,
+            summary: structuredClone(preview.summary),
+            progress: result.progress,
+            report: compactReport(parsedSource.report),
+          };
+        },
+        { downloadFiles: importAssets === true },
+      );
+      await this.#removeDistributed(lease);
+      removed = true;
+      return response;
+    } finally {
+      if (lease && !removed) {
+        await this.#releaseDistributed(lease, { touch: false }).catch((error) => this.#logError(error));
+      }
+      await this.#releaseOwnerLock(ownerLock).catch((error) => this.#logError(error));
+    }
+  }
+
   async createSession({ ownerId }) {
     if (!ownerId) throw sessionError("Editor responsavel nao identificado", "BRASFOOT_IMPORT_OWNER_REQUIRED", 400);
+    this.#assertAvailable();
+    if (this.storageMode === "firestore-storage") return this.#createDistributedSession(ownerId);
     const root = await this.#ensureRoot();
     let id;
     do id = String(this.idFactory()); while (this.sessions.has(id));
@@ -300,6 +849,10 @@ export class BrasfootImportSessionService {
         413,
         { maximumBytes: this.limits.maxFileBytes },
       );
+    }
+    this.#assertAvailable();
+    if (this.storageMode === "firestore-storage") {
+      return this.#uploadDistributed({ sessionId, ownerId, normalizedPath, bytes });
     }
     return this.#use(sessionId, ownerId, async (session) => {
       const previous = session.files.get(normalizedPath);
@@ -355,6 +908,10 @@ export class BrasfootImportSessionService {
   }
 
   async preview({ sessionId, ownerId }) {
+    this.#assertAvailable();
+    if (this.storageMode === "firestore-storage") {
+      return this.#previewDistributed({ sessionId, ownerId });
+    }
     return this.#use(sessionId, ownerId, async (session) => {
       const sourceFiles = [...session.files.keys()].filter((path) => [".ban", ".cfg"].includes(extname(path).toLowerCase()));
       if (sourceFiles.length === 0) {
@@ -388,6 +945,14 @@ export class BrasfootImportSessionService {
   }
 
   async commit({ sessionId, ownerId, allowPartial = false, importAssets = false }) {
+    this.#assertAvailable();
+    return this.#track(this.#commit({ sessionId, ownerId, allowPartial, importAssets }));
+  }
+
+  async #commit({ sessionId, ownerId, allowPartial = false, importAssets = false }) {
+    if (this.storageMode === "firestore-storage") {
+      return this.#commitDistributed({ sessionId, ownerId, allowPartial, importAssets });
+    }
     const ownerKey = String(ownerId);
     if (this.ownerCommits.has(ownerKey)) {
       throw sessionError(
@@ -481,6 +1046,17 @@ export class BrasfootImportSessionService {
   }
 
   async deleteSession({ sessionId, ownerId }) {
+    this.#assertAvailable();
+    if (this.storageMode === "firestore-storage") {
+      const lease = await this.#claimDistributed(sessionId, ownerId, "deleting");
+      try {
+        await this.#removeDistributed(lease);
+      } catch (error) {
+        await this.#releaseDistributed(lease, { touch: false }).catch((releaseError) => this.#logError(releaseError));
+        throw error;
+      }
+      return { sessionId: lease.id, id: lease.id, deleted: true };
+    }
     const session = await this.#find(sessionId, ownerId);
     if (session.busy) {
       throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
@@ -490,6 +1066,8 @@ export class BrasfootImportSessionService {
   }
 
   async cleanupExpired() {
+    if (this.storageMode === "firestore-storage") return this.#cleanupDistributed();
+    if (this.storageMode === "unavailable") return 0;
     const nowMs = this.#nowMs();
     const expired = [...this.sessions.values()]
       .filter((session) => !session.busy && session.expiresAt <= nowMs)
@@ -499,13 +1077,18 @@ export class BrasfootImportSessionService {
   }
 
   async close() {
-    if (this.closed) return;
-    this.closed = true;
-    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    this.cleanupTimer = null;
-    this.sessions.clear();
-    if (this.root) await rm(this.root, { recursive: true, force: true });
-    this.root = null;
+    if (!this.closePromise) {
+      this.closed = true;
+      if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+      this.closePromise = (async () => {
+        await Promise.allSettled([...this.activeJobs]);
+        this.sessions.clear();
+        if (this.root) await rm(this.root, { recursive: true, force: true });
+        this.root = null;
+      })();
+    }
+    return this.closePromise;
   }
 }
 

@@ -26,6 +26,34 @@ async function assertMarketMutable(matchSessions, matchSessionStore, code) {
   }
 }
 
+async function withMarketMutationLock({
+  matchSessions,
+  matchSessionStore,
+  distributedLocks,
+  matchLockTtlMs,
+}, code, mutation) {
+  try {
+    const run = async () => {
+      await assertMarketMutable(matchSessions, matchSessionStore, code);
+      return mutation();
+    };
+    return distributedLocks
+      ? await distributedLocks.withLock(`match:${code}`, run, {
+          ttlMs: matchLockTtlMs,
+          waitTimeoutMs: 0,
+        })
+      : await run();
+  } catch (error) {
+    if (["DISTRIBUTED_LOCK_TIMEOUT", "DISTRIBUTED_LOCK_LOST"].includes(error?.code)) {
+      throw marketError(
+        "A partida em andamento precisa terminar antes de negociar jogadores",
+        "MATCH_IN_PROGRESS",
+      );
+    }
+    throw error;
+  }
+}
+
 function mutationResponse(io, code, reason, result) {
   const revision = Number(result?.revision ?? result?.snapshot?.revision ?? 0);
   return {
@@ -40,8 +68,20 @@ function marketUpdate(io, code, revision, reason) {
   };
 }
 
-export function registerMarketHandlers(io, socket, { store, matchSessions, matchSessionStore }) {
+export function registerMarketHandlers(io, socket, {
+  store,
+  matchSessions,
+  matchSessionStore,
+  distributedLocks,
+  matchLockTtlMs,
+}) {
   const user = socket.data.user;
+  const mutationContext = {
+    matchSessions,
+    matchSessionStore,
+    distributedLocks,
+    matchLockTtlMs,
+  };
 
   registerSafe(socket, "market:sync", async (payload) => {
     const data = parseOrThrow(marketSyncSchema, payload);
@@ -58,43 +98,49 @@ export function registerMarketHandlers(io, socket, { store, matchSessions, match
 
   registerSafe(socket, "market:offer", async (payload) => {
     const data = parseOrThrow(marketOfferSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.createMarketOffer(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "offer", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.createMarketOffer(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "offer", result);
+    });
   });
 
   registerSafe(socket, "market:respond", async (payload) => {
     const data = parseOrThrow(marketRespondSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.respondMarketOffer(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "offer-response", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.respondMarketOffer(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "offer-response", result);
+    });
   });
 
   registerSafe(socket, "market:list", async (payload) => {
     const data = parseOrThrow(marketListingSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.createMarketListing(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "listing", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.createMarketListing(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "listing", result);
+    });
   });
 
   registerSafe(socket, "market:bid", async (payload) => {
     const data = parseOrThrow(marketBidSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.placeMarketBid(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "bid", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.placeMarketBid(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "bid", result);
+    });
   });
 
   registerSafe(socket, "market:cancel-listing", async (payload) => {
     const data = parseOrThrow(marketCancelListingSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.cancelMarketListing(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "listing-cancelled", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.cancelMarketListing(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "listing-cancelled", result);
+    });
   });
 
   registerSafe(socket, "market:exercise-loan-option", async (payload) => {
     const data = parseOrThrow(marketExerciseLoanOptionSchema, payload);
-    await assertMarketMutable(matchSessions, matchSessionStore, data.code);
-    const result = await store.exerciseMarketLoanOption(data.code, user.uid, data);
-    return mutationResponse(io, data.code, "loan-option-exercised", result);
+    return withMarketMutationLock(mutationContext, data.code, async () => {
+      const result = await store.exerciseMarketLoanOption(data.code, user.uid, data);
+      return mutationResponse(io, data.code, "loan-option-exercised", result);
+    });
   });
 }

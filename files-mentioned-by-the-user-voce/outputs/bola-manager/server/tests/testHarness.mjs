@@ -49,6 +49,13 @@ export async function startTestServer({
   env = {},
   matchDelayMs = 0,
   matchSessionStore,
+  redisRuntime,
+  distributedLocks,
+  rateLimiter,
+  readinessCheck,
+  metrics,
+  structuredLogger,
+  socketAdapterFactory,
 } = {}) {
   const store = injectedStore ?? new RoomStore({
     persistence: new MemoryRoomPersistence(),
@@ -70,6 +77,13 @@ export async function startTestServer({
     mediaService,
     brasfootImportService,
     matchSessionStore: matchSessionStore ?? new MemoryMatchSessionPersistence(),
+    redisRuntime,
+    distributedLocks,
+    rateLimiter,
+    readinessCheck,
+    metrics,
+    structuredLogger,
+    socketAdapterFactory,
     logger: { error() {} },
   });
   const address = await server.listen(0);

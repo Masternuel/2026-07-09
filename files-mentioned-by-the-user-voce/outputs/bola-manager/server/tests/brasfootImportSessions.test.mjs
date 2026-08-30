@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,10 +7,35 @@ import {
   BrasfootImportSessionService,
   normalizeBrasfootUploadPath,
 } from "../services/brasfootImportSessions.mjs";
+import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
 import { startTestServer } from "./testHarness.mjs";
 
 const SESSION_ONE = "11111111-1111-4111-8111-111111111111";
 const SESSION_TWO = "22222222-2222-4222-8222-222222222222";
+
+class MemoryBucket {
+  constructor() {
+    this.name = "test-bucket";
+    this.objects = new Map();
+  }
+
+  file(path) {
+    return {
+      save: async (bytes) => this.objects.set(path, Buffer.from(bytes)),
+      download: async () => {
+        if (!this.objects.has(path)) {
+          const error = new Error("Objeto ausente");
+          error.code = 404;
+          throw error;
+        }
+        return [Buffer.from(this.objects.get(path))];
+      },
+      delete: async ({ ignoreNotFound } = {}) => {
+        if (!this.objects.delete(path) && !ignoreNotFound) throw new Error("Objeto ausente");
+      },
+    };
+  }
+}
 
 function parsedSource(root, { withError = false } = {}) {
   const errors = withError
@@ -82,6 +107,7 @@ test("sessao aplica TTL, rejeita arquivo vazio e limpa arquivos expirados", asyn
     now: () => now,
     idFactory: () => SESSION_ONE,
     scheduleCleanup: false,
+    allowLocalFallback: true,
   });
   try {
     const session = await service.createSession({ ownerId: "editor" });
@@ -108,6 +134,51 @@ test("sessao aplica TTL, rejeita arquivo vazio e limpa arquivos expirados", asyn
   }
 });
 
+test("shutdown aguarda commit Brasfoot em andamento", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "brasfoot-shutdown-test-"));
+  let releaseCommit;
+  let signalCommit;
+  const commitReleased = new Promise((resolve) => { releaseCommit = resolve; });
+  const commitStarted = new Promise((resolve) => { signalCommit = resolve; });
+  const service = new BrasfootImportSessionService({
+    database: {},
+    tempDirectory: parent,
+    idFactory: () => SESSION_ONE,
+    parseSource: async (root) => parsedSource(root),
+    normalize: (data) => structuredClone(data),
+    commitImport: async () => {
+      signalCommit();
+      await commitReleased;
+      return { runId: "shutdown-run", progress: { phase: "completed" } };
+    },
+    scheduleCleanup: false,
+    allowLocalFallback: true,
+  });
+  try {
+    await service.createSession({ ownerId: "editor" });
+    await service.uploadFile({
+      sessionId: SESSION_ONE,
+      ownerId: "editor",
+      path: "time.ban",
+      bytes: Buffer.from("dados"),
+    });
+    await service.preview({ sessionId: SESSION_ONE, ownerId: "editor" });
+    const committing = service.commit({ sessionId: SESSION_ONE, ownerId: "editor" });
+    await commitStarted;
+    let closed = false;
+    const closing = service.close().then(() => { closed = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    releaseCommit();
+    await Promise.all([committing, closing]);
+    assert.equal(closed, true);
+  } finally {
+    releaseCommit?.();
+    await service.close();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("rotas exigem Firebase, mantem contrato flat, confirmam parcial e limpam sessao", async (context) => {
   const parent = await mkdtemp(join(tmpdir(), "brasfoot-route-test-"));
   const ids = [SESSION_ONE, SESSION_TWO];
@@ -128,6 +199,7 @@ test("rotas exigem Firebase, mantem contrato flat, confirmam parcial e limpam se
     },
     scheduleCleanup: false,
     logger: { error() {} },
+    allowLocalFallback: true,
   });
   const { server, url } = await startTestServer({
     brasfootImportService: service,
@@ -234,4 +306,164 @@ test("rotas exigem Firebase, mantem contrato flat, confirmam parcial e limpam se
   );
   assert.equal(deleted.status, 200);
   assert.deepEqual(await deleted.json(), { sessionId: SESSION_TWO, id: SESSION_TWO, deleted: true });
+});
+
+test("Firestore e Storage compartilham upload, preview e commit entre replicas", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "brasfoot-distributed-test-"));
+  const database = createFakeFirestore();
+  const bucket = new MemoryBucket();
+  const commits = [];
+  const common = {
+    database,
+    bucket,
+    tempDirectory: parent,
+    parseSource: async (root) => {
+      assert.equal((await readFile(join(root, "teams", "teste.ban"), "utf8")), "replica-a");
+      return parsedSource(root);
+    },
+    normalize: (data) => structuredClone(data),
+    commitImport: async (input) => {
+      commits.push(input);
+      return { runId: input.runId, generationId: "generation-shared", progress: { phase: "completed" } };
+    },
+    scheduleCleanup: false,
+    nodeEnv: "production",
+  };
+  const replicaA = new BrasfootImportSessionService(common);
+  const replicaB = new BrasfootImportSessionService(common);
+  try {
+    const created = await replicaA.createSession({ ownerId: "editor" });
+    assert.equal(replicaA.storageMode, "firestore-storage");
+    await replicaA.uploadFile({
+      sessionId: created.id,
+      ownerId: "editor",
+      path: "teste.ban",
+      bytes: Buffer.from("replica-a"),
+    });
+    await replicaA.close();
+
+    const preview = await replicaB.preview({ sessionId: created.id, ownerId: "editor" });
+    assert.equal(preview.summary.clubs, 1);
+    const committed = await replicaB.commit({
+      sessionId: created.id,
+      ownerId: "editor",
+      allowPartial: false,
+      importAssets: false,
+    });
+    assert.equal(committed.generationId, "generation-shared");
+    assert.equal(commits.length, 1);
+    assert.equal(database.has(`brasfootImportSessions/${created.id}`), false);
+    assert.equal(bucket.objects.size, 0);
+  } finally {
+    await replicaA.close();
+    await replicaB.close();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("lease distribuido impede operacoes simultaneas na mesma sessao", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "brasfoot-lease-test-"));
+  const database = createFakeFirestore();
+  const bucket = new MemoryBucket();
+  let releaseParser;
+  let parserStarted;
+  const started = new Promise((resolve) => { parserStarted = resolve; });
+  const parserGate = new Promise((resolve) => { releaseParser = resolve; });
+  const options = {
+    database,
+    bucket,
+    tempDirectory: parent,
+    parseSource: async (root) => {
+      parserStarted();
+      await parserGate;
+      return parsedSource(root);
+    },
+    normalize: (data) => structuredClone(data),
+    scheduleCleanup: false,
+    nodeEnv: "production",
+  };
+  const replicaA = new BrasfootImportSessionService(options);
+  const replicaB = new BrasfootImportSessionService(options);
+  try {
+    const session = await replicaA.createSession({ ownerId: "editor" });
+    await replicaA.uploadFile({
+      sessionId: session.id,
+      ownerId: "editor",
+      path: "teste.ban",
+      bytes: Buffer.from("lock"),
+    });
+    const previewing = replicaA.preview({ sessionId: session.id, ownerId: "editor" });
+    await started;
+    await assert.rejects(
+      () => replicaB.uploadFile({
+        sessionId: session.id,
+        ownerId: "editor",
+        path: "outro.ban",
+        bytes: Buffer.from("concorrente"),
+      }),
+      (error) => error.code === "BRASFOOT_IMPORT_SESSION_BUSY",
+    );
+    releaseParser();
+    await previewing;
+    await replicaB.deleteSession({ sessionId: session.id, ownerId: "editor" });
+  } finally {
+    releaseParser?.();
+    await replicaA.close();
+    await replicaB.close();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("producao rejeita fallback local sem Firestore e bucket", async () => {
+  const service = new BrasfootImportSessionService({
+    database: createFakeFirestore(),
+    bucket: null,
+    nodeEnv: "production",
+    scheduleCleanup: false,
+  });
+  try {
+    assert.equal(service.storageMode, "unavailable");
+    await assert.rejects(
+      () => service.createSession({ ownerId: "editor" }),
+      (error) => error.code === "BRASFOOT_IMPORT_DISTRIBUTED_STORAGE_REQUIRED" && error.status === 503,
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("replica limpa sessao distribuida expirada e seus blobs", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "brasfoot-cleanup-test-"));
+  const database = createFakeFirestore();
+  const bucket = new MemoryBucket();
+  let now = Date.parse("2026-08-29T12:00:00.000Z");
+  const options = {
+    database,
+    bucket,
+    tempDirectory: parent,
+    limits: { ttlMs: 1_000 },
+    now: () => now,
+    scheduleCleanup: false,
+    nodeEnv: "production",
+  };
+  const replicaA = new BrasfootImportSessionService(options);
+  const replicaB = new BrasfootImportSessionService(options);
+  try {
+    const session = await replicaA.createSession({ ownerId: "editor" });
+    await replicaA.uploadFile({
+      sessionId: session.id,
+      ownerId: "editor",
+      path: "teste.ban",
+      bytes: Buffer.from("expira"),
+    });
+    assert.equal(bucket.objects.size, 1);
+    now += 1_001;
+    assert.equal(await replicaB.cleanupExpired(), 1);
+    assert.equal(database.has(`brasfootImportSessions/${session.id}`), false);
+    assert.equal(bucket.objects.size, 0);
+  } finally {
+    await replicaA.close();
+    await replicaB.close();
+    await rm(parent, { recursive: true, force: true });
+  }
 });

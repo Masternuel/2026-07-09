@@ -49,6 +49,7 @@ export function useSocket({ enabled, identity, getIdToken }: UseSocketOptions) {
       connection = io(serverUrl, {
         autoConnect: true,
         timeout: 5000,
+        transports: ['websocket'],
         auth: identity.mode === 'firebase'
           ? (provideAuth) => {
               if (firstToken) {

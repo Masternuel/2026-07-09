@@ -60,6 +60,9 @@ const INSTRUCTION_MODIFIERS = Object.freeze({
   "slow-tempo": -0.1,
 });
 
+const DEFAULT_MATCH_LOCK_TTL_MS = 30_000;
+const DEFAULT_MATCH_LOCK_WAIT_MS = 1_000;
+
 function clone(value) {
   return value == null ? value : structuredClone(value);
 }
@@ -421,20 +424,131 @@ export function registerMatchHandlers(io, socket, {
   deletedRooms,
   matchDelayMs,
   catalogStore,
+  distributedLocks,
+  matchLockTtlMs = DEFAULT_MATCH_LOCK_TTL_MS,
+  matchLockWaitMs = DEFAULT_MATCH_LOCK_WAIT_MS,
+  metrics,
+  logger,
 }) {
   const user = socket.data.user;
+  const ownershipTtlMs = Math.max(3_000, Number(matchLockTtlMs) || DEFAULT_MATCH_LOCK_TTL_MS);
+  const ownershipWaitMs = Math.max(0, Number(matchLockWaitMs) || DEFAULT_MATCH_LOCK_WAIT_MS);
+
+  function ownershipError(cause) {
+    return matchError(
+      "Outra replica assumiu esta partida",
+      "MATCH_OWNERSHIP_LOST",
+      409,
+      cause ? { cause: cause.code || cause.message } : undefined,
+    );
+  }
+
+  function ownershipFor(session) {
+    const ownership = session.ownership;
+    return ownership ? {
+      token: ownership.token ?? ownership.owner,
+      fence: ownership.fence ?? ownership.fencingToken,
+    } : undefined;
+  }
+
+  function assertSessionOwnership(session) {
+    if (session.ownershipLost) throw ownershipError();
+  }
+
+  async function releaseOwnershipHandle(ownership) {
+    if (!ownership?.release) return;
+    await Promise.resolve(ownership.release()).catch(() => {});
+  }
+
+  async function releaseSessionOwnership(session) {
+    if (!session?.ownership || session.ownershipReleased) return;
+    session.ownershipReleased = true;
+    clearInterval(session.ownershipHeartbeat);
+    await releaseOwnershipHandle(session.ownership);
+  }
+
+  function loseSessionOwnership(session, cause) {
+    if (!session || session.ownershipLost || session.ownershipReleased) return;
+    session.ownershipLost = true;
+    clearInterval(session.ownershipHeartbeat);
+    session.playback?.cancel();
+    if (matchSessions.get(session.code) === session) matchSessions.delete(session.code);
+    io.to(channelForRoom(session.code)).emit("server:error", {
+      event: "match:ownership",
+      error: {
+        code: "MATCH_OWNERSHIP_LOST",
+        message: "Partida transferida para outra replica. Reconecte para continuar.",
+        ...(cause ? { details: { cause: cause.code || cause.message } } : {}),
+      },
+    });
+  }
+
+  function monitorSessionOwnership(session, ownership) {
+    if (!ownership) return;
+    session.ownership = ownership;
+    session.ownershipLost = false;
+    session.ownershipReleased = false;
+    let renewing = false;
+    session.ownershipHeartbeat = setInterval(async () => {
+      if (renewing || session.ownershipReleased || session.ownershipLost) return;
+      renewing = true;
+      try {
+        const renewed = await ownership.renew();
+        if (renewed === false) loseSessionOwnership(session);
+      } catch (error) {
+        loseSessionOwnership(session, error);
+      } finally {
+        renewing = false;
+      }
+    }, Math.max(1_000, Math.floor(ownershipTtlMs / 3)));
+    session.ownershipHeartbeat.unref?.();
+    if (ownership.lost && typeof ownership.lost.then === "function") {
+      ownership.lost.then(
+        (cause) => loseSessionOwnership(session, cause),
+        (cause) => loseSessionOwnership(session, cause),
+      );
+    }
+  }
+
+  async function acquireMatchOwnership(code) {
+    if (!distributedLocks) return null;
+    let ownership;
+    try {
+      ownership = await distributedLocks.acquire(
+        `match:${String(code).trim().toUpperCase()}`,
+        {
+          ttlMs: ownershipTtlMs,
+          waitMs: ownershipWaitMs,
+          waitTimeoutMs: ownershipWaitMs,
+        },
+      );
+    } catch (error) {
+      if (error?.code === "DISTRIBUTED_LOCK_TIMEOUT") {
+        throw matchError("Ja existe uma partida em andamento nesta sala", "MATCH_IN_PROGRESS");
+      }
+      throw error;
+    }
+    if (!ownership) {
+      throw matchError("Ja existe uma partida em andamento nesta sala", "MATCH_IN_PROGRESS");
+    }
+    return ownership;
+  }
 
   function persistActiveSession(session) {
     const snapshot = serializeActiveMatchSession(session);
     const write = (session.persistChain ?? Promise.resolve())
-      .then(() => matchSessionStore.save(snapshot));
+      .then(() => {
+        assertSessionOwnership(session);
+        return matchSessionStore.save(snapshot, ownershipFor(session));
+      });
     session.persistChain = write.catch(() => {});
     return write;
   }
 
   async function removePersistedSession(session) {
     await (session.persistChain ?? Promise.resolve());
-    return matchSessionStore.remove(session.code, session.match.id);
+    assertSessionOwnership(session);
+    return matchSessionStore.remove(session.code, session.match.id, ownershipFor(session));
   }
 
   function buildPlayback(session) {
@@ -478,6 +592,11 @@ export function registerMatchHandlers(io, socket, {
         }
       },
       onFinish: async (result) => {
+        assertSessionOwnership(session);
+        if (session.ownership && await session.ownership.renew() === false) {
+          loseSessionOwnership(session);
+          throw ownershipError();
+        }
         session.phase = "finished";
         const completion = await store.completeMatch(session.code, session.fixture.fixtureId, {
           ...result,
@@ -510,13 +629,20 @@ export function registerMatchHandlers(io, socket, {
   function runPlayback(session) {
     if (session.playbackStarted) return false;
     session.playbackStarted = true;
+    metrics?.increment?.("jobs_started_total", 1, { job: "match_playback" });
     void session.playback.start()
-      .catch((error) => io.to(channelForRoom(session.code)).emit("server:error", {
-        event: "match:recovery",
-        error: { code: error.code || "MATCH_PLAYBACK_ERROR", message: error.message },
-      }))
+      .then(() => metrics?.increment?.("jobs_completed_total", 1, { job: "match_playback" }))
+      .catch((error) => {
+        metrics?.increment?.("jobs_failed_total", 1, { job: "match_playback" });
+        logger?.error?.("match.playback_failed", { code: session.code, error });
+        io.to(channelForRoom(session.code)).emit("server:error", {
+          event: "match:recovery",
+          error: { code: error.code || "MATCH_PLAYBACK_ERROR", message: error.message },
+        });
+      })
       .finally(() => {
         if (matchSessions.get(session.code) === session) matchSessions.delete(session.code);
+        void releaseSessionOwnership(session);
       });
     return true;
   }
@@ -528,44 +654,54 @@ export function registerMatchHandlers(io, socket, {
     if (existingLock) return existingLock;
 
     const recovery = (async () => {
-      const snapshot = await matchSessionStore.get(code);
-      if (!snapshot) return null;
-      const completed = room.completedFixtureIds?.some(
-        (fixtureId) => clubKey(fixtureId) === clubKey(snapshot.fixtureId),
-      ) || String(room.lastCompletedMatch?.id ?? "") === String(snapshot.matchId ?? "");
-      if (completed) {
-        await matchSessionStore.remove(code, snapshot.matchId);
-        return null;
-      }
-      let fixture;
-      let session;
+      const ownership = await acquireMatchOwnership(code);
+      let claimed = false;
+      let recoveredSession;
       try {
-        fixture = resolveServerFixture(room, snapshot.fixtureId);
-        session = hydrateActiveMatchSession(snapshot, fixture, code);
-      } catch (error) {
-        // O proprio fixtureId pode ser a parte corrompida. Limpar a prontidao
-        // da fixture atual garante que todos confirmem novamente.
-        const resetRoom = await store.clearMatchReadiness(code);
-        await matchSessionStore.remove(code, snapshot.matchId);
-        await emitRoomForViewers(io, resetRoom);
-        throw matchError(
-          "A partida salva estava inconsistente e foi descartada. Confirme a prontidao novamente.",
-          "ACTIVE_MATCH_RECOVERY_FAILED",
-          409,
-          { cause: error.code || "ACTIVE_MATCH_CORRUPT" },
-        );
+        const snapshot = await matchSessionStore.get(code);
+        if (!snapshot) return null;
+        const completed = room.completedFixtureIds?.some(
+          (fixtureId) => clubKey(fixtureId) === clubKey(snapshot.fixtureId),
+        ) || String(room.lastCompletedMatch?.id ?? "") === String(snapshot.matchId ?? "");
+        if (completed) {
+          await matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership }));
+          return null;
+        }
+        let fixture;
+        try {
+          fixture = resolveServerFixture(room, snapshot.fixtureId);
+          recoveredSession = hydrateActiveMatchSession(snapshot, fixture, code);
+        } catch (error) {
+          // O proprio fixtureId pode ser a parte corrompida. Limpar a prontidao
+          // da fixture atual garante que todos confirmem novamente.
+          const resetRoom = await store.clearMatchReadiness(code);
+          await matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership }));
+          await emitRoomForViewers(io, resetRoom);
+          throw matchError(
+            "A partida salva estava inconsistente e foi descartada. Confirme a prontidao novamente.",
+            "ACTIVE_MATCH_RECOVERY_FAILED",
+            409,
+            { cause: error.code || "ACTIVE_MATCH_CORRUPT" },
+          );
+        }
+        const raced = matchSessions.get(code);
+        if (raced) return raced;
+        monitorSessionOwnership(recoveredSession, ownership);
+        buildPlayback(recoveredSession);
+        if (recoveredSession.phase === "halftime" && recoveredSession.halftime.requiredManagerIds.length === 0) {
+          recoveredSession.halftime.status = "resuming";
+          prepareSecondHalf(recoveredSession);
+          recoveredSession.phase = "running";
+        }
+        // Publica o novo fence antes de permitir qualquer playback local.
+        await persistActiveSession(recoveredSession);
+        matchSessions.set(code, recoveredSession);
+        claimed = true;
+        return recoveredSession;
+      } finally {
+        if (!claimed && recoveredSession) await releaseSessionOwnership(recoveredSession);
+        else if (!claimed) await releaseOwnershipHandle(ownership);
       }
-      const raced = matchSessions.get(code);
-      if (raced) return raced;
-      buildPlayback(session);
-      if (session.phase === "halftime" && session.halftime.requiredManagerIds.length === 0) {
-        session.halftime.status = "resuming";
-        prepareSecondHalf(session);
-        session.phase = "running";
-        await persistActiveSession(session);
-      }
-      matchSessions.set(code, session);
-      return session;
     })().finally(() => matchRecoveryLocks.delete(code));
     matchRecoveryLocks.set(code, recovery);
     return recovery;
@@ -586,6 +722,12 @@ export function registerMatchHandlers(io, socket, {
       throw matchError("Todos os managers precisam confirmar que estao prontos", "MATCH_MANAGERS_NOT_READY");
     }
 
+    const ownership = await acquireMatchOwnership(code);
+    if (matchSessions.has(code)) {
+      await releaseOwnershipHandle(ownership);
+      throw matchError("Ja existe uma partida em andamento nesta sala", "MATCH_IN_PROGRESS");
+    }
+
     const session = {
       code,
       preparing: true,
@@ -600,6 +742,7 @@ export function registerMatchHandlers(io, socket, {
       skipped: false,
       fixture,
     };
+    monitorSessionOwnership(session, ownership);
     matchSessions.set(code, session);
 
     try {
@@ -780,7 +923,10 @@ export function registerMatchHandlers(io, socket, {
       };
     } catch (error) {
       if (matchSessions.get(code) === session) matchSessions.delete(code);
-      if (session.match?.id) await matchSessionStore.remove(code, session.match.id).catch(() => {});
+      if (session.match?.id) {
+        await matchSessionStore.remove(code, session.match.id, ownershipFor(session)).catch(() => {});
+      }
+      await releaseSessionOwnership(session);
       throw error;
     }
   }
