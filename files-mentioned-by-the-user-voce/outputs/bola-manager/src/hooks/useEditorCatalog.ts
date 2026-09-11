@@ -24,6 +24,7 @@ import type {
   TournamentTiebreaker,
 } from '../types';
 import { calculatePlayerOverall } from '../utils/playerRating';
+import { completeCatalogImportOperation, getCatalogImportOperation } from '../lib/catalogImportOperation';
 import { isBrazilianCountry, normalizeBrazilianState, normalizeNationality } from '../utils/editorGeography';
 
 type EditorAccessState = 'checking' | 'granted' | 'denied' | 'error';
@@ -354,7 +355,7 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     return () => { mountedRef.current = false; };
   }, []);
 
-  const loadCatalog = useCallback(async (signal?: AbortSignal) => {
+  const loadCatalog = useCallback(async (signal?: AbortSignal, propagateError = false) => {
     setLoading(true);
     setError(null);
     try {
@@ -381,6 +382,7 @@ export function useEditorCatalog(credentials: ApiCredentials) {
       });
       setLastSyncedAt(new Date());
     } catch (nextError) {
+      if (propagateError) throw nextError;
       if (!mountedRef.current || signal?.aborted) return;
       const message = errorMessage(nextError);
       if (message) setError(message);
@@ -664,8 +666,9 @@ export function useEditorCatalog(credentials: ApiCredentials) {
     setDatabaseAction('importing');
     setError(null);
     try {
+      const operation = await getCatalogImportOperation(credentials.identity.uid, file);
       const payload = await apiBinaryUpload<EditorDatabaseImportSummary>(
-        '/api/editor/database/import?mode=merge',
+        `/api/editor/database/import?mode=merge&operationId=${encodeURIComponent(operation.operationId)}`,
         credentials,
         file,
         {
@@ -675,7 +678,8 @@ export function useEditorCatalog(credentials: ApiCredentials) {
           networkErrorCode: 'EDITOR_DATABASE_IMPORT_NETWORK_ERROR',
         },
       );
-      await loadCatalog();
+      await loadCatalog(undefined, true);
+      completeCatalogImportOperation(operation);
       return payload;
     } catch (nextError) {
       const message = errorMessage(nextError);

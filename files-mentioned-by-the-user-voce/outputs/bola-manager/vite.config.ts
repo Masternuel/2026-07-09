@@ -2,6 +2,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { IMAGE_CSP } from './shared/imagePolicy.mjs';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,7 @@ export default defineConfig({
     },
   },
   server: {
+    headers: { 'Content-Security-Policy': IMAGE_CSP, 'X-Content-Type-Options': 'nosniff' },
     port: 5173,
     host: true,
     fs: {
@@ -32,4 +34,5 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:3001', ws: true },
     },
   },
+  preview: { headers: { 'Content-Security-Policy': IMAGE_CSP, 'X-Content-Type-Options': 'nosniff' } },
 });

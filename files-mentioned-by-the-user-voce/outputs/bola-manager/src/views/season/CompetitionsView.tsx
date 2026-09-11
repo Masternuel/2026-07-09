@@ -406,6 +406,7 @@ export function CompetitionsView({
           club={selectedClub.club}
           managerClubId={club.id}
           roomCode={room?.code}
+          revision={room?.revision ?? 0}
           currentSeason={room?.currentSeason ?? 1}
           competitionName={selectedClub.competitionName}
           position={selectedPublicSnapshot?.position ?? selectedClub.position}

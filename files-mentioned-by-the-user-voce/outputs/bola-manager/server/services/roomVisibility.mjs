@@ -1,6 +1,7 @@
 import { channelForRoom } from "../sockets/helpers.mjs";
 import { buildCentralSnapshot } from "../game/centralSelectors.mjs";
 import { facilityView } from "../game/clubFacilities.mjs";
+import { withTimeout } from "../infrastructure/readiness.mjs";
 
 function clubKey(value) {
   return typeof value === "string" || typeof value === "number"
@@ -325,6 +326,10 @@ export function roomForViewer(room, viewerId) {
     professionalLeaveState,
     activeMatch: _activeMatch,
     completedMatches: _completedMatches,
+    matchHistoryPending: _matchHistoryPending,
+    matchHistoryVersion: _matchHistoryVersion,
+    scoutingState: _scoutingState,
+    tacticalStudyState: _tacticalStudyState,
     seasonHistory: _seasonHistory,
     ...viewerRoom
   } = room;
@@ -365,9 +370,22 @@ export function roomForViewer(room, viewerId) {
   return visible;
 }
 
-export async function emitRoomForViewers(io, room, eventName = "room:state") {
-  const sockets = await io.in(channelForRoom(room.code)).fetchSockets();
+export async function emitRoomForViewers(io, room, eventName = "room:state", {
+  timeoutMs = 5_000,
+  excludeSocketId = null,
+} = {}) {
+  const sockets = await withTimeout(
+    io.in(channelForRoom(room.code)).fetchSockets(),
+    timeoutMs,
+    "socket-room-discovery",
+  );
+  const snapshots = new Map();
   for (const target of sockets) {
-    target.emit(eventName, roomForViewer(room, target.data.user?.uid));
+    if (excludeSocketId && target.id === excludeSocketId) continue;
+    await new Promise((resolve) => setImmediate(resolve));
+    const viewerId = target.data.user?.uid;
+    const cacheKey = viewerId || target.id;
+    if (!snapshots.has(cacheKey)) snapshots.set(cacheKey, roomForViewer(room, viewerId));
+    target.emit(eventName, snapshots.get(cacheKey));
   }
 }

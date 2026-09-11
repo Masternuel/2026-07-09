@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ArrowUpDown, ChevronDown, Filter, Search, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PlayerCareerActions } from '../components/player/PlayerCareerActions';
 import {
@@ -16,6 +16,7 @@ import { playerShirtNumberLabel } from '../utils/playerDataAvailability';
 import { playerMoraleScore } from '../utils/playerMorale';
 import { playerGoalkeeperRating, playerPhysicalRating, playerPositionRating } from '../utils/playerRating';
 import { getSeasonProgress } from '../utils/seasonProgress';
+import { bindSearchShortcut } from '../utils/searchShortcut';
 import type { UseCareerStateResult } from '../hooks/useCareerState';
 
 interface SquadViewProps {
@@ -72,6 +73,10 @@ function catalogFieldUnknown(player: Player, field: NonNullable<Player['catalogU
 
 export function SquadView({ players, club, room, socket, managerId, careerState = emptyCareerState, onRosterChanged = () => {}, onToast }: SquadViewProps) {
   const [query, setQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchInput.current) return bindSearchShortcut(searchInput.current);
+  }, []);
   const [group, setGroup] = useState('Todos');
   const [sortKey, setSortKey] = useState<SortKey>('position');
   const [ascending, setAscending] = useState(true);
@@ -191,7 +196,7 @@ export function SquadView({ players, club, room, socket, managerId, careerState 
           <div className="position-tabs" role="tablist">
             {['Todos', ...filterGroups.map((item) => item.label)].map((label) => <button key={label} aria-selected={group === label} onClick={() => setGroup(label)}>{label}</button>)}
           </div>
-          <label className="table-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar jogador" /><kbd>⌘ K</kbd></label>
+          <label className="table-search"><Search size={15} /><input ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar jogador" aria-label="Buscar jogador no elenco" aria-keyshortcuts="Control+k Meta+k" /><kbd title="Ctrl+K no Windows/Linux; ⌘K no macOS">Ctrl/⌘ K</kbd></label>
         </header>
         <div className="table-scroll">
           <table className="squad-table">

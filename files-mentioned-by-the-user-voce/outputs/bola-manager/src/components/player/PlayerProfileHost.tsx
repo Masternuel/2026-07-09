@@ -1,6 +1,7 @@
 import { CircleAlert } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { useMarket, type MarketController } from '../../hooks/useMarket';
+import { useScouting } from '../../hooks/useScouting';
 import type { BolaSocket, Room } from '../../types';
 import {
   RankingPlayerProfile,
@@ -63,6 +64,7 @@ export function PlayerProfileHost({
     () => resolveRankingProfilePlayer(playerId, players),
     [playerId, players],
   );
+  const scouting = useScouting(room?.code ?? null, currentClubId, player?.id ?? null, room?.status === 'active' && !room?.careerCompleted);
   const listing = useMemo(
     () => openListingForPlayer(market.snapshot, player?.id ?? playerId),
     [market.snapshot, player?.id, playerId],
@@ -144,6 +146,7 @@ export function PlayerProfileHost({
       currentClubId={currentClubId}
       comparisonPlayers={players}
       offerState={offerState}
+      scouting={scouting}
       onClose={onClose}
       onOffer={submitOffer}
       additionalContent={additionalContent}

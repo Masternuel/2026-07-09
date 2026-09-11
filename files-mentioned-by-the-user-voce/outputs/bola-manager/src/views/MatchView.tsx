@@ -637,7 +637,7 @@ export function MatchView({
               : <p className="match-data-unavailable" role="status">Estatísticas ainda não disponíveis.</p>}
           </section>
 
-          <section className="touchline-note"><Sparkles size={16} /><div><strong>Sugestão do auxiliar</strong><p>{fixtureStudy?.recommendations[0]?.detail ?? 'Revise o plano conforme o momento e as características reais das equipes.'}</p></div><button disabled={Boolean(onlineMatch) && !canEditHalftime} aria-label="Revisar plano sugerido" onClick={() => { if (onlineMatch) setTacticOpen(true); else onToast('Abra Táticas para revisar o plano da equipe.'); }}><ChevronRight size={15} /></button></section>
+          <section className="touchline-note"><Sparkles size={16} /><div><strong>Sugestão do auxiliar</strong><p>{fixtureStudy?.recommendations[0]?.detail ?? 'Revise o plano conforme o momento e as características reais das equipes.'}</p></div><button disabled={Boolean(onlineMatch) && !canEditHalftime} aria-label="Revisar plano sugerido" onClick={() => { if (onlineMatch) setTacticOpen(true); else onNavigate('tactics'); }}><ChevronRight size={15} /></button></section>
         </aside>
       </div>
 

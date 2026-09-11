@@ -4,7 +4,7 @@ import test from "node:test";
 import { cloudinaryConfigFromEnv } from "../services/cloudinaryMedia.mjs";
 import { createMediaService } from "../services/mediaService.mjs";
 
-const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+import { png } from "./helpers/imageFixtures.mjs";
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -95,6 +95,27 @@ test("envia e remove imagem Cloudinary com assinatura gerada no backend", async 
     (error) => error.code === "EDITOR_MEDIA_PATH_INVALID",
   );
   assert.equal(calls.length, 2);
+});
+
+test("recusa URL inesperada do provedor e remove somente o novo upload", async () => {
+  for (const imageUrl of ["https://evil.example/image.png", "https://res.cloudinary.com/other/image/upload/a.png", "https://res.cloudinary.com/cloud/image/upload/a.svg"]) {
+    const deleted = [];
+    let uploadedPath;
+    const service = createMediaService({
+      env: { MEDIA_STORAGE_PROVIDER: "cloudinary", CLOUDINARY_URL: "cloudinary://key:secret@cloud" },
+      fetchImpl: async (url, { body }) => {
+        if (url.endsWith("/image/upload")) {
+          uploadedPath = body.get("public_id");
+          return jsonResponse({ public_id: uploadedPath, secure_url: imageUrl });
+        }
+        deleted.push(body.get("public_id"));
+        return jsonResponse({ result: "ok" });
+      },
+    });
+    await assert.rejects(service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png }),
+      (error) => error.code === "EDITOR_MEDIA_UPLOAD_FAILED");
+    assert.deepEqual(deleted, [uploadedPath]);
+  }
 });
 
 test("mantem exclusao de objetos Firebase legados ao usar Cloudinary", async () => {

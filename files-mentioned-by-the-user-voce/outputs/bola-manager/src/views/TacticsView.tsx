@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ClipboardCheck, EyeOff, GripVertical, RotateCcw, Save, Shield, Sparkles, Target, Users } from 'lucide-react';
+import { OpponentStudyPanel } from '../components/tactics/OpponentStudyPanel';
+import type { OpponentStudyController } from '../hooks/useOpponentStudy';
+import { Check, ChevronDown, ClipboardCheck, EyeOff, GripVertical, RotateCcw, Save, Shield, Target, Users } from 'lucide-react';
 import { InstructionsPanel, type InstructionKey, type InstructionValue } from '../components/tactics/InstructionsPanel';
 import { BENCH_PLAYER_DRAG_TYPE, TacticsField } from '../components/tactics/TacticsField';
 import { Badge } from '../components/shared/Badge';
@@ -17,8 +19,6 @@ import type {
   IndividualWithBallInstruction,
   IndividualWithoutBallInstruction,
   LineupSaveResponse,
-  OpponentStudy,
-  OpponentStudyDepth,
   Player,
   Room,
   RoomLineup,
@@ -37,11 +37,7 @@ interface TacticsViewProps {
   players: Player[];
   club: ClubChoice;
   opponentName?: string;
-  opponentStudy?: OpponentStudy | null;
-  opponentStudyLoading?: boolean;
-  opponentStudyError?: string | null;
-  studyDepth?: OpponentStudyDepth;
-  onStudyDepthChange?: (depth: OpponentStudyDepth) => void;
+  studyController?: OpponentStudyController;
   savedLineup?: RoomLineup;
   savedLineupIds?: string[];
   currentSeason?: number;
@@ -193,11 +189,7 @@ export function TacticsView({
   players,
   club,
   opponentName = 'adversário',
-  opponentStudy,
-  opponentStudyLoading = false,
-  opponentStudyError = null,
-  studyDepth = 'standard',
-  onStudyDepthChange,
+  studyController,
   savedLineup,
   savedLineupIds,
   room = null,
@@ -545,24 +537,7 @@ export function TacticsView({
           )}
           <label className="secret-tactic"><span><EyeOff size={15} /><span><strong>Tática secreta</strong><small>Ocultar plano dos outros managers</small></span></span><input type="checkbox" checked={plan.secret} onChange={(event) => markPlan((current) => ({ ...current, secret: event.target.checked }))} /><i /></label>
           {outOfPosition.length > 0 && <div className="tactic-validation" role="status"><strong>{outOfPosition.length} fora de posição</strong><span>{outOfPosition.map(({ player, role }) => `${player.shortName} em ${role}`).join(' · ')}</span></div>}
-          <div className="assistant-note opponent-study"><Sparkles size={16} /><div>
-            <strong>Estudo de {opponentStudy?.opponentName ?? opponentName}</strong>
-            <div className="opponent-study__depth" aria-label="Profundidade do estudo">
-              {(['quick', 'standard', 'deep'] as const).map((depth) => <button type="button" key={depth} aria-pressed={studyDepth === depth} onClick={() => onStudyDepthChange?.(depth)}>{depth === 'quick' ? 'Rápido' : depth === 'deep' ? 'Profundo' : 'Padrão'}</button>)}
-            </div>
-            {opponentStudyLoading && <p>Analisando elenco e comportamento provável…</p>}
-            {!opponentStudyLoading && opponentStudyError && <p className="opponent-study__error" role="alert">{opponentStudyError}</p>}
-            {!opponentStudyLoading && opponentStudy && <>
-              <p><b>{opponentStudy.probableFormation}</b> · {opponentStudy.style} · confiança {opponentStudy.confidence}% · tempo estimado {opponentStudy.estimatedStudyHours}h</p>
-              {opponentStudy.probableLineup.length > 0 && <div className="opponent-study__section"><b>Onze provável</b><span>{opponentStudy.probableLineup.map((player) => `${player.name} (${player.position})`).join(' · ')}</span></div>}
-              {opponentStudy.dangerousPlayers.length > 0 && <div className="opponent-study__section"><b>Jogadores perigosos</b><span>{opponentStudy.dangerousPlayers.map((player) => `${player.name} (${player.position})`).join(' · ')}</span></div>}
-              {opponentStudy.sectors.length > 0 && <div className="opponent-study__sectors">{opponentStudy.sectors.map((sector) => <span key={sector.key} data-level={sector.level}>{sector.label} <b>{sector.rating.toFixed(1)}</b></span>)}</div>}
-              {opponentStudy.strengths.length > 0 && <div className="opponent-study__section"><b>Pontos fortes</b><ul>{opponentStudy.strengths.map((insight) => <li key={insight.code}>{insight.detail}</li>)}</ul></div>}
-              {opponentStudy.weaknesses.length > 0 && <div className="opponent-study__section"><b>Vulnerabilidades</b><ul>{opponentStudy.weaknesses.map((insight) => <li key={insight.code}>{insight.detail}</li>)}</ul></div>}
-              {opponentStudy.recommendations.length > 0 && <div className="opponent-study__section"><b>Recomendações</b><ul>{opponentStudy.recommendations.map((insight) => <li key={insight.code}>{insight.detail}</li>)}</ul></div>}
-            </>}
-            {!opponentStudyLoading && !opponentStudy && !opponentStudyError && <p>O relatório estará disponível quando houver próximo adversário.</p>}
-          </div></div>
+          {studyController ? <OpponentStudyPanel controller={studyController} /> : <p>Estudo indisponível para {opponentName}.</p>}
         </aside>
       </div>
       <PlayerProfileHost

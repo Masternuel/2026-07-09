@@ -11,6 +11,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { firebaseAuth, hasFirebaseConfig, initializeFirebaseAnalytics } from '../lib/firebaseClient';
+import { endSocketSessions } from '../lib/socketSession';
 import type { AuthStatus, ManagerIdentity } from '../types';
 
 export interface AuthContextValue {
@@ -136,6 +137,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    endSocketSessions();
+    setFirebaseUser(null);
     setError(null);
     setDemoIdentity(null);
     if (firebaseAuth?.currentUser) await firebaseSignOut(firebaseAuth);

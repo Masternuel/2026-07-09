@@ -2127,8 +2127,22 @@ export interface OpponentStudy {
   estimatedStudyHours: number;
   scoutingSpeedMultiplier: number;
   source: 'observed' | 'estimated';
-  probableFormation: string;
-  style: string;
+  probableFormation: string | null;
+  style: string | null;
+  viewerClubId: string;
+  effectiveDepth: OpponentStudyDepth | 'none';
+  dataStatus: 'unknown' | 'partial' | 'complete';
+  scoutLevel: number;
+  revision: number;
+  mentality: string | null;
+  pressing: string | null;
+  marking: string | null;
+  knowledge: {
+    status: 'unknown' | 'studying' | 'ready' | 'expired' | 'known';
+    progress: number;
+    readyAt: string | null;
+    requestedDepth?: OpponentStudyDepth;
+  };
   probableLineup: OpponentStudyPlayer[];
   dangerousPlayers: OpponentStudyPlayer[];
   sectors: OpponentStudySector[];
@@ -2514,6 +2528,7 @@ export interface RoomManager {
 
 export interface RoomFixture {
   fixtureId: string;
+  status?: string;
   leagueFixtureId?: string;
   competitionFixtureId?: string;
   tournamentId?: string | null;
@@ -2662,6 +2677,8 @@ export type AckResponse<T extends object> =
   | { ok: false; error: ServerErrorPayload };
 
 export interface RoomCreatePayload {
+  operationId?: string;
+  requestId?: string;
   name: string;
   clubId?: string;
   activeLeagues?: string[];
@@ -2952,6 +2969,7 @@ export interface LineupSaveResponse {
 }
 
 export interface ServerToClientEvents {
+  'auth:error': (payload: { code: string; message: string }) => void;
   'server:ready': (payload: { socketId: string }) => void;
   'server:error': (payload: { event: string; error: ServerErrorPayload }) => void;
   'room:state': (room: Room) => void;
@@ -2969,6 +2987,8 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
+  'auth:refresh': (payload: { token: string }, acknowledge: (response: AckResponse<{ expiresAt: number }>) => void) => void;
+  'auth:logout': (payload: Record<string, never>, acknowledge: (response: AckResponse<Record<string, never>>) => void) => void;
   'room:create': (payload: RoomCreatePayload, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
   'room:join': (payload: { code: string; clubId?: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;
   'room:ready': (payload: { code: string; ready: boolean; clubId?: string }, acknowledge: (response: AckResponse<{ room: Room }>) => void) => void;

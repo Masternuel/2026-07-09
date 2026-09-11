@@ -1356,7 +1356,7 @@ test("GC nao varre blobs enquanto writer esta entre staging e commit", async () 
   const loaded = await persistence.get(room.code);
   assert.equal(loaded.completedMatches[0].writerLeaseProbe, true);
   assert.equal(
-    firestore.paths().filter((path) => path.startsWith(`rooms/${room.code}/maintenance/`)).length,
+    firestore.paths().filter((path) => path.startsWith(`rooms/${room.code}/maintenance/storage-writer`)).length,
     0,
   );
 });

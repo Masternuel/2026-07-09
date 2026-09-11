@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { withTimeout } from "./readiness.mjs";
+import { lockMetricResource } from "./metricPolicy.mjs";
 
 export const RELEASE_LOCK_SCRIPT = `
 -- bola-manager:lock:release
@@ -93,6 +94,7 @@ export function createDistributedLock({
   async function acquire(resource, options = {}) {
     const normalizedResource = String(resource ?? "").trim();
     if (!normalizedResource) throw new TypeError("Resource do lock obrigatorio");
+    const metricLabels = { resource: lockMetricResource(normalizedResource) };
     const ttlMs = positiveInteger(options.ttlMs, ttlDefault);
     const waitTimeoutMs = Math.max(0, Number(options.waitTimeoutMs ?? waitDefault) || 0);
     const lockKey = `${prefix}:${normalizedResource}`;
@@ -119,10 +121,8 @@ export function createDistributedLock({
           await evaluate(RELEASE_LOCK_SCRIPT, lockKey, [owner]).catch(() => {});
           throw error;
         }
-        metrics?.increment?.("distributed_lock_acquired_total", 1, { resource: normalizedResource });
-        metrics?.observe?.("distributed_lock_wait_ms", Math.max(0, now() - startedAt), {
-          resource: normalizedResource,
-        });
+        metrics?.increment?.("distributed_lock_acquired_total", 1, metricLabels);
+        metrics?.observe?.("distributed_lock_wait_ms", Math.max(0, now() - startedAt), metricLabels);
         logger?.info?.("distributed_lock.acquired", {
           resource: normalizedResource,
           fencingToken,
@@ -144,11 +144,11 @@ export function createDistributedLock({
             const renewed = Number(await evaluate(RENEW_LOCK_SCRIPT, lockKey, [owner, renewalTtl]));
             if (renewed !== 1) {
               held = false;
-              metrics?.increment?.("distributed_lock_lost_total", 1, { resource: normalizedResource });
+              metrics?.increment?.("distributed_lock_lost_total", 1, metricLabels);
               logger?.warn?.("distributed_lock.lost", { resource: normalizedResource });
               throw new DistributedLockLostError(normalizedResource);
             }
-            metrics?.increment?.("distributed_lock_renewed_total", 1, { resource: normalizedResource });
+            metrics?.increment?.("distributed_lock_renewed_total", 1, metricLabels);
             return true;
           },
           async release() {
@@ -158,7 +158,7 @@ export function createDistributedLock({
             metrics?.increment?.(
               released ? "distributed_lock_released_total" : "distributed_lock_lost_total",
               1,
-              { resource: normalizedResource },
+              metricLabels,
             );
             logger?.info?.("distributed_lock.released", {
               resource: normalizedResource,
@@ -172,7 +172,7 @@ export function createDistributedLock({
 
       const remainingMs = deadline - now();
       if (remainingMs <= 0 || waitTimeoutMs === 0) {
-        metrics?.increment?.("distributed_lock_timeout_total", 1, { resource: normalizedResource });
+        metrics?.increment?.("distributed_lock_timeout_total", 1, metricLabels);
         logger?.warn?.("distributed_lock.timeout", { resource: normalizedResource, attempts: attempt });
         throw new DistributedLockTimeoutError(normalizedResource);
       }

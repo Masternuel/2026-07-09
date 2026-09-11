@@ -149,6 +149,7 @@ export function createEditorRouter(catalogStore, mediaService, options = {}) {
     const { previousMediaPaths = [], ...result } = await request.catalogStore.importDatabase(
       database,
       request.user.uid,
+      { operationId: request.query.operationId },
     );
     let mediaRemoved = true;
     for (const path of previousMediaPaths) {

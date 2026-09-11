@@ -42,8 +42,10 @@ export function registerRoomHandlers(io, socket, {
     });
     assertRoomAvailable(room.code, deletingRooms, deletedRooms);
     rememberMembership(socket, room.code);
-    await emitRoomForViewers(io, room);
-    return { room: roomForViewer(room, user.uid) };
+    return {
+      room: roomForViewer(room, user.uid),
+      afterAcknowledgement: () => emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id }),
+    };
   });
 
   registerSafe(socket, "room:join", async (payload) => {
@@ -61,9 +63,17 @@ export function registerRoomHandlers(io, socket, {
     });
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    if (room.status === "waiting") await emitRoomForViewers(io, room);
-    else socket.emit("room:state", roomForViewer(room, user.uid));
-    return { room: roomForViewer(room, user.uid) };
+    return {
+      room: roomForViewer(room, user.uid),
+      ...(room.status === "waiting" ? {
+        afterAcknowledgement: () => emitRoomForViewers(
+          io,
+          room,
+          "room:state",
+          { excludeSocketId: socket.id },
+        ),
+      } : {}),
+    };
   });
 
   const resume = async (payload) => {
@@ -72,7 +82,6 @@ export function registerRoomHandlers(io, socket, {
     const room = await store.requireViewerRoom(code, user.uid);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    socket.emit("room:state", roomForViewer(room, user.uid));
     return { room: roomForViewer(room, user.uid) };
   };
   registerSafe(socket, "room:resume", resume);
@@ -89,8 +98,10 @@ export function registerRoomHandlers(io, socket, {
     const room = await store.setReady(code, user.uid, data.ready, data.clubId);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
     rememberMembership(socket, code);
-    await emitRoomForViewers(io, room);
-    return { room: roomForViewer(room, user.uid) };
+    return {
+      room: roomForViewer(room, user.uid),
+      afterAcknowledgement: () => emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id }),
+    };
   });
 
   registerSafe(socket, "room:start", async (payload) => {
@@ -99,9 +110,13 @@ export function registerRoomHandlers(io, socket, {
     parseOrThrow(startRoomSchema, { managerId: payload.managerId });
     const room = await store.startRoom(code, user.uid);
     assertRoomAvailable(code, deletingRooms, deletedRooms);
-    await emitRoomForViewers(io, room, "room:started");
-    await emitRoomForViewers(io, room);
-    return { room: roomForViewer(room, user.uid) };
+    return {
+      room: roomForViewer(room, user.uid),
+      afterAcknowledgement: async () => {
+        await emitRoomForViewers(io, room, "room:started");
+        await emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id });
+      },
+    };
   });
 
   registerSafe(socket, "room:delete", async (payload) => {
@@ -118,14 +133,17 @@ export function registerRoomHandlers(io, socket, {
         }
         const deletedRoom = await store.deleteRoom(code, user.uid);
         deletedRooms.add(code);
-        const deleted = { code };
-        let recipients = io.to(channelForRoom(code));
-        for (const managerId of deletedRoom.managerIds) {
-          recipients = recipients.to(channelForManager(managerId));
-        }
-        recipients.emit("room:deleted", deleted);
         io.in(channelForRoom(code)).socketsLeave(channelForRoom(code));
-        return deleted;
+        return {
+          code,
+          afterAcknowledgement: () => {
+            let recipients = io.to(channelForRoom(code));
+            for (const managerId of deletedRoom.managerIds) {
+              recipients = recipients.to(channelForManager(managerId));
+            }
+            recipients.emit("room:deleted", { code });
+          },
+        };
       };
       if (!distributedLocks) return await removeRoom();
       try {

@@ -9,6 +9,7 @@ import {
   rankingManagersForCompetition,
 } from "../game/rankingTimeline.mjs";
 import { listRoomPlayers } from "../game/roomRoster.mjs";
+import { selectRankings } from "./rankingSelection.mjs";
 
 function identifier(value) {
   return String(value ?? "").trim();
@@ -1648,6 +1649,7 @@ export async function buildRoomRankings({
   clubId = null,
   competitionId = null,
   viewerId = null,
+  query = null,
 }) {
   if (!room || typeof room !== "object") throw new TypeError("Sala indisponivel para rankings");
   if (!catalogStore || typeof catalogStore.listPlayers !== "function") {
@@ -1910,7 +1912,7 @@ export async function buildRoomRankings({
   const selectedTournament = selectedLeague?.scopeType === "tournament";
   const generatedAt = new Date().toISOString();
   const status = scopeStatus(room, fixtures, results);
-  return {
+  const snapshot = {
     meta: {
       generatedAt,
       updatedAt: generatedAt,
@@ -1978,7 +1980,7 @@ export async function buildRoomRankings({
       })),
       managerPeriods: [
         { id: "current", name: "Temporada atual", count: null },
-        { id: "last-five", name: "Últimos cinco jogos", count: null },
+        { id: "last5", name: "Últimos cinco jogos", count: null },
         { id: "career", name: "Histórico completo", count: null },
       ],
     },
@@ -1990,4 +1992,6 @@ export async function buildRoomRankings({
       .map(publicSeasonHistory)
       .filter(Boolean),
   };
+  if (query) snapshot.selection = selectRankings(snapshot, query, currentSeason);
+  return snapshot;
 }

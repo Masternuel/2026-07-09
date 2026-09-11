@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import reactPlugin from '@vitejs/plugin-react';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
@@ -23,7 +22,8 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     appType: 'custom',
     logLevel: 'silent',
     server: { middlewareMode: true },

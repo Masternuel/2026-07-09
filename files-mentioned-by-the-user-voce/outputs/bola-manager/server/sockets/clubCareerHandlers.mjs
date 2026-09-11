@@ -10,10 +10,12 @@ import {
 import { emitRoomForViewers, roomForViewer } from "../services/roomVisibility.mjs";
 import { registerSafe, rememberMembership } from "./helpers.mjs";
 
-async function publish(io, socket, room, managerId) {
+function publish(io, socket, room, managerId) {
   rememberMembership(socket, room.code);
-  await emitRoomForViewers(io, room);
-  return roomForViewer(room, managerId);
+  return {
+    room: roomForViewer(room, managerId),
+    afterAcknowledgement: () => emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id }),
+  };
 }
 
 export function registerClubCareerHandlers(io, socket, { store }) {
@@ -22,54 +24,36 @@ export function registerClubCareerHandlers(io, socket, { store }) {
   registerSafe(socket, "club:upgrade", async (payload) => {
     const data = parseOrThrow(clubUpgradeSchema, payload);
     const result = await store.startClubFacilityUpgrade(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 
   registerSafe(socket, "career:staff:hire", async (payload) => {
     const data = parseOrThrow(clubStaffHireSchema, payload);
     const result = await store.hireClubStaff(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 
   registerSafe(socket, "career:staff:fire", async (payload) => {
     const data = parseOrThrow(clubStaffFireSchema, payload);
     const result = await store.fireClubStaff(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 
   registerSafe(socket, "career:staff:renew", async (payload) => {
     const data = parseOrThrow(clubStaffRenewSchema, payload);
     const result = await store.renewClubStaff(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 
   registerSafe(socket, "career:professional:lifecycle", async (payload) => {
     const data = parseOrThrow(professionalLifecycleSocketSchema, payload);
     const result = await store.manageProfessionalLifecycle(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 
   registerSafe(socket, "club:news-read", async (payload) => {
     const data = parseOrThrow(clubNewsReadSchema, payload);
     const result = await store.markClubNewsRead(data.code, user.uid, data);
-    return {
-      ...result,
-      room: await publish(io, socket, result.room, user.uid),
-    };
+    return { ...result, ...publish(io, socket, result.room, user.uid) };
   });
 }

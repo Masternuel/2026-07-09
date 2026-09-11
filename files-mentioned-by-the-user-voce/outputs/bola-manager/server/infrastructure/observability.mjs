@@ -1,19 +1,6 @@
+import { httpMetricRoute, normalizeMetricSample } from "./metricPolicy.mjs";
+
 const SECRET_PATTERN = /(authorization|cookie|password|secret|token|private.?key|credential|api.?key)/i;
-
-function sanitizeMetricName(name) {
-  return String(name).replace(/[^a-zA-Z0-9_:]/g, "_");
-}
-
-function normalizeLabels(labels = {}) {
-  return Object.fromEntries(Object.entries(labels)
-    .filter(([, value]) => value !== undefined && value !== null)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => [key, String(value)]));
-}
-
-function metricKey(name, labels) {
-  return `${name}:${JSON.stringify(normalizeLabels(labels))}`;
-}
 
 function safeText(value) {
   return value
@@ -85,49 +72,83 @@ export function createStructuredLogger({
   return makeLogger({});
 }
 
-export function createMetricsRegistry({ now = Date.now } = {}) {
+export function createMetricsRegistry({ now = Date.now, maxSeries = 2048, maxSeriesPerMetric = 256 } = {}) {
   const counters = new Map();
   const gauges = new Map();
   const summaries = new Map();
+  const seriesByMetric = new Map();
+  const boundedLimit = (value, fallback, ceiling) => Number.isInteger(value) && value > 0
+    ? Math.min(value, ceiling) : fallback;
+  const seriesLimit = boundedLimit(maxSeries, 2048, 4096);
+  const metricLimit = boundedLimit(maxSeriesPerMetric, 256, 512);
+  let series = 0;
+  let droppedSamples = 0;
+
+  function drop() {
+    droppedSamples = Math.min(Number.MAX_SAFE_INTEGER, droppedSamples + 1);
+    return 0;
+  }
+
+  function sample(store, type, name, labels, value) {
+    const normalized = normalizeMetricSample(name, type, labels);
+    const number = typeof value === "number" ? value
+      : typeof value === "string" && value.trim() ? Number(value) : NaN;
+    if (!normalized || !Number.isFinite(number) || (type !== "gauge" && number < 0)) return null;
+    const key = `${name}:${JSON.stringify(normalized)}`;
+    const current = store.get(key);
+    if (!current && (series >= seriesLimit || (seriesByMetric.get(name) ?? 0) >= metricLimit)) return null;
+    return { key, current, number, labels: normalized };
+  }
+
+  function save(store, key, metric) {
+    if (!store.has(key)) {
+      series += 1;
+      seriesByMetric.set(metric.name, (seriesByMetric.get(metric.name) ?? 0) + 1);
+    }
+    store.set(key, metric);
+  }
 
   function increment(name, value = 1, labels = {}) {
-    const metric = sanitizeMetricName(name);
-    const key = metricKey(metric, labels);
-    const current = counters.get(key) ?? { name: metric, labels: normalizeLabels(labels), value: 0 };
-    current.value += Number(value) || 0;
-    counters.set(key, current);
+    const next = sample(counters, "counter", name, labels, value);
+    if (!next) return drop();
+    const current = next.current ?? { name, labels: next.labels, value: 0 };
+    const total = current.value + next.number;
+    if (!Number.isFinite(total)) return drop();
+    current.value = total;
+    save(counters, next.key, current);
     return current.value;
   }
 
   function setGauge(name, value, labels = {}) {
-    const metric = sanitizeMetricName(name);
-    const key = metricKey(metric, labels);
-    gauges.set(key, { name: metric, labels: normalizeLabels(labels), value: Number(value) || 0 });
+    const next = sample(gauges, "gauge", name, labels, value);
+    if (!next) return drop();
+    save(gauges, next.key, { name, labels: next.labels, value: next.number });
   }
 
   function observe(name, value, labels = {}) {
-    const metric = sanitizeMetricName(name);
-    const key = metricKey(metric, labels);
-    const number = Number(value) || 0;
-    const current = summaries.get(key) ?? {
-      name: metric,
-      labels: normalizeLabels(labels),
+    const next = sample(summaries, "summary", name, labels, value);
+    if (!next) return drop();
+    const current = next.current ?? {
+      name,
+      labels: next.labels,
       count: 0,
       sum: 0,
       max: Number.NEGATIVE_INFINITY,
     };
+    if (!Number.isFinite(current.sum + next.number) || current.count >= Number.MAX_SAFE_INTEGER) return drop();
     current.count += 1;
-    current.sum += number;
-    current.max = Math.max(current.max, number);
-    summaries.set(key, current);
+    current.sum += next.number;
+    current.max = Math.max(current.max, next.number);
+    save(summaries, next.key, current);
   }
 
   function snapshot() {
     return {
       timestamp: new Date(now()).toISOString(),
-      counters: [...counters.values()].map((metric) => ({ ...metric })),
-      gauges: [...gauges.values()].map((metric) => ({ ...metric })),
-      summaries: [...summaries.values()].map((metric) => ({ ...metric })),
+      counters: [...counters.values()].map((metric) => ({ ...metric, labels: { ...metric.labels } })),
+      gauges: [...gauges.values()].map((metric) => ({ ...metric, labels: { ...metric.labels } })),
+      summaries: [...summaries.values()].map((metric) => ({ ...metric, labels: { ...metric.labels } })),
+      registry: { series, maxSeries: seriesLimit, maxSeriesPerMetric: metricLimit, droppedSamples },
     };
   }
 
@@ -135,6 +156,9 @@ export function createMetricsRegistry({ now = Date.now } = {}) {
     counters.clear();
     gauges.clear();
     summaries.clear();
+    seriesByMetric.clear();
+    series = 0;
+    droppedSamples = 0;
   }
 
   return { increment, setGauge, observe, snapshot, reset };
@@ -143,12 +167,11 @@ export function createMetricsRegistry({ now = Date.now } = {}) {
 export function createHttpMetricsMiddleware(metrics, { now = Date.now } = {}) {
   return function httpMetrics(request, response, next) {
     const startedAt = now();
+    const route = httpMetricRoute(request.originalUrl ?? request.url);
     response.once("finish", () => {
       const labels = {
         method: request.method,
-        route: request.route?.path
-          ? `${request.baseUrl ?? ""}${String(request.route.path)}`
-          : "unmatched",
+        route: request.route?.path ? route : "unmatched",
         status: response.statusCode,
       };
       metrics.increment("http_requests_total", 1, labels);

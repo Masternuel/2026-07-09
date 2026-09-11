@@ -1,27 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../lib/apiClient';
-import type { AckResponse, BolaSocket, Room, RoomCreatePayload, RoomFixture } from '../types';
+import { emitSocketRequest, SocketRequestError } from '../lib/socketRequest';
+import { createRoomOnce } from '../lib/roomCreationOperation';
+import type { BolaSocket, Room, RoomCreatePayload, RoomFixture } from '../types';
 import { normalizeRoomSnapshot, normalizeRoomSnapshots } from '../utils/normalizeRoom';
 import { useAuth } from './useAuth';
 import type { SocketState } from './useSocket';
 
-type RoomAck = AckResponse<{ room: Room }>;
-type DeleteRoomAck = AckResponse<{ code: string }>;
-
-const ROOM_ACK_TIMEOUT_MS = 8_000;
-const ROOM_DELETE_ACK_TIMEOUT_MS = 30_000;
-
 const MISSING_SAVE_MESSAGE = 'Este save não existe mais no servidor e foi removido da sua lista.';
-
-class RoomAckError extends Error {
-  code: string;
-
-  constructor(message: string, code: string) {
-    super(message);
-    this.name = 'RoomAckError';
-    this.code = code;
-  }
-}
 
 function roomTimestamp(room: Room): number {
   const timestamp = Date.parse(room.updatedAt ?? room.createdAt);
@@ -58,34 +44,11 @@ function errorMessage(error: unknown): string {
   return 'Não foi possível atualizar a sala.';
 }
 
-function waitForRoomAck(invoke: (callback: (response: RoomAck) => void) => void): Promise<Room> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), ROOM_ACK_TIMEOUT_MS);
-    invoke((response) => {
-      window.clearTimeout(timer);
-      if (response?.ok) {
-        const room = normalizeRoomSnapshot(response.room);
-        if (room) resolve(room);
-        else reject(new RoomAckError('O servidor retornou um save inválido.', 'ROOM_SNAPSHOT_INVALID'));
-      } else if (response?.error) reject(new RoomAckError(response.error.message, response.error.code));
-      else reject(new RoomAckError('O servidor retornou uma resposta inválida.', 'ROOM_ACK_INVALID'));
-    });
-  });
-}
-
-function waitForDeleteRoomAck(invoke: (callback: (response: DeleteRoomAck) => void) => void): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder. Tente novamente.')), ROOM_DELETE_ACK_TIMEOUT_MS);
-    invoke((response) => {
-      window.clearTimeout(timer);
-      if (response?.ok) {
-        const code = normalizeRoomCode(response.code);
-        if (code) resolve(code);
-        else reject(new RoomAckError('O servidor retornou um código de save inválido.', 'ROOM_CODE_INVALID'));
-      } else if (response?.error) reject(new RoomAckError(response.error.message, response.error.code));
-      else reject(new RoomAckError('O servidor retornou uma resposta inválida.', 'ROOM_ACK_INVALID'));
-    });
-  });
+async function requestRoom(socket: BolaSocket, event: string, payload: Record<string, unknown>): Promise<Room> {
+  const response = await emitSocketRequest<{ room: Room }>(socket, event, payload);
+  const room = normalizeRoomSnapshot(response.room);
+  if (!room) throw new Error('O servidor retornou um save inválido.');
+  return room;
 }
 
 const demoClubNames: Record<string, string> = {
@@ -161,7 +124,7 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
   const updateSelectedRoom = useCallback((nextRoom: Room) => {
     if (deletedRoomCodesRef.current.has(normalizeRoomCode(nextRoom.code))) return;
     setRoom((current) => {
-      if (current?.code !== nextRoom.code || current.revision >= nextRoom.revision) return current;
+      if (!current || current.code !== nextRoom.code || current.revision >= nextRoom.revision) return current;
       return nextRoom;
     });
     rememberRoom(nextRoom);
@@ -259,25 +222,24 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
 
   useEffect(() => {
     if (!socket?.connected || !room) return;
+    let cancelled = false;
     const code = room.code;
     if (deletedRoomCodesRef.current.has(normalizeRoomCode(code))) {
       tombstoneRoom(code);
       return;
     }
-    socket.emit('room:resume', { code }, (response) => {
-      if (response?.ok) {
-        const nextRoom = normalizeRoomSnapshot(response.room);
-        if (nextRoom) updateSelectedRoom(nextRoom);
-        else setError('O servidor retornou um save inválido.');
-      } else if (response?.error?.code === 'ROOM_NOT_FOUND') {
+    void requestRoom(socket, 'room:resume', { code }).then((nextRoom) => {
+      if (!cancelled) updateSelectedRoom(nextRoom);
+    }).catch((nextError) => {
+      if (cancelled) return;
+      if (nextError instanceof SocketRequestError && nextError.code === 'ROOM_NOT_FOUND') {
         tombstoneRoom(code);
         setError(MISSING_SAVE_MESSAGE);
-      } else if (response?.error) {
-        setError(response.error.message);
       } else {
-        setError('O servidor retornou uma resposta inválida.');
+        setError(errorMessage(nextError));
       }
     });
+    return () => { cancelled = true; };
   }, [socket, socketState, room?.code, tombstoneRoom, updateSelectedRoom]);
 
   const offlineDemoRoom = useCallback((payload: RoomCreatePayload): Room => {
@@ -325,12 +287,14 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
   }, [acceptRoom]);
 
   const createRoom = useCallback((payload: RoomCreatePayload) => withPending(async () => {
+    if (!identity) throw new Error('Entre antes de criar uma sala.');
     if (!socket?.connected) {
       if (identity?.mode === 'demo') return offlineDemoRoom(payload);
       throw new Error('A conexão em tempo real ainda não está pronta.');
     }
-    return waitForRoomAck((acknowledge) => socket.emit('room:create', payload, acknowledge));
-  }), [socket, identity?.mode, offlineDemoRoom, withPending]);
+    return createRoomOnce(`${identity.mode}:${identity.uid}`, payload,
+      (body) => requestRoom(socket, 'room:create', { ...body }));
+  }), [socket, identity?.mode, identity?.uid, offlineDemoRoom, withPending]);
 
   const joinRoom = useCallback((code: string) => withPending(async () => {
     const normalizedCode = normalizeRoomCode(code);
@@ -338,7 +302,7 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
       if (identity?.mode === 'demo') return offlineDemoRoom({ name: 'Sala demonstração', activeLeagues: ['BR-A'], seasonLength: 1, maxManagers: 1 });
       throw new Error('A conexão em tempo real ainda não está pronta.');
     }
-    return waitForRoomAck((acknowledge) => socket.emit('room:join', { code: normalizedCode }, acknowledge));
+    return requestRoom(socket, 'room:join', { code: normalizedCode });
   }), [socket, identity?.mode, offlineDemoRoom, withPending]);
 
   const selectRoom = useCallback((code: string) => withPending(async () => {
@@ -346,9 +310,9 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
     if (deletedRoomCodesRef.current.has(normalizedCode)) throw new Error(MISSING_SAVE_MESSAGE);
     if (socket?.connected) {
       try {
-        return await waitForRoomAck((acknowledge) => socket.emit('room:resume', { code: normalizedCode }, acknowledge));
+        return await requestRoom(socket, 'room:resume', { code: normalizedCode });
       } catch (nextError) {
-        if (nextError instanceof RoomAckError && nextError.code === 'ROOM_NOT_FOUND') {
+        if (nextError instanceof SocketRequestError && nextError.code === 'ROOM_NOT_FOUND') {
           tombstoneRoom(normalizedCode);
           throw new Error(MISSING_SAVE_MESSAGE);
         }
@@ -369,7 +333,8 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
     setError(null);
     try {
       if (socket?.connected) {
-        await waitForDeleteRoomAck((acknowledge) => socket.emit('room:delete', { code: normalizedCode }, acknowledge));
+        const response = await emitSocketRequest<{ code: string }>(socket, 'room:delete', { code: normalizedCode });
+        if (normalizeRoomCode(response.code) !== normalizedCode) throw new Error('O servidor retornou um código de save inválido.');
       } else if (identity?.mode === 'demo') {
         const savedRoom = savedRooms.find((candidate) => candidate.code === normalizedCode);
         if (!savedRoom) throw new Error('Save não encontrado.');
@@ -397,7 +362,7 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
       };
     }
     if (!socket?.connected) throw new Error('A conexão em tempo real foi interrompida.');
-    return waitForRoomAck((acknowledge) => socket.emit('room:ready', { code: room.code, ready, clubId }, acknowledge));
+    return requestRoom(socket, 'room:ready', { code: room.code, ready, clubId });
   }), [socket, room, identity, withPending]);
 
   const startRoom = useCallback(() => withPending(async () => {
@@ -421,7 +386,7 @@ export function useRoom(socket: BolaSocket | null, socketState: SocketState) {
       };
     }
     if (!socket?.connected) throw new Error('A conexão em tempo real foi interrompida.');
-    return waitForRoomAck((acknowledge) => socket.emit('room:start', { code: room.code }, acknowledge));
+    return requestRoom(socket, 'room:start', { code: room.code });
   }), [socket, room, identity, withPending]);
 
   return {

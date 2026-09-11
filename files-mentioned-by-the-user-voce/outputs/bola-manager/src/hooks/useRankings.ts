@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AuthContext } from '../auth/AuthContext';
 import { apiRequest } from '../lib/apiClient';
 import type {
@@ -14,6 +14,7 @@ import type {
   RankingsSnapshot,
 } from '../utils/rankings';
 import { sortRankingClubs, sortRankingManagers, sortRankingPlayers } from '../utils/rankings';
+import { parseRankingQuery, rankingQueryKey, type RankingQuery } from '../../shared/rankingQuery.mjs';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -90,10 +91,10 @@ function normalizePlayerContract(value: unknown): RankingPlayer['contract'] {
   };
 }
 
-function normalizeForm(value: unknown): RankingFormResult[] {
+function normalizeForm(value: unknown, portuguese = false): RankingFormResult[] {
   const source = typeof value === 'string' ? value.split(/[\s,;|-]+/) : list(value);
   const tokens = source.map((item) => text(item).toLocaleUpperCase('pt-BR'));
-  const portugueseNotation = tokens.some((result) => (
+  const portugueseNotation = portuguese || tokens.some((result) => (
     result === 'V' || result === 'E' || result === 'VITÓRIA' || result === 'EMPATE'
   ));
   return tokens.flatMap((result) => {
@@ -644,11 +645,46 @@ export function normalizeRankings(value: unknown): RankingsSnapshot | null {
   };
 }
 
+export function normalizeRankingsResponse(value: unknown, query: RankingQuery): RankingsSnapshot | null {
+  const source = record(value);
+  const selection = record(source?.selection);
+  if (!source || !record(source.meta) || !record(source.scope) || !selection
+    || !['players', 'clubs', 'managers'].every((field) => Array.isArray(source[field]))) return null;
+  try {
+    if (!selection.query || rankingQueryKey(selection.query) !== rankingQueryKey(query)) return null;
+    const backendRow = (value: unknown) => {
+      const row = record(value);
+      return row ? { ...row, recentForm: normalizeForm(row.recentForm, true) } : value;
+    };
+    const snapshot = normalizeRankings({ ...source, clubs: list(source.clubs).map(backendRow), managers: list(source.managers).map(backendRow) });
+    if (!snapshot) return null;
+    const ids = (value: unknown, rows: { id: string }[]) => {
+      const available = new Set(rows.map((row) => row.id));
+      if (!Array.isArray(value) || new Set(value).size !== value.length
+        || !value.every((id) => typeof id === 'string' && available.has(id))) throw new Error('Seleção inválida');
+      return value as string[];
+    };
+    const managers = (value: unknown) => {
+      if (!Array.isArray(value)) throw new Error('Treinadores inválidos');
+      const normalized = value.map((row) => normalizeManager(backendRow(row)));
+      if (normalized.some((manager) => !manager)) throw new Error('Treinador inválido');
+      const rows = normalized as RankingManager[];
+      ids(rows.map((manager) => manager.id), snapshot.managers);
+      return rows;
+    };
+    snapshot.selection = { query: parseRankingQuery(selection.query),
+      playerIds: ids(selection.playerIds, snapshot.players), clubIds: ids(selection.clubIds, snapshot.clubs),
+      managers: managers(selection.managers), managerScope: managers(selection.managerScope) };
+    return snapshot;
+  } catch { return null; }
+}
+
 export function useRankings(
   roomCode: string | null | undefined,
   clubId: string,
   revision = 0,
   competitionId?: string | null,
+  selectionQuery?: RankingQuery,
 ) {
   const auth = useContext(AuthContext);
   const [rankings, setRankings] = useState<RankingsSnapshot | null>(null);
@@ -660,7 +696,8 @@ export function useRankings(
   const scopeRef = useRef('');
   const code = roomCode?.trim() ?? '';
   const competition = competitionId?.trim() ?? '';
-  const requestScope = `${code}\u0000${clubId}\u0000${competition}`;
+  const queryKey = rankingQueryKey(selectionQuery);
+  const requestScope = `${auth?.identity?.uid ?? ''}\u0000${code}\u0000${clubId}\u0000${competition}\u0000${revision}\u0000${queryKey}`;
   const refresh = useCallback(() => setRefreshRevision((current) => current + 1), []);
 
   useEffect(() => {
@@ -686,7 +723,8 @@ export function useRankings(
     setLoading(!hasSnapshot);
     setRefreshing(hasSnapshot);
     setError(null);
-    const query = new URLSearchParams({ clubId });
+    const selection = parseRankingQuery(JSON.parse(queryKey));
+    const query = new URLSearchParams({ clubId, ...selection });
     if (competition) query.set('competitionId', competition);
     const path = `/api/rooms/${encodeURIComponent(code)}/rankings?${query.toString()}`;
     void apiRequest<RankingsResponse>(
@@ -695,7 +733,7 @@ export function useRankings(
       { signal: controller.signal },
     ).then((response) => {
       if (controller.signal.aborted) return;
-      const normalized = normalizeRankings(response.rankings);
+      const normalized = normalizeRankingsResponse(response.rankings, selection);
       if (!normalized) throw new Error('O servidor retornou rankings inválidos.');
       rankingsRef.current = normalized;
       setRankings(normalized);
@@ -710,7 +748,11 @@ export function useRankings(
       }
     });
     return () => controller.abort();
-  }, [auth?.getIdToken, auth?.identity, auth?.status, clubId, code, competition, refreshRevision, requestScope, revision]);
+  }, [auth?.getIdToken, auth?.identity, auth?.status, clubId, code, competition, refreshRevision, requestScope, revision, queryKey]);
 
-  return useMemo(() => ({ rankings, loading, refreshing, error, refresh }), [error, loading, rankings, refresh, refreshing]);
+  const scopeMatches = scopeRef.current === requestScope;
+  const authenticated = auth?.status === 'authenticated' && Boolean(auth.identity);
+  return { rankings: scopeMatches && authenticated ? rankings : null,
+    loading: loading || Boolean(code && authenticated && !scopeMatches), refreshing,
+    error: code && !authenticated ? 'Entre na sua conta para consultar os rankings.' : error, refresh };
 }

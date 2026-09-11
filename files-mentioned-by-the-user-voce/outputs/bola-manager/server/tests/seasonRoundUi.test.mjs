@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import reactPlugin from "@vitejs/plugin-react";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
@@ -70,6 +69,8 @@ const room = {
   ],
 };
 
+import { withTestAuth } from './helpers/withTestAuth.mjs';
+
 let vite;
 let Sidebar;
 let HomeView;
@@ -84,16 +85,21 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     appType: "custom",
     logLevel: "silent",
     server: { middlewareMode: true },
   });
   ({ Sidebar } = await vite.ssrLoadModule("/src/components/layout/Sidebar.tsx"));
+  Sidebar = await withTestAuth(vite, Sidebar);
   ({ HomeView } = await vite.ssrLoadModule("/src/views/HomeView.tsx"));
+  HomeView = await withTestAuth(vite, HomeView);
   ({ MatchView } = await vite.ssrLoadModule("/src/views/MatchView.tsx"));
+  MatchView = await withTestAuth(vite, MatchView);
   ({ CalendarView } = await vite.ssrLoadModule("/src/views/season/CalendarView.tsx"));
   ({ CompetitionsView } = await vite.ssrLoadModule("/src/views/season/CompetitionsView.tsx"));
+  CompetitionsView = await withTestAuth(vite, CompetitionsView);
   ({ findRoomLeagueForClub } = await vite.ssrLoadModule("/src/utils/leagueStandings.ts"));
   ({ getSeasonProgress } = await vite.ssrLoadModule("/src/utils/seasonProgress.ts"));
   ({ normalizePlayerCondition } = await vite.ssrLoadModule("/src/hooks/usePlayerCatalog.ts"));
@@ -161,7 +167,7 @@ test("central e partida usam a primeira rodada do save", () => {
 });
 
 test("HUD propaga liga e escudos do snapshot da temporada", () => {
-  const crestImageUrl = "https://res.cloudinary.com/bola-manager/image/upload/chelsea.png";
+  const crestImageUrl = "/assets/chelsea.png";
   const chelsea = {
     ...club,
     id: "CHE",
@@ -251,7 +257,7 @@ test("HUD propaga liga e escudos do snapshot da temporada", () => {
   assert.match(homeHtml, /Liga Inglesa · RODADA 1/i);
   assert.match(matchHtml, /Liga Inglesa · Rodada 1/i);
   assert.match(hud, /club-mark--image/);
-  assert.match(hud, /res\.cloudinary\.com\/bola-manager\/image\/upload\/chelsea\.png/);
+  assert.match(hud, /assets\/chelsea\.png/);
   assert.match(homeHtml, /--club-color-dark:#66a3ff;--club-color-light:#034694/);
   assert.match(matchHtml, /--club-color-dark:#f0f0f0;--club-color-light:#171a17/);
   assert.match(calendarHtml, /--club-color-dark:#f0f0f0;--club-color-light:#171a17/);

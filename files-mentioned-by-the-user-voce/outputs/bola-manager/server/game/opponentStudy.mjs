@@ -507,7 +507,7 @@ export function buildOpponentStudy({
     const player = availableById.get(playerId);
     return player ? [player] : [];
   });
-  const formation = formationSelection(tacticPreview, providedPlayers);
+  const formation = formationSelection(tacticPreview, providedPlayers.length ? providedPlayers : available);
   const probableLineup = buildProbableLineup(available, providedIds, formation.id);
   const rosterById = new Map(available.map((player) => [identifier(player.id), player]));
   const lineupPlayers = probableLineup.flatMap((entry) => {

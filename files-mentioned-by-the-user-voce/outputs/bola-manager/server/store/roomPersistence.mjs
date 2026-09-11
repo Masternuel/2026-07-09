@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { FirestoreMatchHistory, MemoryMatchHistory, MATCH_HISTORY_COLLECTION } from "./matchHistory.mjs";
+import { creationReceipt, validateCreationReceipt } from "./roomCreationOperation.mjs";
 import { gunzipSync } from "node:zlib";
 import {
   SAVE_DOCUMENT_SAFE_BYTES,
@@ -10,7 +12,9 @@ import {
   contentPageId,
   decodeSectionPage,
   decodeSectionValue,
+  decodeSectionValueAsync,
   encodeSectionValue,
+  encodeSectionValueAsync,
   estimateSectionedDocumentBytes,
   metadataRoomFromDocument,
   persistenceError,
@@ -20,6 +24,7 @@ import {
   sectionPageId,
   splitRoomDomains,
   validateContentPageDocument,
+  validateContentPageDocumentAsync,
   validateManifestPageReferences,
 } from "./roomPersistenceSections.mjs";
 import {
@@ -224,18 +229,29 @@ function partialRoomSplit(room, requestedPaths, previousDocument = null) {
 export class MemoryRoomPersistence {
   #rooms = new Map();
   #deletedCodes = new Set();
+  #creationReceipts = new Map();
 
   constructor(initialRooms = []) {
+    this.matchHistory = new MemoryMatchHistory((code) => this.#rooms.has(code) && !this.#deletedCodes.has(code));
     for (const room of initialRooms) {
       if (isDeletedRoom(room)) this.#deletedCodes.add(room.code);
       else this.#rooms.set(room.code, clone(room));
     }
   }
 
-  async create(room) {
+  async findCreation(operation) {
+    return clone(validateCreationReceipt(this.#creationReceipts.get(operation.key), operation));
+  }
+
+  async create(room, { operation = null } = {}) {
+    const previous = operation && validateCreationReceipt(this.#creationReceipts.get(operation.key), operation);
+    if (previous) return clone(previous);
     if (this.#rooms.has(room.code) || this.#deletedCodes.has(room.code)) return false;
     this.#rooms.set(room.code, clone(room));
-    return true;
+    if (!operation) return true;
+    const receipt = creationReceipt(operation, room);
+    this.#creationReceipts.set(operation.key, clone(receipt));
+    return receipt;
   }
 
   async get(code) {
@@ -292,6 +308,7 @@ export class MemoryRoomPersistence {
   async remove(code, authorize) {
     const current = clone(this.#rooms.get(code));
     authorize(current);
+    this.matchHistory.remove(current);
     this.#rooms.delete(code);
     this.#deletedCodes.add(code);
     return clone(current);
@@ -356,6 +373,7 @@ const STORAGE_WRITER_LEASE_PREFIX = "storage-writer--";
 const STORAGE_GC_MARK_PREFIX = "gc-mark--";
 const STORAGE_GC_SWEEP_BATCH_SIZE = 100;
 const STORAGE_GC_HEARTBEAT_MS = Math.floor(SAVE_MAINTENANCE_LEASE_MS / 3);
+const STORAGE_GC_BACKGROUND_DELAY_MS = 1_000;
 
 function isV2Document(document) {
   return Number(document?.saveSchemaVersion) === SAVE_SCHEMA_VERSION
@@ -435,6 +453,28 @@ function documentWithMaintenanceLease(document, lease = null) {
   return { ...nextBase, saveCommitId: canonicalChecksum(nextBase) };
 }
 
+function recoveryReference(reference) {
+  return reference.collection(STORAGE_MAINTENANCE_COLLECTION).doc("recovery-previous");
+}
+
+function recoveryCheckpoint(previous, current) {
+  if (!previous) return null;
+  assertV2DocumentIntegrity(previous);
+  const { saveCommitId: _commit, saveMaintenanceLease: _lease, ...base } = previous;
+  // Only the immediate generation is retained: older sections may already be GC'd.
+  const documentBase = { ...base, previousRoomSections: [] };
+  const value = {
+    format: "previous-generation-v1",
+    currentCommitId: current.saveCommitId,
+    document: { ...documentBase, saveCommitId: canonicalChecksum(documentBase) },
+  };
+  return { ...value, checksum: canonicalChecksum(value) };
+}
+
+function isRecoverableSaveError(error) {
+  return ["SAVE_INCOMPLETE", "SAVE_DOCUMENT_CORRUPT"].includes(error?.code);
+}
+
 function activeMaintenanceLease(document, now = Date.now()) {
   const lease = document?.saveMaintenanceLease;
   if (!lease?.id || !Number.isFinite(Date.parse(lease.expiresAt))) return null;
@@ -505,6 +545,12 @@ function releaseStorageWriterInTransaction(
     return false;
   }
   const state = stateSnapshot.exists ? stateSnapshot.data() : null;
+  if (!Number.isFinite(Date.parse(lease.expiresAt)) || Date.parse(lease.expiresAt) <= Date.now()
+    || (state?.recoveryLeaseId && state.recoveryLeaseId !== leaseId)) {
+    if (required) throw persistenceError("SAVE_WRITE_CONFLICT", "Lease de gravacao do save expirou ou foi substituido", 409);
+    transaction.delete(leaseReference);
+    return true;
+  }
   const count = Number(state?.activeLeaseCount ?? 0);
   if (Number.isInteger(count) && count > 1) {
     transaction.set(stateReference, {
@@ -549,6 +595,7 @@ async function acquireStorageWriterLease(
         assertMaintenanceAvailable(current);
       }
       const state = stateSnapshot.exists ? stateSnapshot.data() : null;
+      if (state?.recoveryLeaseId) assertStorageWritersAvailable(state);
       transaction.set(stateReference, storageWriterStateAfterAcquire(state, expiresAt));
       transaction.create(leaseReference, {
         id: leaseId,
@@ -583,12 +630,14 @@ async function renewStorageWriterLease(firestore, lease) {
     const state = stateSnapshot.exists ? stateSnapshot.data() : null;
     const active = activeStorageWriterState(state, now);
     if (currentLease?.id !== lease.id
+      || (state?.recoveryLeaseId && state.recoveryLeaseId !== lease.id)
       || !Number.isFinite(currentLeaseExpiresAt)
       || currentLeaseExpiresAt <= now
       || !active) {
       throw persistenceError("SAVE_WRITE_CONFLICT", "Lease de gravacao do save foi perdido", 409);
     }
     transaction.set(lease.stateReference, {
+      ...state,
       activeLeaseCount: active.count,
       activeUntil: new Date(Math.max(active.expiresAt, Date.parse(expiresAt))).toISOString(),
       updatedAt: new Date().toISOString(),
@@ -873,7 +922,7 @@ async function stageSection(firestore, rootReference, section, generation, write
     ? () => renewStorageWriterLease(firestore, writerLease)
     : null;
   if (renewLease) await renewLease();
-  const encoded = encodeSectionValue(section.path, section.domain, section.value);
+  const encoded = await encodeSectionValueAsync(section.path, section.domain, section.value);
   const pageIndex = buildPageIndex(encoded.pages.map(contentPageId));
   const documentId = sectionDocumentId(section.path, generation);
   const manifest = {
@@ -999,13 +1048,19 @@ async function loadSection(firestore, rootReference, descriptor, onProgress = nu
   if (pageSnapshots.some((pageSnapshot) => !pageSnapshot.exists)) {
     throw persistenceError("SAVE_INCOMPLETE", `Save incompleto: pagina da secao ${descriptor.path} ausente`);
   }
-  const pages = pageSnapshots.map((pageSnapshot, index) => ({
-    ...(contentPageIds
-      ? validateContentPageDocument(contentPageIds[index], pageSnapshot.data())
-      : pageSnapshot.data()),
-    ...(contentPageIds ? { index } : {}),
-  }));
-  return { path: descriptor.path, value: decodeSectionValue(manifest, pages), manifest, reference };
+  const pages = [];
+  for (let index = 0; index < pageSnapshots.length; index += 1) {
+    const page = contentPageIds
+      ? await validateContentPageDocumentAsync(contentPageIds[index], pageSnapshots[index].data())
+      : pageSnapshots[index].data();
+    pages.push({ ...page, ...(contentPageIds ? { index } : {}) });
+  }
+  return {
+    path: descriptor.path,
+    value: await decodeSectionValueAsync(manifest, pages),
+    manifest,
+    reference,
+  };
 }
 
 async function cleanupDescriptors(firestore, rootReference, descriptors) {
@@ -1442,6 +1497,7 @@ async function deleteRoomStorageDocuments(firestore, rootReference, payloadColle
   let deletedCount = 0;
   for (const name of [
     ...STORAGE_SUBCOLLECTIONS,
+    MATCH_HISTORY_COLLECTION,
     "migrations",
     STORAGE_MAINTENANCE_COLLECTION,
   ]) {
@@ -1452,7 +1508,7 @@ async function deleteRoomStorageDocuments(firestore, rootReference, payloadColle
         if (snapshot.data()?.sourceDocument) rememberLegacyPayload(snapshot.data().sourceDocument);
         // Early v2 generations nested pages below manifests. Firestore does not
         // cascade-delete subcollections, so tombstoning must remove them too.
-        if (["catalog", "career"].includes(name)
+        if (["catalog", "career", MATCH_HISTORY_COLLECTION].includes(name)
           && !snapshot.ref.id.startsWith(DOMAIN_CONTENT_PAGE_PREFIX)
           && !snapshot.ref.id.startsWith(DOMAIN_PAGE_INDEX_PREFIX)) {
           await visitCollectionPages(snapshot.ref.collection("pages"), async (nestedPage) => {
@@ -1595,7 +1651,7 @@ async function reconcileAmbiguousCommit(
   return { status: "not-committed", currentDocument };
 }
 
-async function loadV2Room(firestore, rootReference, document, paths = null) {
+async function loadV2Room(firestore, rootReference, document, paths = null, onProgress = null) {
   assertSupportedSaveVersion(document);
   if (!isV2Document(document)) {
     throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Save v2 possui formato invalido");
@@ -1608,7 +1664,7 @@ async function loadV2Room(firestore, rootReference, document, paths = null) {
   for (let offset = 0; offset < descriptors.length; offset += 20) {
     const group = descriptors.slice(offset, offset + 20);
     sections.push(...await Promise.all(group.map((descriptor) => (
-      loadSection(firestore, rootReference, descriptor)
+      loadSection(firestore, rootReference, descriptor, onProgress)
     ))));
   }
   const room = rebuildRoomFromSections(
@@ -1670,20 +1726,170 @@ export class FirestoreRoomPersistence {
   #collection;
   #firestore;
   #garbageJobs = new Map();
+  #garbageStarts = new Map();
   #payloadCollection;
+  #creationCollection;
 
   constructor(firestore, { collectionName = "rooms", payloadCollectionName = "roomPayloads" } = {}) {
     if (!firestore) throw new Error("Firestore e obrigatorio");
     this.#firestore = firestore;
     this.#collection = firestore.collection(collectionName);
+    this.matchHistory = new FirestoreMatchHistory(firestore, this.#collection);
+    this.#creationCollection = firestore.collection(`${collectionName}CreationOperations`);
     this.#payloadCollection = firestore.collection(payloadCollectionName);
+  }
+
+  async #withRecovery(code, read) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await read();
+      } catch (error) {
+        if (!isRecoverableSaveError(error) || attempt >= 2) throw error;
+        await this.#recoverPrevious(this.#collection.doc(code), error);
+      }
+    }
+  }
+
+  async #recoverPrevious(reference, originalError) {
+    const checkpointReference = recoveryReference(reference);
+    const id = createHash("sha256").update(`${reference.path}:recovery:${Date.now()}:${Math.random()}`)
+      .digest("hex").slice(0, 32);
+    const writerLease = {
+      id,
+      stateReference: storageWriterStateReference(reference),
+      leaseReference: storageWriterLeaseReference(reference, id),
+    };
+    let observed;
+    let checkpoint;
+    let acquired = false;
+    try {
+      await this.#firestore.runTransaction(async (transaction) => {
+        acquired = false;
+        const [rootSnapshot, checkpointSnapshot, stateSnapshot] = await Promise.all([
+          transaction.get(reference), transaction.get(checkpointReference),
+          transaction.get(writerLease.stateReference),
+        ]);
+        observed = rootSnapshot.exists ? rootSnapshot.data() : null;
+        if (!observed || isDeletedRoom(observed)) return;
+        assertSupportedSaveVersion(observed);
+        if (Number(observed.saveSchemaVersion) !== SAVE_SCHEMA_VERSION) throw originalError;
+        assertMaintenanceAvailable(observed);
+        const state = stateSnapshot.exists ? stateSnapshot.data() : null;
+        assertStorageWritersAvailable(state);
+        checkpoint = checkpointSnapshot.exists ? checkpointSnapshot.data() : null;
+        const expiresAt = new Date(Date.now() + SAVE_MAINTENANCE_LEASE_MS).toISOString();
+        transaction.set(writerLease.stateReference, {
+          ...storageWriterStateAfterAcquire(null, expiresAt), recoveryLeaseId: id,
+        });
+        transaction.create(writerLease.leaseReference, {
+          id, operation: "recover-save", acquiredAt: new Date().toISOString(), expiresAt,
+        });
+        acquired = true;
+      });
+    } catch (error) {
+      const snapshot = await writerLease.leaseReference.get().catch(() => null);
+      if (!snapshot?.exists || snapshot.data()?.id !== id) throw error;
+      acquired = true;
+    }
+    if (!acquired) return;
+    let lastHeartbeat = 0;
+    const heartbeat = async () => {
+      if (Date.now() - lastHeartbeat < STORAGE_GC_HEARTBEAT_MS) return;
+      lastHeartbeat = Date.now();
+      await renewStorageWriterLease(this.#firestore, writerLease);
+    };
+    try {
+      // Recheck under the exclusive lease: a stale read is not corruption.
+      try {
+        assertV2DocumentIntegrity(observed);
+        await loadV2Room(this.#firestore, reference, observed, null, heartbeat);
+        return;
+      } catch (error) {
+        if (!isRecoverableSaveError(error)) throw error;
+      }
+      if (!checkpoint) throw originalError;
+      const { checksum: digest, ...checkpointBase } = checkpoint;
+      const previous = checkpoint.document;
+      if (checkpoint.format !== "previous-generation-v1"
+        || canonicalChecksum(checkpointBase) !== digest
+        || (checkpoint.currentCommitId !== observed.saveCommitId
+          && (!observed.saveMaintenanceLease
+            || checkpoint.currentCommitId !== documentWithMaintenanceLease(observed).saveCommitId))
+        || previous?.code !== reference.id || previous?.id !== observed.id
+        || !isV2Document(previous) || isDeletedRoom(previous)) {
+        throw persistenceError("SAVE_RECOVERY_FAILED", "Geracao anterior do save nao pode ser validada", 500,
+          { cause: originalError });
+      }
+      try {
+        assertV2DocumentIntegrity(previous);
+        await loadV2Room(this.#firestore, reference, previous, null, heartbeat);
+      } catch (error) {
+        if (!isRecoverableSaveError(error)) throw error;
+        throw persistenceError("SAVE_RECOVERY_FAILED", "Geracao anterior do save tambem esta incompleta ou corrompida", 500,
+          { cause: error });
+      }
+      const { saveCommitId: _commit, saveMaintenanceLease: _lease, ...base } = previous;
+      const audit = {
+        id, recoveredAt: new Date().toISOString(), reason: originalError.code,
+        sourceCommitId: previous.saveCommitId, replacedCommitId: observed.saveCommitId,
+      };
+      const revision = Math.max(...[previous.revision, observed.revision].map((value) => (
+        Number.isSafeInteger(value) && value >= 0 ? value : 0
+      ))) + 1;
+      const recoveredBase = {
+        ...base, previousRoomSections: [], saveRecovery: audit,
+        revision, version: revision,
+      };
+      const recovered = { ...recoveredBase, saveCommitId: canonicalChecksum(recoveredBase) };
+      try {
+        await this.#firestore.runTransaction(async (transaction) => {
+          const [rootSnapshot, checkpointSnapshot, stateSnapshot, leaseSnapshot] = await Promise.all([
+            transaction.get(reference), transaction.get(checkpointReference),
+            transaction.get(writerLease.stateReference), transaction.get(writerLease.leaseReference),
+          ]);
+          const current = rootSnapshot.exists ? rootSnapshot.data() : null;
+          const state = stateSnapshot.exists ? stateSnapshot.data() : null;
+          if (!current || isDeletedRoom(current)
+            || canonicalChecksum(current) !== canonicalChecksum(observed)
+            || !checkpointSnapshot.exists
+            || canonicalChecksum(checkpointSnapshot.data()) !== canonicalChecksum(checkpoint)
+            || state?.recoveryLeaseId !== id || !activeStorageWriterState(state)
+            || !Number.isFinite(Date.parse(leaseSnapshot.data()?.expiresAt))
+            || Date.parse(leaseSnapshot.data()?.expiresAt) <= Date.now()) {
+            throw persistenceError("SAVE_WRITE_CONFLICT", "O save mudou durante a recuperacao", 409);
+          }
+          assertMaintenanceAvailable(current);
+          releaseStorageWriterInTransaction(transaction, writerLease.stateReference, writerLease.leaseReference,
+            stateSnapshot, leaseSnapshot, id, { required: true });
+          transaction.set(reference, recovered);
+          transaction.delete(checkpointReference);
+          transaction.set(reference.collection(STORAGE_MAINTENANCE_COLLECTION).doc("recovery-last"), audit);
+        });
+      } catch (error) {
+        const latest = await reference.get().catch(() => null);
+        if (!latest?.exists || canonicalChecksum(latest.data()) !== canonicalChecksum(recovered)) throw error;
+      }
+      console.warn(JSON.stringify({ event: "save_recovered", reason: originalError.code, recoveryId: id }));
+    } finally {
+      await releaseStorageWriterLease(this.#firestore, writerLease).catch(() => {});
+    }
   }
 
   #scheduleGarbageCollection(code) {
     const existing = this.#garbageJobs.get(code);
     if (existing) return existing;
+    let startResolve;
+    const start = new Promise((resolve) => {
+      startResolve = resolve;
+    });
+    const timer = setTimeout(() => {
+      this.#garbageStarts.delete(code);
+      startResolve();
+    }, STORAGE_GC_BACKGROUND_DELAY_MS);
+    timer.unref?.();
+    this.#garbageStarts.set(code, { timer, resolve: startResolve });
     let job;
-    job = new Promise((resolve) => setImmediate(resolve))
+    job = start
       .then(async () => {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           try {
@@ -1696,6 +1902,9 @@ export class FirestoreRoomPersistence {
         return { deletedCount: 0, reachableCount: 0 };
       })
       .finally(() => {
+        const pendingStart = this.#garbageStarts.get(code);
+        if (pendingStart) clearTimeout(pendingStart.timer);
+        this.#garbageStarts.delete(code);
         if (this.#garbageJobs.get(code) === job) this.#garbageJobs.delete(code);
       });
     this.#garbageJobs.set(code, job);
@@ -1706,7 +1915,16 @@ export class FirestoreRoomPersistence {
     return job;
   }
 
-  async create(room) {
+  async findCreation(operation) {
+    const snapshot = await this.#creationCollection.doc(operation.key).get();
+    return validateCreationReceipt(snapshot.exists ? snapshot.data() : null, operation);
+  }
+
+  async create(room, { operation = null } = {}) {
+    const previous = operation && await this.findCreation(operation);
+    if (previous) return previous;
+    const receiptReference = operation ? this.#creationCollection.doc(operation.key) : null;
+    const receipt = operation ? creationReceipt(operation, room) : null;
     const reference = this.#collection.doc(room.code);
     const existing = await reference.get();
     if (existing.exists) return false;
@@ -1744,12 +1962,16 @@ export class FirestoreRoomPersistence {
       let created;
       try {
         created = await this.#firestore.runTransaction(async (transaction) => {
-          const [snapshot, stateSnapshot, leaseSnapshot] = await Promise.all([
+          const [snapshot, stateSnapshot, leaseSnapshot, receiptSnapshot] = await Promise.all([
             transaction.get(reference),
             transaction.get(writerLease.stateReference),
             transaction.get(writerLease.leaseReference),
+            receiptReference ? transaction.get(receiptReference) : null,
           ]);
-          if (snapshot.exists) {
+          const existingReceipt = operation && validateCreationReceipt(
+            receiptSnapshot?.exists ? receiptSnapshot.data() : null, operation,
+          );
+          if (snapshot.exists || existingReceipt) {
             releaseStorageWriterInTransaction(
               transaction,
               writerLease.stateReference,
@@ -1759,7 +1981,7 @@ export class FirestoreRoomPersistence {
               writerLease.id,
               { required: true },
             );
-            return false;
+            return existingReceipt || false;
           }
           releaseStorageWriterInTransaction(
             transaction,
@@ -1771,6 +1993,7 @@ export class FirestoreRoomPersistence {
             { required: true },
           );
           transaction.set(reference, document);
+          if (receiptReference) transaction.set(receiptReference, receipt);
           return true;
         });
       } catch (error) {
@@ -1782,11 +2005,11 @@ export class FirestoreRoomPersistence {
         );
         if (reconciliation.status === "committed") {
           this.#scheduleGarbageCollection(room.code);
-          return true;
+          return receipt || true;
         }
         throw error;
       }
-      if (!created) {
+      if (created !== true) {
         await reconcileAmbiguousCommit(
           this.#firestore,
           reference,
@@ -1796,8 +2019,8 @@ export class FirestoreRoomPersistence {
       }
       // Also sweeps blobs left by an interrupted/concurrent create attempt for
       // this code. Current and rollback generations stay marked.
-      this.#scheduleGarbageCollection(room.code);
-      return created;
+      if (created === true) this.#scheduleGarbageCollection(room.code);
+      return created === true ? receipt || true : created;
     } catch (error) {
       // Staging failures and ambiguous transaction failures use the same safe
       // reachability check. Never blindly remove a possibly committed manifest.
@@ -1809,8 +2032,11 @@ export class FirestoreRoomPersistence {
       );
       if (reconciliation.status === "committed") {
         this.#scheduleGarbageCollection(room.code);
-        return true;
+        return receipt || true;
       }
+      // A competing replica may have committed another code for this operation.
+      const recovered = operation && await this.findCreation(operation);
+      if (recovered) return recovered;
       throw error;
     } finally {
       await releaseStorageWriterLease(this.#firestore, writerLease).catch(() => {});
@@ -1818,6 +2044,10 @@ export class FirestoreRoomPersistence {
   }
 
   async get(code) {
+    return this.#withRecovery(code, () => this.#get(code));
+  }
+
+  async #get(code) {
     const reference = this.#collection.doc(code);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const snapshot = await reference.get();
@@ -1877,19 +2107,22 @@ export class FirestoreRoomPersistence {
         if (next === undefined) return null;
         throw reservedCodeError(code);
       }
-      if (stored) {
-        assertV2DocumentIntegrity(stored);
-        assertMaintenanceAvailable(stored);
-      }
-      if (stored && !isV2Document(stored)) {
-        await this.#migrateLegacy(reference, stored);
-        continue;
-      }
       let current;
       try {
+        if (stored) {
+          assertV2DocumentIntegrity(stored);
+          assertMaintenanceAvailable(stored);
+        }
+        if (stored && !isV2Document(stored)) {
+          await this.#migrateLegacy(reference, stored);
+          continue;
+        }
         current = stored ? await loadV2Room(this.#firestore, reference, stored) : null;
       } catch (error) {
-        if (error?.code === "SAVE_INCOMPLETE" && attempt + 1 < MUTATION_MAX_ATTEMPTS) continue;
+        if (isRecoverableSaveError(error) && attempt + 1 < MUTATION_MAX_ATTEMPTS) {
+          await this.#recoverPrevious(reference, error);
+          continue;
+        }
         throw error;
       }
       const next = mutation(clone(current));
@@ -1916,21 +2149,24 @@ export class FirestoreRoomPersistence {
         if (next === undefined) return null;
         throw reservedCodeError(code);
       }
-      if (stored) {
-        assertV2DocumentIntegrity(stored);
-        assertMaintenanceAvailable(stored);
-      }
-      if (stored && !isV2Document(stored)) {
-        await this.#migrateLegacy(reference, stored);
-        continue;
-      }
       let current;
       try {
+        if (stored) {
+          assertV2DocumentIntegrity(stored);
+          assertMaintenanceAvailable(stored);
+        }
+        if (stored && !isV2Document(stored)) {
+          await this.#migrateLegacy(reference, stored);
+          continue;
+        }
         current = stored
           ? await loadV2Room(this.#firestore, reference, stored, [...requestedPaths])
           : null;
       } catch (error) {
-        if (error?.code === "SAVE_INCOMPLETE" && attempt + 1 < MUTATION_MAX_ATTEMPTS) continue;
+        if (isRecoverableSaveError(error) && attempt + 1 < MUTATION_MAX_ATTEMPTS) {
+          await this.#recoverPrevious(reference, error);
+          continue;
+        }
         throw error;
       }
       const next = mutation(clone(current));
@@ -2021,6 +2257,7 @@ export class FirestoreRoomPersistence {
       previousDescriptors,
       previousDocument?.saveMigration,
     );
+    const checkpoint = recoveryCheckpoint(previousDocument, document);
     try {
       await this.#firestore.runTransaction(async (transaction) => {
         const [snapshot, stateSnapshot, leaseSnapshot] = await Promise.all([
@@ -2043,6 +2280,7 @@ export class FirestoreRoomPersistence {
           writerLease.id,
           { required: true },
         );
+        if (checkpoint) transaction.set(recoveryReference(reference), checkpoint);
         transaction.set(reference, document);
       });
     } catch (error) {
@@ -2076,7 +2314,7 @@ export class FirestoreRoomPersistence {
       operation: "commit-save",
     });
     try {
-    const split = splitRoomDomains(room);
+    const split = splitRoomDomains(room, { cloneValues: false });
     const previousDescriptors = previousDocument ? sectionDescriptors(previousDocument) : [];
     const previousByPath = new Map(previousDescriptors.map((descriptor) => [descriptor.path, descriptor]));
     const generation = createHash("sha256")
@@ -2128,6 +2366,7 @@ export class FirestoreRoomPersistence {
       previousDescriptors,
       previousDocument?.saveMigration,
     );
+    const checkpoint = recoveryCheckpoint(previousDocument, document);
     try {
       await this.#firestore.runTransaction(async (transaction) => {
         const [snapshot, stateSnapshot, leaseSnapshot] = await Promise.all([
@@ -2150,6 +2389,7 @@ export class FirestoreRoomPersistence {
           writerLease.id,
           { required: true },
         );
+        if (checkpoint) transaction.set(recoveryReference(reference), checkpoint);
         transaction.set(reference, document);
       });
     } catch (error) {
@@ -2181,6 +2421,12 @@ export class FirestoreRoomPersistence {
 
   async collectGarbage(code) {
     const scheduled = this.#garbageJobs.get(code);
+    const pendingStart = this.#garbageStarts.get(code);
+    if (pendingStart) {
+      clearTimeout(pendingStart.timer);
+      this.#garbageStarts.delete(code);
+      pendingStart.resolve();
+    }
     return scheduled ?? this.#collectGarbageNow(code);
   }
 
@@ -2373,12 +2619,12 @@ export class FirestoreRoomPersistence {
         if (isDeletedRoom(document)) {
           await normalizeDeletedAuthorizationFields(this.#firestore, snapshot.ref);
         } else {
-          assertV2DocumentIntegrity(document);
-          codes.push(document.code);
+          codes.push(snapshot.id);
         }
       }
     });
-    return Promise.all(codes.map((code) => this.get(code)));
+    return (await Promise.all(codes.map((code) => this.get(code))))
+      .filter((room) => room?.managerIds?.includes(managerId));
   }
 
   async listMetadataByManager(managerId) {
@@ -2394,14 +2640,25 @@ export class FirestoreRoomPersistence {
           await normalizeDeletedAuthorizationFields(this.#firestore, snapshot.ref);
           continue;
         }
-        assertV2DocumentIntegrity(document);
-        rooms.push(metadataRoomFromDocument(document));
+        let room;
+        try {
+          assertV2DocumentIntegrity(document);
+          room = metadataRoomFromDocument(document);
+        } catch (error) {
+          if (!isRecoverableSaveError(error)) throw error;
+          room = await this.getMetadata(snapshot.id);
+        }
+        if (room?.managerIds?.includes(managerId)) rooms.push(room);
       }
     });
     return rooms;
   }
 
   async getMetadata(code) {
+    return this.#withRecovery(code, () => this.#getMetadata(code));
+  }
+
+  async #getMetadata(code) {
     const snapshot = await this.#collection.doc(code).get();
     if (!snapshot.exists || isDeletedRoom(snapshot.data())) return null;
     assertV2DocumentIntegrity(snapshot.data());
@@ -2418,6 +2675,10 @@ export class FirestoreRoomPersistence {
   }
 
   async getPartial(code, { excludePaths = [] } = {}) {
+    return this.#withRecovery(code, () => this.#getPartial(code, { excludePaths }));
+  }
+
+  async #getPartial(code, { excludePaths = [] } = {}) {
     const reference = this.#collection.doc(code);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const snapshot = await reference.get();
@@ -2438,6 +2699,10 @@ export class FirestoreRoomPersistence {
   }
 
   async getPaths(code, paths = []) {
+    return this.#withRecovery(code, () => this.#getPaths(code, paths));
+  }
+
+  async #getPaths(code, paths = []) {
     const reference = this.#collection.doc(code);
     const requestedPaths = [...new Set(paths.map((path) => String(path ?? "").trim()).filter(Boolean))];
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2459,6 +2724,10 @@ export class FirestoreRoomPersistence {
   }
 
   async getSectionTail(code, path) {
+    return this.#withRecovery(code, () => this.#getSectionTail(code, path));
+  }
+
+  async #getSectionTail(code, path) {
     const reference = this.#collection.doc(code);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const snapshot = await reference.get();
@@ -2504,6 +2773,10 @@ export class FirestoreRoomPersistence {
   }
 
   async getSection(code, path, { page = null } = {}) {
+    return this.#withRecovery(code, () => this.#getSection(code, path, { page }));
+  }
+
+  async #getSection(code, path, { page = null } = {}) {
     const reference = this.#collection.doc(code);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {

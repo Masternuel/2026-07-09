@@ -1,4 +1,7 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { applyScoutingAction, scoutingClub, scoutingError, scoutingNeedsPlayer, scoutingPlayer, scoutingSnapshot, SCOUTING_READ_PATHS, SCOUTING_WRITE_PATHS } from "../game/scouting.mjs";
+import { buildClubTacticalStudy, startTacticalStudy, studyKnowledge, tacticalStudyContext, TACTICAL_STUDY_PATHS } from "../game/clubTacticalStudy.mjs";
+import { assertHistoryId, assertMatchHistoryCapacity, enqueueMatchHistory, flushMatchHistory, historyPage, historyPageOptions, initializeMatchHistory, MATCH_HISTORY_PATHS } from "./matchHistory.mjs";
 import {
   createLeagueFixtureSchedule,
   createFixtureSchedule,
@@ -9,9 +12,11 @@ import {
   fixtureIdsEqual,
   hydrateLeagueFixture,
   hydrateCompetitionFixture,
-  nextFixtureId,
   seasonCalendarStart,
 } from "../game/fixtures.mjs";
+import { aiFixturesBeforeNextManaged, pendingManagedFixtures } from "../game/officialCalendar.mjs";
+import { runRecordedAiMarketTick, publishAiMarketTick, publishAiMarketCommitFailure } from "../game/aiMarketTick.mjs";
+import { roomCreationOperation, roomCreationError } from "./roomCreationOperation.mjs";
 import { careerHasNextSeason, ensureCareerState } from "../game/career.mjs";
 import {
   applyCoachInterviewGeneratedTurn,
@@ -30,7 +35,6 @@ import { createCoachInterviewAiService } from "../services/coachInterviewAi.mjs"
 import { buildCoachCareerSnapshot } from "../services/coachCareerSnapshot.mjs";
 import {
   createCompetitionSeason,
-  listPendingCompetitionFixtures,
   recordCompetitionSeasonResult,
 } from "../game/competitionEngine.mjs";
 import {
@@ -47,7 +51,10 @@ import {
   buildLeagueRankingTimeline,
   compactLeagueRankingTimeline,
 } from "../game/rankingTimeline.mjs";
-import { simulateAiFixture } from "../game/aiMatchSimulation.mjs";
+import {
+  simulateAiFixture,
+  validateAiFixtureRosterCoverage,
+} from "../game/aiMatchSimulation.mjs";
 import { calculateTeamCohesion } from "../game/teamCohesion.mjs";
 import {
   applyMatchPlayerProgression,
@@ -122,6 +129,11 @@ import {
 import { setStaffCoachLink } from "../game/staffEngine.mjs";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const DEFAULT_CAREER_ROSTER_POLICY = Object.freeze({
+  maxAttempts: 3,
+  timeoutMs: 5_000,
+  retryDelayMs: 50,
+});
 
 function clubKey(value) {
   return String(value ?? "").trim().toLocaleUpperCase("pt-BR");
@@ -816,6 +828,48 @@ async function within(milliseconds, operation) {
   }
 }
 
+function normalizedCareerRosterPolicy(value = {}) {
+  const positiveInteger = (candidate, fallback, maximum) => {
+    const parsed = Number(candidate);
+    return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
+  };
+  const nonNegativeInteger = (candidate, fallback, maximum) => {
+    const parsed = Number(candidate);
+    return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, maximum) : fallback;
+  };
+  return {
+    maxAttempts: positiveInteger(value.maxAttempts, DEFAULT_CAREER_ROSTER_POLICY.maxAttempts, 5),
+    timeoutMs: positiveInteger(value.timeoutMs, DEFAULT_CAREER_ROSTER_POLICY.timeoutMs, 30_000),
+    retryDelayMs: nonNegativeInteger(value.retryDelayMs, DEFAULT_CAREER_ROSTER_POLICY.retryDelayMs, 2_000),
+  };
+}
+
+function careerRosterLoadFailure(message, code, status, transient = false) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  error.transient = transient;
+  return error;
+}
+
+function transientCareerRosterFailure(error) {
+  if (error?.transient === true) return true;
+  const code = String(error?.code ?? error?.message ?? "").toLocaleUpperCase("pt-BR");
+  const status = Number(error?.status);
+  return status >= 500
+    || code.includes("TIMEOUT")
+    || code.includes("UNAVAILABLE")
+    || code.includes("DEADLINE")
+    || code.includes("RESOURCE_EXHAUSTED")
+    || code.includes("ECONNRESET")
+    || code.includes("ETIMEDOUT");
+}
+
+function waitFor(milliseconds) {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function marketOutcomeForViewer(snapshot, outcome = {}) {
   const listingId = outcome.listing?.id ?? null;
   const offerId = outcome.offer?.id ?? null;
@@ -1126,6 +1180,7 @@ function simulateMissingAiFixtures(room, fixtures, completedAt, aiRosters = new 
     if (resultForLeagueFixture(room, compactFixture.leagueFixtureId)) continue;
     const fixture = hydrateLeagueFixture(room, compactFixture);
     const simulated = simulateAiFixture(room, fixture, aiRosters, completedAt);
+    enqueueMatchHistory(room, { ...simulated, completedAt }, fixture);
     room.leagueMatchResults.push(compactLeagueResult({
       leagueFixtureId: fixture.leagueFixtureId,
       score: simulated.score,
@@ -1212,10 +1267,7 @@ function engineCompetitionResult(fixture, result) {
 }
 
 function pendingManagedFixture(room) {
-  const completed = new Set((room.completedFixtureIds ?? []).map(fixtureResultKey));
-  return (room.fixtureSchedule ?? []).find(
-    (fixture) => !completed.has(fixtureResultKey(fixture.fixtureId)),
-  ) ?? null;
+  return pendingManagedFixtures(room)[0] ?? null;
 }
 
 function coordinateOfficialSchedule(room) {
@@ -1254,34 +1306,42 @@ function recordCompetitionFixture(room, fixture, result, completedAt) {
   return true;
 }
 
-function simulateAvailableCompetitionAi(room, completedAt, aiRosters = new Map()) {
-  if (!room.competitionSeason) return;
-  for (let iteration = 0; iteration < 2_048; iteration += 1) {
+function simulateOfficialAiBeforeNextManaged(room, completedAt, aiRosters = new Map(), through = null) {
+  let simulatedCount = 0;
+  for (let iteration = 0; iteration < 20_000; iteration += 1) {
     coordinateOfficialSchedule(room);
-    const pending = listPendingCompetitionFixtures(room.competitionSeason)
-      .filter((fixture) => fixture.homeClubId && fixture.awayClubId);
-    if (pending.length === 0) return;
-    const managed = pending.filter((fixture) => fixtureHasManager(room, fixture));
-    const cutoff = managed.length
-      ? Math.min(...managed.map((fixture) => Date.parse(fixture.scheduledAt) || Number.MAX_SAFE_INTEGER))
-      : Number.MAX_SAFE_INTEGER;
-    const candidates = pending.filter((fixture) => (
-      !fixtureHasManager(room, fixture)
-      && (Date.parse(fixture.scheduledAt) || 0) <= cutoff
-    ));
-    if (candidates.length === 0) return;
-    for (const compact of candidates) {
+    const candidates = aiFixturesBeforeNextManaged(room, { through });
+    const compact = candidates[0];
+    if (!compact) return simulatedCount;
+    if (compact.kind === "league") {
+      const nextCupIndex = candidates.findIndex((fixture) => fixture.kind === "competition");
+      const leagueBatch = candidates.slice(0, nextCupIndex < 0 ? undefined : nextCupIndex);
+      simulateMissingAiFixtures(room, leagueBatch, completedAt, aiRosters);
+      simulatedCount += leagueBatch.length;
+    } else {
       const fixture = hydrateCompetitionFixture(room, compact);
+      if (fixture.stageType === "knockout") {
+        const coverage = validateAiFixtureRosterCoverage(room, fixture, aiRosters);
+        if (!coverage.valid) {
+          throw new RoomError(
+            `Elenco indisponivel para o mata-mata: ${fixture.homeTeam} x ${fixture.awayTeam}`,
+            "DYNAMIC_KNOCKOUT_ROSTER_INVALID",
+            503,
+          );
+        }
+      }
       const simulated = simulateAiFixture(room, fixture, aiRosters, completedAt);
+      enqueueMatchHistory(room, { ...simulated, completedAt }, fixture);
       room.competitionSeason = recordCompetitionSeasonResult(
         room.competitionSeason,
         compact.competitionFixtureId,
         engineCompetitionResult(compact, simulated),
         { completedAt },
       );
+      simulatedCount += 1;
     }
   }
-  throw new RoomError("Competicao excedeu limite de avancos", "COMPETITION_ADVANCE_LIMIT", 409);
+  throw new RoomError("Calendario excedeu limite de avancos", "COMPETITION_ADVANCE_LIMIT", 409);
 }
 
 function compactCareerPlayer(player) {
@@ -1400,81 +1460,14 @@ function initialCareerState(room, roster) {
   };
 }
 
-function simulateAiRoundsBeforeNextHuman(
-  room,
-  humanFixture,
-  canonicalFixtureId,
-  completedAt,
-  aiRosters = new Map(),
-) {
-  if (!humanFixture?.leagueId || !Number.isInteger(humanFixture.round)) return;
-  // Leagues without a human manager advance alongside the current calendar
-  // round instead of being simulated in one large batch at season end.
-  const parallelLeagueRounds = (room.leagueFixtureSchedule ?? []).filter((fixture) => (
-    clubKey(fixture.leagueId) !== clubKey(humanFixture.leagueId)
-    && Number.isInteger(fixture.round)
-    && fixture.round <= humanFixture.round
-  ));
-  simulateMissingAiFixtures(room, parallelLeagueRounds, completedAt, aiRosters);
-  const completed = new Set((room.completedFixtureIds ?? []).map(fixtureResultKey));
-  completed.add(fixtureResultKey(canonicalFixtureId));
-  const nextHuman = (room.fixtureSchedule ?? [])
-    .filter((fixture) => (
-      clubKey(fixture.leagueId) === clubKey(humanFixture.leagueId)
-      && !completed.has(fixtureResultKey(fixture.fixtureId))
-      && Number.isInteger(fixture.round)
-      && fixture.round >= humanFixture.round
-    ))
-    .sort((left, right) => left.round - right.round)[0] ?? null;
-  const skippedRounds = (room.leagueFixtureSchedule ?? []).filter((fixture) => (
-    clubKey(fixture.leagueId) === clubKey(humanFixture.leagueId)
-    && fixture.round > humanFixture.round
-    && (!nextHuman || fixture.round < nextHuman.round)
-  ));
-  simulateMissingAiFixtures(room, skippedRounds, completedAt, aiRosters);
-}
-
 function aiFixturesForCompletion(room, fixtureId) {
   const humanFixture = (room.fixtureSchedule ?? []).find(
     (fixture) => fixtureIdsEqual(fixture.fixtureId, fixtureId),
   );
   if (!humanFixture) return [];
-  const upcomingFixtureId = nextFixtureId(room, humanFixture.fixtureId);
-  if (!upcomingFixtureId) {
-    return (room.leagueFixtureSchedule ?? []).filter((fixture) => (
-      !fixtureHasManager(room, fixture)
-      && !resultForLeagueFixture(room, fixture.leagueFixtureId)
-    ));
-  }
-  const candidates = (room.leagueFixtureSchedule ?? []).filter((fixture) => (
-    clubKey(fixture.leagueId) === clubKey(humanFixture.leagueId)
-    && fixture.round === humanFixture.round
-  ));
-  candidates.push(...(room.leagueFixtureSchedule ?? []).filter((fixture) => (
-    clubKey(fixture.leagueId) !== clubKey(humanFixture.leagueId)
-    && Number.isInteger(fixture.round)
-    && fixture.round <= humanFixture.round
-  )));
-  const completed = new Set((room.completedFixtureIds ?? []).map(fixtureResultKey));
-  completed.add(fixtureResultKey(humanFixture.fixtureId));
-  const nextHuman = (room.fixtureSchedule ?? [])
-    .filter((fixture) => (
-      clubKey(fixture.leagueId) === clubKey(humanFixture.leagueId)
-      && !completed.has(fixtureResultKey(fixture.fixtureId))
-      && Number.isInteger(fixture.round)
-      && fixture.round >= humanFixture.round
-    ))
-    .sort((left, right) => left.round - right.round)[0] ?? null;
-  candidates.push(...(room.leagueFixtureSchedule ?? []).filter((fixture) => (
-    clubKey(fixture.leagueId) === clubKey(humanFixture.leagueId)
-    && fixture.round > humanFixture.round
-    && (!nextHuman || fixture.round < nextHuman.round)
-  )));
-  return [...new Map(candidates.map((fixture) => [fixture.leagueFixtureId, fixture])).values()]
-    .filter((fixture) => (
-      !fixtureHasManager(room, fixture)
-      && !resultForLeagueFixture(room, fixture.leagueFixtureId)
-    ));
+  return aiFixturesBeforeNextManaged(room, {
+    excludedFixtureId: fixtureId, through: humanFixture.scheduledAt,
+  });
 }
 
 function assertScheduleSize(room) {
@@ -1508,6 +1501,9 @@ const VIEWER_EXCLUDED_PATHS = Object.freeze([
   "professionalLeaveState",
   "seasonHistory",
   "completedMatches",
+  ...MATCH_HISTORY_PATHS,
+  ...SCOUTING_READ_PATHS,
+  "tacticalStudyState",
 ]);
 
 // Private coach career reads use only the aggregates consumed by
@@ -1618,6 +1614,11 @@ export class RoomStore {
   #now;
   #catalogStore;
   #coachInterviewAi;
+  #careerRosterPolicy;
+  #aiMarketExecutor;
+  #aiMarketTelemetry;
+  #historyArchiveDrains = new Map();
+  #tacticalStudyCache = new Map();
 
   constructor({
     persistence,
@@ -1625,6 +1626,10 @@ export class RoomStore {
     now = () => new Date(),
     catalogStore = null,
     coachInterviewAi = null,
+    careerRosterPolicy = null,
+    aiMarketExecutor = runAiTransferTick,
+    logger = null,
+    metrics = null,
   } = {}) {
     if (!persistence) throw new Error("RoomStore requer uma camada de persistencia explicita");
     this.#persistence = persistence;
@@ -1632,6 +1637,9 @@ export class RoomStore {
     this.#now = now;
     this.#catalogStore = catalogStore;
     this.#coachInterviewAi = coachInterviewAi ?? createCoachInterviewAiService({});
+    this.#careerRosterPolicy = normalizedCareerRosterPolicy(careerRosterPolicy ?? {});
+    this.#aiMarketExecutor = aiMarketExecutor;
+    this.#aiMarketTelemetry = { logger, metrics };
   }
 
   async createRoom({
@@ -1643,7 +1651,16 @@ export class RoomStore {
     seasonLength,
     unlimitedSeasons = false,
     maxManagers,
+    operationId,
+    requestId,
   }) {
+    const operation = roomCreationOperation({
+      name, creatorId, clubId, activeLeagues, seasonLength, unlimitedSeasons, maxManagers, operationId, requestId,
+    });
+    if (operation) {
+      const receipt = await this.#persistence.findCreation(operation);
+      if (receipt) return this.#createdRoom(receipt, creatorId);
+    }
     const ownerCatalog = await catalogForOwner(this.#catalogStore, creatorId);
     const [competitionCatalog, tournamentCatalog] = await Promise.all([
       this.#loadCompetitionCatalog(
@@ -1707,9 +1724,21 @@ export class RoomStore {
           joinedAt: createdAt,
         }],
       };
-      if (await this.#persistence.create(room)) return this.#snapshot(room);
+      const created = await this.#persistence.create(room, { operation });
+      if (created) return operation ? this.#createdRoom(created, creatorId) : this.#snapshot(room);
     }
     throw new RoomError("Nao foi possivel gerar o codigo da sala", "CODE_EXHAUSTED", 503);
+  }
+
+  async #createdRoom(receipt, ownerId) {
+    const room = await this.#persistence.get(receipt.code);
+    if (!room || room.id !== receipt.roomId) {
+      throw roomCreationError("A sala desta operacao foi excluida ou nao esta mais disponivel", "ROOM_CREATION_GONE", 410);
+    }
+    if (room.ownerId !== ownerId) {
+      throw roomCreationError("Recibo de criacao inconsistente", "ROOM_CREATION_RECEIPT_INVALID", 503);
+    }
+    return this.#snapshot(room);
   }
 
   async listRoomsForManager(managerId) {
@@ -1753,6 +1782,70 @@ export class RoomStore {
     const room = await this.#persistence.get(this.#normalizeCode(code));
     if (!room) throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
     return room;
+  }
+
+  async #historyRoom(code, managerId) {
+    let room = await this.requireMembershipPaths(code, managerId, MATCH_HISTORY_PATHS);
+    if (room.matchHistoryVersion !== 1) {
+      room = await this.#persistence.mutatePaths(room.code, [...MATCH_HISTORY_PATHS, "completedMatches", "lastCompletedMatch"], (current) => {
+        if (!current?.managerIds?.includes(managerId)) throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+        initializeMatchHistory(current);
+        return current;
+      });
+    }
+    const archiveError = await this.#flushHistory(room);
+    room = await this.requireMembershipPaths(code, managerId, MATCH_HISTORY_PATHS);
+    return { room, archiveError };
+  }
+
+  async getMatchHistory(code, managerId, query = {}) {
+    // Validate membership and pagination before allowing legacy migration.
+    const authorized = await this.requireMembershipPaths(code, managerId, []);
+    const options = historyPageOptions(authorized.id ?? authorized.code, query);
+    const { room, archiveError } = await this.#historyRoom(code, managerId);
+    const archived = await this.#persistence.matchHistory.list(room, options);
+    return { ...historyPage(room.id ?? room.code, archived, room.matchHistoryPending ?? [], options), archiveError };
+  }
+
+  async getMatchHistoryDetail(code, managerId, id) {
+    assertHistoryId(id);
+    const { room } = await this.#historyRoom(code, managerId);
+    const archived = await this.#persistence.matchHistory.get(room, id);
+    const pending = (room.matchHistoryPending ?? []).find((entry) => entry.id === id);
+    const record = archived?.detailsAvailable ? archived : pending ?? archived;
+    if (!record) throw new RoomError("Partida nao encontrada no historico", "MATCH_HISTORY_NOT_FOUND", 404);
+    return structuredClone(record);
+  }
+
+  async #flushHistory(room) {
+    try {
+      const remaining = await flushMatchHistory(this.#persistence, room);
+      if (remaining) this.#drainHistory(room.code);
+      return null;
+    } catch (error) {
+      // The match and durable outbox already committed. Never report it as
+      // failed or discard its events just because the archive needs a retry.
+      const context = { code: room.code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED", pending: room.matchHistoryPending?.length ?? 0 };
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.archive_pending", context); } catch { /* Logging cannot undo a committed match. */ }
+      return { code: context.errorCode, message: "Arquivamento pendente; detalhes preservados no save para nova tentativa" };
+    }
+  }
+
+  #drainHistory(code) {
+    if (this.#historyArchiveDrains.has(code)) return;
+    const drain = async () => {
+      // Extra batches run outside the match response. On shutdown/failure the
+      // persisted queue is retried when the room is next used or queried.
+      for (;;) {
+        const room = await this.#persistence.getPaths(code, MATCH_HISTORY_PATHS);
+        if (!room || !(room.matchHistoryPending?.length)) return;
+        if (!(await flushMatchHistory(this.#persistence, room))) return;
+      }
+    };
+    const job = drain().catch((error) => {
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.drain_failed", { code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED" }); } catch { /* Durable queue remains the source of truth. */ }
+    }).finally(() => this.#historyArchiveDrains.delete(code));
+    this.#historyArchiveDrains.set(code, job);
   }
 
   async requireMembership(code, managerId) {
@@ -2012,6 +2105,14 @@ export class RoomStore {
   }
 
   async prepareMatch(code, managerId, requestedFixtureId) {
+    const preview = await this.requireRoom(code);
+    const due = aiFixturesBeforeNextManaged(preview);
+    const aiRosters = due.length ? await this.#loadAiRosters(preview, [
+      ...due,
+      ...(preview.competitionSeason?.competitions ?? []).flatMap((competition) => (
+        (competition.participants ?? []).map((participant) => ({ homeClubId: participant.id }))
+      )),
+    ]) : new Map();
     let migrated = false;
     const room = await this.#mutate(code, (current) => {
       if (!current.managerIds.includes(managerId)) {
@@ -2020,7 +2121,17 @@ export class RoomStore {
       const careerChanged = ensureCareerState(current, this.#now());
       const fixtureChanged = ensureFixtureSchedule(current);
       if (fixtureChanged) assertScheduleSize(current);
-      const changed = careerChanged || fixtureChanged;
+      const previousResults = new Set((current.leagueMatchResults ?? []).map((entry) => fixtureResultKey(entry.leagueFixtureId)));
+      const aiChanged = current.status === "active" && due.length > 0
+        ? simulateOfficialAiBeforeNextManaged(current, this.#now().toISOString(), aiRosters) > 0 : false;
+      if (aiChanged) {
+        const occurredAt = careerDateFor(current, this.#now());
+        advanceCompletedLeagueLoanRounds(current, previousResults, current.currentSeason, occurredAt);
+        recordNewLeagueMatchEconomies(current, previousResults, occurredAt);
+        awardCompletedCompetitionPrizes(current, { occurredAt });
+        rebuildManagedSchedule(current);
+      }
+      const changed = careerChanged || fixtureChanged || aiChanged;
       migrated ||= changed;
       return changed ? current : undefined;
     });
@@ -2083,6 +2194,19 @@ export class RoomStore {
       room.competitionSeason = createRoomCompetitionSeason(room);
       room.leagueFixtureSchedule = createLeagueFixtureSchedule(room);
       room.leagueMatchResults = [];
+      rebuildManagedSchedule(room);
+      assertScheduleSize(room);
+      const initialAiRosters = new Map();
+      for (const player of initialCareerRoster) {
+        const key = clubKey(player.clubId);
+        const roster = initialAiRosters.get(key) ?? [];
+        roster.push(player);
+        initialAiRosters.set(key, roster);
+      }
+      simulateOfficialAiBeforeNextManaged(room, room.startedAt, initialAiRosters);
+      advanceCompletedLeagueLoanRounds(room, new Set(), room.currentSeason, room.startedAt);
+      recordNewLeagueMatchEconomies(room, new Set(), room.startedAt);
+      awardCompletedCompetitionPrizes(room, { occurredAt: room.startedAt });
       rebuildManagedSchedule(room);
       assertScheduleSize(room);
       room.lastCompletedRound = null;
@@ -2547,6 +2671,77 @@ export class RoomStore {
       return current;
     });
     return marketOutcomeForViewer(await this.#marketSnapshotFor(room, managerId), outcome);
+  }
+
+  async getScoutingSnapshot(code, managerId, playerId = null) {
+    const room = await this.requireMembershipPaths(code, managerId, SCOUTING_READ_PATHS);
+    return scoutingSnapshot(room, managerId, playerId);
+  }
+
+  async getOpponentStudy(code, managerId, { clubId, depth = "standard" } = {}, catalogStore = this.#catalogStore) {
+    const room = await this.requireMembershipPaths(code, managerId, TACTICAL_STUDY_PATHS);
+    const context = tacticalStudyContext(room, managerId, clubId, this.#now());
+    if (!context) return null;
+    let players = [];
+    if (studyKnowledge(room, context).available > 0) {
+      const catalog = await catalogForOwner(catalogStore, room.catalogOwnerId || room.ownerId);
+      let incomingError;
+      const guardedCatalog = { async get(collection, id) {
+        try {
+          const player = await catalog?.get?.(collection, id);
+          if (!player || String(player.id).toUpperCase() !== String(id).toUpperCase()) throw scoutingError("Dados de atleta contratado indisponíveis.", "STUDY_PLAYER_UNAVAILABLE", 503);
+          return player;
+        } catch (error) { incomingError = error; throw error; }
+      }, async listPlayers(id) {
+        if (typeof catalog?.listPlayers !== "function") throw scoutingError("Catálogo indisponível para análise.", "STUDY_CATALOG_UNAVAILABLE", 503);
+        const result = await catalog.listPlayers(id);
+        if (!Array.isArray(result?.players)) throw scoutingError("Catálogo retornou um elenco inválido.", "STUDY_ROSTER_INVALID", 503);
+        return result;
+      } };
+      const roster = await listRoomPlayers(guardedCatalog, room, context.target.id);
+      // roomRoster tolerates missing incoming snapshots for legacy callers; studies cannot silently omit them.
+      if (incomingError) throw incomingError;
+      players = roster.players;
+      if (!players.length) throw scoutingError("Elenco indisponível para produzir o relatório.", "STUDY_ROSTER_EMPTY", 409);
+    }
+    return buildClubTacticalStudy(room, context, players, depth, this.#tacticalStudyCache);
+  }
+
+  async startOpponentStudy(code, managerId, input) {
+    await this.requireMembershipPaths(code, managerId, []);
+    await this.#persistence.mutatePaths(this.#normalizeCode(code), TACTICAL_STUDY_PATHS, (room) => {
+      if (!startTacticalStudy(room, managerId, input, this.#now())) return undefined;
+      room.revision = (room.revision || room.version || 0) + 1;
+      room.version = room.revision;
+      room.updatedAt = this.#now().toISOString();
+      return room;
+    });
+  }
+
+  async updateScouting(code, managerId, input) {
+    const preview = await this.requireMembershipPaths(code, managerId, SCOUTING_WRITE_PATHS);
+    scoutingClub(preview, managerId, input.clubId);
+    let fallback = null;
+    if (scoutingNeedsPlayer(preview, managerId, input) && !scoutingPlayer(preview, input.playerId)) {
+      const catalog = await catalogForOwner(this.#catalogStore, preview.catalogOwnerId || preview.ownerId);
+      if (typeof catalog?.get !== "function") throw scoutingError("Catalogo de jogadores indisponivel", "SCOUTING_CATALOG_UNAVAILABLE", 503);
+      // A catalog timeout is not equivalent to a missing player.
+      fallback = await catalog.get("players", input.playerId);
+      if (!fallback) throw scoutingError("Jogador nao encontrado", "SCOUTING_PLAYER_NOT_FOUND", 404);
+    }
+    let outcome;
+    let snapshot;
+    await this.#persistence.mutatePaths(this.#normalizeCode(code), SCOUTING_WRITE_PATHS, (current) => {
+      outcome = applyScoutingAction(current, managerId, input, fallback, this.#now());
+      if (!outcome.duplicate) {
+        current.revision = (current.revision || current.version || 0) + 1;
+        current.version = current.revision;
+        current.updatedAt = this.#now().toISOString();
+      }
+      snapshot = scoutingSnapshot(current, managerId, input.playerId);
+      return outcome.duplicate ? undefined : current;
+    });
+    return { snapshot, ...outcome };
   }
 
   async respondMarketOffer(code, managerId, input) {
@@ -3170,9 +3365,14 @@ export class RoomStore {
 
   async completeMatch(code, fixtureId, result) {
     const previewRoom = await this.requireRoom(code);
+    const competitionParticipantRefs = (previewRoom.competitionSeason?.competitions ?? [])
+      .flatMap((competition) => (competition.participants ?? []).map((participant) => ({
+        homeClubId: participant?.id,
+      })));
     const previewAiFixtures = [
       ...aiFixturesForCompletion(previewRoom, fixtureId),
       ...(previewRoom.competitionSeason?.fixtures ?? []),
+      ...competitionParticipantRefs,
     ];
     const aiRosters = await this.#loadAiRosters(
       previewRoom,
@@ -3186,7 +3386,10 @@ export class RoomStore {
     const careerRoster = remainingManagedFixtures.length === 0
       ? await this.#loadCareerRoster(previewRoom)
       : [];
+    let marketTickRecord = null;
     const room = await this.#mutate(code, (current) => {
+      // A CAS retry discards the previous callback's uncommitted telemetry.
+      marketTickRecord = null;
       if (current.status !== "active") {
         throw new RoomError("A sala nao esta ativa", "ROOM_NOT_ACTIVE", 409);
       }
@@ -3215,6 +3418,12 @@ export class RoomStore {
       let upcomingFixtureId = null;
       const completedAt = this.#now().toISOString();
       const careerCompletedAt = humanFixture?.scheduledAt ?? careerDateFor(current, completedAt);
+      if (simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters) > 0) {
+        const next = rebuildManagedSchedule(current);
+        if (!fixtureIdsEqual(next?.fixtureId, canonicalFixtureId)) {
+          throw new RoomError("O calendario mudou; prepare a proxima partida novamente", "FIXTURE_NOT_CURRENT", 409);
+        }
+      }
       const lifecycleCallbacks = professionalLifecycleCallbacks(careerCompletedAt);
       const leaveProgress = processProfessionalLeaveDate(
         current,
@@ -3292,25 +3501,8 @@ export class RoomStore {
         }));
       }
 
-      const fullFixture = (current.leagueFixtureSchedule ?? []).find(
-        (fixture) => fixtureResultKey(fixture.leagueFixtureId) === fixtureResultKey(leagueFixtureId),
-      );
-      if (fullFixture) {
-        const roundFixtures = current.leagueFixtureSchedule.filter((fixture) => (
-          clubKey(fixture.leagueId) === clubKey(fullFixture.leagueId)
-          && fixture.round === fullFixture.round
-        ));
-        simulateMissingAiFixtures(current, roundFixtures, completedAt, aiRosters);
-        simulateAiRoundsBeforeNextHuman(
-          current,
-          humanFixture,
-          canonicalFixtureId,
-          completedAt,
-          aiRosters,
-        );
-      }
       recordCompetitionFixture(current, humanFixture, result, completedAt);
-      simulateAvailableCompetitionAi(current, completedAt, aiRosters);
+      simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
       // Avance uma vez cada rodada realmente concluida, inclusive nas ligas
       // simuladas pela IA. Liquide depois para nao consumir imediatamente uma
       // rodada de emprestimos fechados neste mesmo ciclo.
@@ -3411,8 +3603,8 @@ export class RoomStore {
       current.completedFixtureIds.push(canonicalFixtureId);
       upcomingFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
       summary.nextFixtureId = upcomingFixtureId;
-      // Keep detailed match data only on the latest result. Long careers can
-      // otherwise exceed Firestore's document limit after a few seasons.
+      // Existing selectors keep compact summaries. The committed outbox below
+      // preserves full sporting details in the separate paginated archive.
       current.completedMatches.push(compactCompletedMatch(summary));
       const humanRoundResult = {
         ...summary,
@@ -3507,33 +3699,28 @@ export class RoomStore {
       upcomingFixtureId = nextAfterCoachChanges?.fixtureId ?? null;
       summary.nextFixtureId = upcomingFixtureId;
 
-      // Uma unica operacao autonoma de mercado a cada quatro rodadas completas.
-      // Falhas do mercado ficam isoladas: nunca impedem salvar o resultado ou
-      // avancar calendario/temporada.
+      // Receipt and market effects commit together with the match result.
       if (summary.roundSummary.complete && Number.isInteger(humanFixture?.round)) {
-        try {
-          const aiMarketTick = runAiTransferTick(current, {
-            players: aiMarketPlayers,
-            seasonNumber: current.currentSeason,
-            round: humanFixture.round,
-            leagueId: humanFixture.leagueId,
-          }, completedAt);
-          if (aiMarketTick.changed) summary.aiMarketTransfer = structuredClone(aiMarketTick);
-        } catch {
-          // O motor transacional ja restaura qualquer tentativa parcial.
+        const aiMarketTick = runRecordedAiMarketTick(current, {
+          players: aiMarketPlayers,
+          seasonNumber: current.currentSeason,
+          round: humanFixture.round,
+          leagueId: humanFixture.leagueId,
+        }, completedAt, { execute: this.#aiMarketExecutor });
+        if (!aiMarketTick.duplicate) marketTickRecord = aiMarketTick.record;
+        summary.aiMarketTick = structuredClone(aiMarketTick.record);
+        if (aiMarketTick.changed) {
+          const { record: _record, ...transfer } = aiMarketTick;
+          summary.aiMarketTransfer = structuredClone(transfer);
         }
+        // Rollback restores cloned branches, including lastCompletedMatch.
+        current.lastCompletedMatch = summary;
       }
 
       if (!upcomingFixtureId) {
         // Odd-sized leagues may leave the manager on a BYE while AI clubs play.
         // Finish those AI-only rounds before closing or rolling the season.
-        simulateMissingAiFixtures(
-          current,
-          current.leagueFixtureSchedule ?? [],
-          completedAt,
-          aiRosters,
-        );
-        simulateAvailableCompetitionAi(current, completedAt, aiRosters);
+        simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
         competitionAwards.push(...awardCompletedCompetitionPrizes(current, {
           occurredAt: careerCompletedAt,
         }).filter((award) => award.title?.created || award.prize?.applied));
@@ -3692,8 +3879,19 @@ export class RoomStore {
       }
       syncMarketCareerSideEffects(current);
       assertScheduleSize(current);
+      enqueueMatchHistory(current, {
+        ...summary,
+        competition: humanFixture?.competition,
+        competitionId: humanFixture?.competitionId ?? humanFixture?.tournamentId ?? humanFixture?.leagueId ?? null,
+        scheduledAt: humanFixture?.scheduledAt,
+        round: humanFixture?.round,
+      });
       return current;
+    }).catch((error) => {
+      publishAiMarketCommitFailure(marketTickRecord, error, this.#aiMarketTelemetry);
+      throw error;
     });
+    publishAiMarketTick(marketTickRecord, this.#aiMarketTelemetry);
     return { room, summary: this.#snapshot(room.lastCompletedMatch) };
   }
 
@@ -4055,27 +4253,118 @@ export class RoomStore {
 
   async #loadCareerRoster(room, injectedOwnerCatalog = null) {
     let ownerCatalog = injectedOwnerCatalog;
-    try {
-      ownerCatalog ??= await within(5_000, catalogForOwner(
+    if (!ownerCatalog && this.#catalogStore) {
+      ownerCatalog = await this.#loadCareerRosterWithRetry(
+        () => within(this.#careerRosterPolicy.timeoutMs, catalogForOwner(
           this.#catalogStore,
           room.catalogOwnerId || room.ownerId,
-        ));
-    } catch {
-      return [];
+        )),
+        null,
+      );
     }
-    if (typeof ownerCatalog?.listPlayers !== "function") return [];
-    const clubIds = careerClubs(room).map((club) => club.id);
-    const rosters = await Promise.all(clubIds.map(async (clubId) => {
-      try {
-        const response = await within(5_000, listRoomPlayers(ownerCatalog, room, clubId));
-        return Array.isArray(response) ? response : response?.players ?? [];
-      } catch {
-        return [];
+    // RoomStore unit scenarios may run without any catalog adapter. Once a
+    // catalog is configured, missing roster support is an availability error.
+    if (!ownerCatalog && !this.#catalogStore) return [];
+    if (typeof ownerCatalog?.listPlayers !== "function") {
+      throw new RoomError(
+        "Catalogo de jogadores indisponivel",
+        "CAREER_ROSTER_UNAVAILABLE",
+        503,
+      );
+    }
+    const clubIds = [...new Map(careerClubs(room)
+      .filter((club) => club?.id)
+      .map((club) => [clubKey(club.id), club.id])).values()];
+    const rosters = await Promise.all(clubIds.map((clubId) => (
+      this.#loadCareerClubRoster(ownerCatalog, room, clubId)
+    )));
+    const players = new Map();
+    for (const roster of rosters) {
+      for (const player of roster.players) {
+        const playerId = String(player.id);
+        const previousClubId = players.get(playerId)?.clubId;
+        if (previousClubId && clubKey(previousClubId) !== clubKey(roster.clubId)) {
+          throw new RoomError(
+            `Jogador ${playerId} aparece nos elencos de ${previousClubId} e ${roster.clubId}`,
+            "CAREER_ROSTER_DUPLICATE_PLAYER",
+            409,
+          );
+        }
+        players.set(playerId, { clubId: roster.clubId, player });
       }
-    }));
-    return [...new Map(rosters.flat()
-      .filter((player) => player?.id)
-      .map((player) => [String(player.id), player])).values()];
+    }
+    return [...players.values()].map(({ player }) => player);
+  }
+
+  async #loadCareerClubRoster(ownerCatalog, room, clubId) {
+    return this.#loadCareerRosterWithRetry(async () => {
+      const response = await within(
+        this.#careerRosterPolicy.timeoutMs,
+        listRoomPlayers(ownerCatalog, room, clubId),
+      );
+      const suppliedPlayers = Array.isArray(response) ? response : response?.players;
+      if (!Array.isArray(suppliedPlayers)) {
+        throw careerRosterLoadFailure(
+          `Catalogo retornou elenco invalido para ${clubId}`,
+          "CAREER_ROSTER_PARTIAL",
+          503,
+          true,
+        );
+      }
+      if (suppliedPlayers.length === 0) {
+        throw careerRosterLoadFailure(
+          `Clube ${clubId} nao possui elenco ativo`,
+          "CAREER_ROSTER_MISSING",
+          409,
+        );
+      }
+      const players = suppliedPlayers.filter((player) => String(player?.id ?? "").trim());
+      const uniqueIds = new Set(players.map((player) => String(player.id)));
+      const expectedCount = Number(response?.count);
+      if (
+        players.length !== suppliedPlayers.length
+        || uniqueIds.size !== players.length
+        || (Number.isInteger(expectedCount) && expectedCount !== suppliedPlayers.length)
+      ) {
+        throw careerRosterLoadFailure(
+          `Elenco de ${clubId} foi carregado parcialmente`,
+          "CAREER_ROSTER_PARTIAL",
+          503,
+          true,
+        );
+      }
+      return { clubId, players };
+    }, clubId);
+  }
+
+  async #loadCareerRosterWithRetry(operation, clubId) {
+    let lastError;
+    for (let attempt = 1; attempt <= this.#careerRosterPolicy.maxAttempts; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (!transientCareerRosterFailure(error)) {
+          throw error instanceof RoomError
+            ? error
+            : new RoomError(error.message, error.code ?? "CAREER_ROSTER_LOAD_FAILED", error.status ?? 409);
+        }
+        if (attempt < this.#careerRosterPolicy.maxAttempts) {
+          await waitFor(this.#careerRosterPolicy.retryDelayMs * attempt);
+        }
+      }
+    }
+    const timedOut = String(lastError?.code ?? lastError?.message ?? "").includes("TIMEOUT");
+    const partial = lastError?.code === "CAREER_ROSTER_PARTIAL";
+    throw new RoomError(
+      clubId
+        ? `Nao foi possivel carregar o elenco de ${clubId} apos ${this.#careerRosterPolicy.maxAttempts} tentativas`
+        : `Nao foi possivel carregar a base apos ${this.#careerRosterPolicy.maxAttempts} tentativas`,
+      timedOut
+        ? "CAREER_ROSTER_LOAD_TIMEOUT"
+        : partial ? "CAREER_ROSTER_PARTIAL" : "CAREER_ROSTER_LOAD_FAILED",
+      503,
+    );
   }
 
   #includeManagerLeagues(room) {
@@ -4244,6 +4533,8 @@ export class RoomStore {
     const normalizedCode = this.#normalizeCode(code);
     const room = await this.#persistence.mutate(normalizedCode, (current) => {
       if (!current) throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
+      assertMatchHistoryCapacity(current);
+      initializeMatchHistory(current);
       let next = mutation(current);
       if (next === undefined) return undefined;
       const lifecycleNow = careerDateFor(next, this.#now());
@@ -4258,7 +4549,11 @@ export class RoomStore {
       next.version = next.revision;
       next.updatedAt = this.#now().toISOString();
       return next;
+    }).catch((error) => {
+      if (error?.code === "MATCH_HISTORY_BACKLOG") this.#drainHistory(normalizedCode);
+      throw error;
     });
+    await this.#flushHistory(room);
     return this.#snapshot(room);
   }
 

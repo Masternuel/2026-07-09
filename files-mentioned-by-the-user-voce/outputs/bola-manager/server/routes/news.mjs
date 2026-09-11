@@ -437,13 +437,16 @@ export function createNewsRouter(store, newsStore, socialAi, {
       });
       broadcast(publicPost(post));
     }
-    await Promise.resolve(broadcastRoom(room));
-
     response.status(alreadySubmitted ? 200 : 201).json({
       submission,
       alreadySubmitted,
       effects: submission.effects,
       post: publicPost(post),
+    });
+    setImmediate(() => {
+      Promise.resolve(broadcastRoom(room)).catch((error) => {
+        logger.error?.("room.broadcast_failed", { code: room.code, error });
+      });
     });
   }));
 

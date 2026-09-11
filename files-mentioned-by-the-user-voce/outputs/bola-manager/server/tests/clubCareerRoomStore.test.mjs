@@ -40,13 +40,25 @@ function testCatalog() {
       },
     ],
   }];
+  const positions = ["GOL", "LD", "ZAG", "ZAG", "LE", "VOL", "MC", "MEI", "PD", "PE", "ATA"];
+  const players = leagues[0].clubs.flatMap((club) => positions.map((position, index) => ({
+    id: `${club.id}-P${index + 1}`,
+    clubId: club.id,
+    name: `${club.name} ${index + 1}`,
+    position,
+    age: 20 + index,
+    nationality: "BRA",
+    overall: 10,
+    active: true,
+  })));
   return {
     leagues,
     async listCompetitionCatalog() {
       return structuredClone(leagues);
     },
-    async listPlayers() {
-      return { players: [], count: 0, source: "career-test" };
+    async listPlayers(clubId) {
+      const roster = players.filter((player) => player.clubId === clubId);
+      return { players: structuredClone(roster), count: roster.length, source: "career-test" };
     },
   };
 }

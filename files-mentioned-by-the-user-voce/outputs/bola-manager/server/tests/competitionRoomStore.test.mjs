@@ -6,6 +6,7 @@ import { RoomStore } from "../store/roomStore.mjs";
 const OWNER_ID = "competition-owner";
 const CLUB_IDS = ["A", "B", "C", "D"];
 const POSITIONS = ["GOL", "LD", "ZAG", "ZAG", "LE", "VOL", "MC", "MEI", "PD", "PE", "ATA"];
+const SQUAD_POSITIONS = [...POSITIONS, "GOL", "ZAG", "LD", "VOL", "MC", "ATA"];
 const ATTRIBUTE_KEYS = [
   "velocidade", "chute", "drible", "nocao", "defesa", "passe", "peBom", "peRuim",
   "forca", "resistencia", "impulsao", "reflexos", "posicionamentoGol", "saidaGol", "penaltis",
@@ -16,6 +17,8 @@ function attributes(value = 11) {
 }
 
 function catalogFixture() {
+  const unavailableClubIds = new Set();
+  const rosterRequests = [];
   const clubs = CLUB_IDS.map((id, index) => ({
     id,
     name: `Clube ${id}`,
@@ -59,7 +62,7 @@ function catalogFixture() {
       prizeMoney: 3_000_000,
     },
   ];
-  const players = clubs.flatMap((club) => POSITIONS.map((position, index) => ({
+  const players = clubs.flatMap((club) => SQUAD_POSITIONS.map((position, index) => ({
     id: `${club.id}-P${index + 1}`,
     clubId: club.id,
     name: `${club.name} ${index + 1}`,
@@ -84,9 +87,14 @@ function catalogFixture() {
       return { tournaments: structuredClone(tournaments), count: tournaments.length };
     },
     async listPlayers(clubId) {
-      const roster = players.filter((player) => player.clubId === clubId);
+      rosterRequests.push(clubId);
+      const roster = unavailableClubIds.has(clubId)
+        ? []
+        : players.filter((player) => player.clubId === clubId);
       return { players: structuredClone(roster), count: roster.length, source: "competition-test" };
     },
+    unavailableClubIds,
+    rosterRequests,
   };
 }
 
@@ -94,23 +102,36 @@ function harness({ seasonLength = 2 } = {}) {
   const persistence = new MemoryRoomPersistence();
   const catalog = catalogFixture();
   let now = new Date("2026-07-16T12:00:00.000Z");
-  const store = new RoomStore({
-    persistence,
-    catalogStore: {
-      forOwner(ownerId) {
-        assert.equal(ownerId, OWNER_ID);
-        return catalog;
-      },
+  const catalogStore = {
+    forOwner(ownerId) {
+      assert.equal(ownerId, OWNER_ID);
+      return catalog;
     },
+  };
+  const storeOptions = {
+    persistence,
+    catalogStore,
     codeFactory: () => "BOLA-CP01",
     now: () => now,
-  });
+  };
+  const store = new RoomStore(storeOptions);
   return {
     store,
     catalog,
+    persistence,
+    reloadStore() { return new RoomStore(storeOptions); },
     seasonLength,
     tick() { now = new Date(now.getTime() + 60_000); },
   };
+}
+
+function useThreeClubKnockout(context) {
+  const knockout = context.catalog.tournaments.find((tournament) => tournament.id === "TEST-KO");
+  context.catalog.tournaments.splice(0, context.catalog.tournaments.length, {
+    ...knockout,
+    teamCount: 3,
+    teamIds: ["B", "A", "C"],
+  });
 }
 
 async function startedRoom(options = {}) {
@@ -154,6 +175,24 @@ async function completeCurrent(context, room, sequence) {
     room.currentFixtureId,
     resultFor(room, sequence),
   );
+}
+
+async function advanceToKnockoutSemifinal(context, room) {
+  for (let sequence = 0; sequence < 12; sequence += 1) {
+    const fixture = room.fixtureSchedule.find((candidate) => candidate.fixtureId === room.currentFixtureId);
+    if (fixture?.tournamentId === "TEST-KO") return room;
+    room = (await completeCurrent(context, room, 500 + sequence)).room;
+  }
+  assert.fail("semifinal do mata-mata nao foi encontrada");
+}
+
+function knockoutLossResult(room, sequence) {
+  const fixture = room.fixtureSchedule.find((candidate) => candidate.fixtureId === room.currentFixtureId);
+  const managerIsHome = fixture.homeClubId === "A";
+  return {
+    ...resultFor(room, sequence),
+    score: managerIsHome ? [0, 2] : [2, 0],
+  };
 }
 
 test("start cria temporada de torneios e calendario unificado por data", async () => {
@@ -221,6 +260,100 @@ test("conclusao do manager registra torneio, simula IA e materializa proxima cha
   )), true, "final do manager deve entrar no calendario unificado");
 });
 
+test("bye e vencedor dinamico carregam roster apos reload antes de semifinal e final", async () => {
+  const context = harness();
+  useThreeClubKnockout(context);
+  const created = await context.store.createRoom({
+    name: "Mata-mata dinamico",
+    creatorId: OWNER_ID,
+    creatorName: "Manager",
+    clubId: "A",
+    activeLeagues: ["TEST-L1"],
+    seasonLength: 2,
+    maxManagers: 1,
+  });
+  await context.store.setReady(created.code, OWNER_ID, true);
+  let room = await context.store.startRoom(created.code, OWNER_ID);
+  room = await advanceToKnockoutSemifinal(context, room);
+
+  const semifinal = room.fixtureSchedule.find((fixture) => fixture.fixtureId === room.currentFixtureId);
+  assert.equal(semifinal.round, 1);
+  assert.deepEqual([semifinal.homeClubId, semifinal.awayClubId], ["A", "C"]);
+  context.catalog.rosterRequests.length = 0;
+
+  const reloadedStore = context.reloadStore();
+  context.tick();
+  const completion = await reloadedStore.completeMatch(
+    room.code,
+    room.currentFixtureId,
+    knockoutLossResult(room, 700),
+  );
+  room = completion.room;
+  let competition = room.competitionSeason.competitions.find(({ id }) => id === "TEST-KO");
+  let final = competition.fixtures.find((fixture) => fixture.round === 2);
+  assert.equal(final.status, "scheduled", "final futura nao pode ser antecipada na semifinal");
+  for (let step = 0; final.status !== "completed" && step < 16; step += 1) {
+    context.tick();
+    const next = await reloadedStore.completeMatch(room.code, room.currentFixtureId, knockoutLossResult(room, 710 + step));
+    room = next.room;
+    competition = room.competitionSeason.competitions.find(({ id }) => id === "TEST-KO");
+    final = competition.fixtures.find((fixture) => fixture.round === 2);
+  }
+
+  assert.equal(context.catalog.rosterRequests.includes("B"), true, "clube classificado por bye deve ser carregado");
+  assert.equal(final.status, "completed");
+  assert.deepEqual([final.homeClubId, final.awayClubId], ["B", "C"]);
+  assert.equal(competition.status, "completed");
+  assert.equal(room.playerStates.some((player) => player.clubId === "B"), true);
+  assert.equal(room.playerStates.some((player) => player.clubId === "C"), true);
+});
+
+test("final dinamica sem roster valido bloqueia avancar sua data sem persistencia parcial", async () => {
+  const context = harness();
+  useThreeClubKnockout(context);
+  const created = await context.store.createRoom({
+    name: "Mata-mata incompleto",
+    creatorId: OWNER_ID,
+    creatorName: "Manager",
+    clubId: "A",
+    activeLeagues: ["TEST-L1"],
+    seasonLength: 2,
+    maxManagers: 1,
+  });
+  await context.store.setReady(created.code, OWNER_ID, true);
+  let room = await context.store.startRoom(created.code, OWNER_ID);
+  room = await advanceToKnockoutSemifinal(context, room);
+  context.catalog.unavailableClubIds.add("B");
+  await context.persistence.mutate(room.code, (current) => {
+    current.careerState.players = current.careerState.players.map((player) => (
+      player.clubId === "B" ? { ...player, active: false, retired: true } : player
+    ));
+    return current;
+  });
+
+  const reloadedStore = context.reloadStore();
+  context.tick();
+  let blocked = false;
+  for (let step = 0; step < 16; step += 1) {
+    try {
+      const completion = await reloadedStore.completeMatch(room.code, room.currentFixtureId, knockoutLossResult(room, 701 + step));
+      room = completion.room;
+    } catch (error) {
+      assert.equal(error.code, "DYNAMIC_KNOCKOUT_ROSTER_INVALID");
+      blocked = true;
+      break;
+    }
+  }
+  assert.equal(blocked, true);
+
+  const persisted = await reloadedStore.requireRoom(room.code);
+  const competition = persisted.competitionSeason.competitions.find(({ id }) => id === "TEST-KO");
+  const final = competition.fixtures.find((fixture) => fixture.round === 2);
+  assert.equal(persisted.currentFixtureId, room.currentFixtureId);
+  assert.equal(final.status, "scheduled");
+  assert.deepEqual(persisted.completedFixtureIds, room.completedFixtureIds);
+});
+
 test("fim de temporada recria torneios e liga na temporada seguinte", async () => {
   const context = await startedRoom({ seasonLength: 2 });
   let room = context.room;
@@ -274,7 +407,7 @@ test("metodos de carreira expõem elenco, treino e renovacao do clube do manager
   const context = await startedRoom();
   const snapshot = await context.store.getCareerSnapshot(context.room.code, OWNER_ID);
   assert.equal(snapshot.currentSeason, 1);
-  assert.equal(snapshot.players.filter((player) => !player.academy).length, POSITIONS.length);
+  assert.equal(snapshot.players.filter((player) => !player.academy).length, SQUAD_POSITIONS.length);
   assert.equal(snapshot.players.filter((player) => player.academy).length, 2);
   assert.equal(snapshot.players.every((player) => player.clubId === "A"), true);
   const player = snapshot.players[0];

@@ -28,6 +28,7 @@ test("exemplo de ambiente nao publica credenciais", async () => {
     "FIREBASE_PRIVATE_KEY",
     "FIREBASE_SERVICE_ACCOUNT_JSON",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "METRICS_TOKEN",
   ]) {
     assert.equal(env[name], "", `${name} deve permanecer vazio no arquivo de exemplo`);
   }

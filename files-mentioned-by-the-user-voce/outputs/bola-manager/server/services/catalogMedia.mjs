@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import sharp from "sharp";
+import { MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from "../../shared/imagePolicy.mjs";
 
-export const MAX_EDITOR_MEDIA_BYTES = 5 * 1024 * 1024;
+export const MAX_EDITOR_MEDIA_BYTES = MAX_IMAGE_BYTES;
 
 const MEDIA_TYPES = Object.freeze({
   "image/png": { extension: "png", signature: "png" },
@@ -81,6 +83,36 @@ export function validateCatalogMediaUpload(suppliedMimeType, bytes) {
   return { mimeType, mediaType };
 }
 
+let processing = 0;
+export async function prepareCatalogMedia(suppliedMimeType, bytes, { thumbnail = false } = {}) {
+  const validated = validateCatalogMediaUpload(suppliedMimeType, bytes);
+  if (processing >= 4) throw new CatalogMediaError("Processamento de imagens ocupado; tente novamente", "IMAGE_BUSY", 503);
+  processing += 1;
+  try {
+    const pipeline = sharp(bytes, { limitInputPixels: MAX_IMAGE_PIXELS, failOn: "warning", animated: false })
+      .timeout({ seconds: 5 });
+    const metadata = await pipeline.metadata();
+    if (metadata.format !== validated.mediaType.signature) {
+      throw new CatalogMediaError("Tipo real de imagem diferente do informado", "EDITOR_MEDIA_MIME_MISMATCH");
+    }
+    if (!metadata.width || !metadata.height || metadata.width > MAX_IMAGE_DIMENSION
+      || metadata.height > MAX_IMAGE_DIMENSION || metadata.width * metadata.height > MAX_IMAGE_PIXELS) {
+      throw new CatalogMediaError("Imagem excede 4096 pixels por lado ou 16 milhoes de pixels", "IMAGE_DIMENSIONS_EXCEEDED", 413);
+    }
+    if ((metadata.pages ?? 1) > 1) throw new CatalogMediaError("Use uma imagem estatica", "IMAGE_ANIMATED_UNSUPPORTED", 415);
+    pipeline.rotate();
+    if (thumbnail) pipeline.resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true });
+    const output = await pipeline.toFormat(metadata.format).toBuffer();
+    if (output.length > MAX_IMAGE_BYTES) throw new CatalogMediaError("Imagem processada excede 5 MB", "EDITOR_MEDIA_TOO_LARGE", 413);
+    return { ...validated, bytes: output };
+  } catch (error) {
+    if (error instanceof CatalogMediaError) throw error;
+    throw new CatalogMediaError("Imagem invalida, incompleta ou acima dos limites de processamento", "IMAGE_INVALID", 400);
+  } finally {
+    processing -= 1;
+  }
+}
+
 function downloadUrl(bucketName, path, token) {
   return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(path)}?alt=media&token=${encodeURIComponent(token)}`;
 }
@@ -106,7 +138,9 @@ export class CatalogMediaService {
         503,
       );
     }
-    const { mimeType, mediaType } = validateCatalogMediaUpload(suppliedMimeType, bytes);
+    const prepared = await prepareCatalogMedia(suppliedMimeType, bytes);
+    const { mimeType, mediaType } = prepared;
+    bytes = prepared.bytes;
 
     const objectId = this.idFactory();
     const token = this.idFactory();

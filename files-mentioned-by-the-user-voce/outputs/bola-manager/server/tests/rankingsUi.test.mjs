@@ -4,11 +4,16 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
+import { parseRankingQuery } from '../../shared/rankingQuery.mjs';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { inspectEncoding } from '../../scripts/check-encoding.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 let vite;
 let normalizeRankings;
+let normalizeRankingsResponse;
 let aggregateRankingManagerSeasonStats;
 let filterRankingPlayers;
 let localManagerRanking;
@@ -21,11 +26,21 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
+    plugins: [{
+      name: 'expose-ranking-timeline-for-tests',
+      transform(source, id) {
+        if (id.replaceAll('\\', '/').endsWith('/src/views/season/RankingsView.tsx')) {
+          return { code: `${source}\nexport { TimelineEvolution };`, map: null };
+        }
+      },
+    }],
     appType: "custom",
     logLevel: "silent",
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true },
   });
-  ({ normalizeRankings } = await vite.ssrLoadModule("/src/hooks/useRankings.ts"));
+  ({ normalizeRankings, normalizeRankingsResponse } = await vite.ssrLoadModule("/src/hooks/useRankings.ts"));
   ({
     aggregateRankingManagerSeasonStats,
     filterRankingPlayers,
@@ -370,12 +385,69 @@ test("hook envia competitionId, preserva snapshot no refresh e expoe refresh", a
   assert.match(hook, /const refresh = useCallback/);
   assert.match(hook, /setRefreshing\(hasSnapshot\)/);
   assert.match(hook, /const sameScope = scopeRef\.current === requestScope/);
-  assert.match(hook, /rankings, loading, refreshing, error, refresh/);
+  assert.match(hook, /rankings: scopeMatches && authenticated \? rankings : null/);
+  assert.match(hook, /normalizeRankingsResponse\(response.rankings, selection\)/);
+});
+
+test('resposta valida eco da consulta e preserva ordem do servidor, inclusive métricas nulas', () => {
+  const query = parseRankingQuery({ playerColumn: 'player', playerDirection: 'asc', managerPeriod: 'last5' });
+  const dto = { meta: {}, scope: {}, players: [rankingPlayer('p1', 'Alfa'), rankingPlayer('p2', 'Beta')], clubs: [],
+    managers: [{ id: 'm1', name: 'Treinador', points: 15, played: 5 }],
+    selection: { query, playerIds: ['p2', 'p1'], clubIds: [], managers: [{ id: 'm1', name: 'Treinador', rankingPoints: null, titles: null }], managerScope: [] } };
+  const normalized = normalizeRankingsResponse(dto, query);
+  assert.deepEqual(normalized.selection.playerIds, ['p2', 'p1']);
+  assert.equal(normalized.selection.managers[0].rankingPoints, null);
+  assert.equal(normalized.selection.managers[0].titles, null);
+  for (const invalid of [{}, { ...dto, selection: null }, { ...dto, selection: { ...dto.selection, query: {} } },
+    { ...dto, selection: { ...dto.selection, playerIds: ['p1', 'p1'] } },
+    { ...dto, selection: { ...dto.selection, managers: [{ id: 'intruso', name: 'Intruso' }] } }]) {
+    assert.equal(normalizeRankingsResponse(invalid, query), null);
+  }
+});
+
+test('tabela remota não reordena página; cabeçalho continua indicando a coluna e direção', async () => {
+  const { RankingTable } = await vite.ssrLoadModule('/src/components/rankings/RankingTable.tsx');
+  const markup = renderToStaticMarkup(createElement(RankingTable, {
+    caption: 'Ordem remota', serverSorted: true,
+    columns: [{ id: 'name', label: 'Nome', sortable: true, value: (item) => item.name, render: (item) => item.name }],
+    items: [{ id: '2', name: 'Zulu' }, { id: '1', name: 'Alfa' }], rowKey: (item) => item.id,
+    sort: { column: 'name', direction: 'asc' }, onSortChange() {},
+  }));
+  assert.ok(markup.indexOf('Zulu') < markup.indexOf('Alfa'));
+  assert.match(markup, /aria-sort="ascending"/);
+});
+
+test('derrotas D do backend não viram empates quando a sequência não contém V ou E', () => {
+  const query = parseRankingQuery({});
+  const manager = { id: 'm1', name: 'Treinador', recentForm: ['D', 'D', 'D'] };
+  const normalized = normalizeRankingsResponse({ meta: {}, scope: {}, players: [], clubs: [{ id: 'C', name: 'Clube', recentForm: ['D', 'D'] }],
+    managers: [manager], selection: { query, playerIds: [], clubIds: ['C'], managers: [manager], managerScope: [manager] } }, query);
+  assert.deepEqual(normalized.clubs[0].recentForm, ['L', 'L']);
+  assert.deepEqual(normalized.managers[0].recentForm, ['L', 'L', 'L']);
+  assert.deepEqual(normalized.selection.managers[0].recentForm, ['L', 'L', 'L']);
 });
 
 test("view nao contem participantes, XP ou valores estimados fixos", async () => {
   const view = await readFile(path.join(projectRoot, "src/views/season/RankingsView.tsx"), "utf8");
   assert.doesNotMatch(view, /demoClubRanking|estimatedClubValue|1\.840 XP|2\.140 XP|1\.720 XP/);
-  assert.doesNotMatch(view, /TÃ¡tica<\/dt>|VestiÃ¡rio<\/dt>|Jovens<\/dt>|ReputaÃ§Ã£o nacional/);
+  assert.doesNotMatch(view, /Tática<\/dt>|Vestiário<\/dt>|Jovens<\/dt>|Reputação nacional/);
   assert.match(view, /<ManagerEntity manager=\{item\} rank=\{item\.position\} \/>/);
+  assert.doesNotMatch(view, /<details className="rankings-filters-shell">/);
+  assert.equal((view.match(/serverSorted=\{useRemote\}/g) ?? []).length, 3);
+  assert.doesNotMatch(view, /tab: 'players', playerCategory: '[a-z]+' \}/);
+});
+
+test('histórico renderiza acentos, ordinais e traços sem corrupção', async () => {
+  const { TimelineEvolution } = await vite.ssrLoadModule('/src/views/season/RankingsView.tsx');
+  const html = renderToStaticMarkup(createElement(TimelineEvolution, {
+    entries: [{ id: 'r1', round: 1, position: 2, positionChange: null, points: 3,
+      played: 1, wins: 1, draws: 0, losses: 0, goalDifference: 1 }],
+    historyRound: 'all', onRoundChange() {}, clubName: 'São Paulo',
+    competitionName: 'Brasileirão Série A', seasonLabel: 'Temporada 2026', totalClubs: 20,
+  }));
+  for (const label of ['EVOLUÇÃO REAL POR RODADA', 'Melhor posição', 'Pior posição', 'Rodadas líder',
+    'Histórico de posições', 'Variação', 'Evolução de São Paulo', '2º', '—', ' · ']) {
+    assert.ok(html.includes(label), label);
+  }
+  assert.deepEqual(inspectEncoding(Buffer.from(html)), []);
 });

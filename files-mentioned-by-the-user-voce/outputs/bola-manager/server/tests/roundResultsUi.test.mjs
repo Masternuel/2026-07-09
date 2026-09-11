@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import reactPlugin from "@vitejs/plugin-react";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
@@ -32,7 +31,7 @@ function roundMatch(overrides) {
     homeLightThemeColor: "#557500",
     awayDarkThemeColor: "#eeeeee",
     awayLightThemeColor: "#222222",
-    homeCrestImageUrl: "https://cdn.example.com/aurora.png",
+    homeCrestImageUrl: "/assets/aurora.png",
     awayCrestImageUrl: null,
     score: [2, 1],
     completedAt: "2026-07-16T20:00:00.000Z",
@@ -65,7 +64,7 @@ const roundSummary = {
       homeColor: "#159761",
       awayColor: "#c4122f",
       homeCrestImageUrl: null,
-      awayCrestImageUrl: "https://cdn.example.com/flamengo.png",
+      awayCrestImageUrl: "/assets/flamengo.png",
       score: [0, 0],
     }),
     roundMatch({
@@ -183,7 +182,8 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     appType: "custom",
     logLevel: "silent",
     server: { middlewareMode: true },
@@ -212,8 +212,8 @@ test("painel mostra jogos de managers e IA, pendencia, escudos e destaque do clu
   assert.match(html, /Seu jogo/);
   assert.match(html, /round-result--managed/);
   assert.match(html, /club-mark--image/);
-  assert.match(html, /cdn\.example\.com\/aurora\.png/);
-  assert.match(html, /cdn\.example\.com\/flamengo\.png/);
+  assert.match(html, /assets\/aurora\.png/);
+  assert.match(html, /assets\/flamengo\.png/);
   assert.equal((html.match(/class="round-result(?: |")/g) ?? []).length, 3);
 
   const completeHtml = renderToStaticMarkup(React.createElement(RoundResultsPanel, {

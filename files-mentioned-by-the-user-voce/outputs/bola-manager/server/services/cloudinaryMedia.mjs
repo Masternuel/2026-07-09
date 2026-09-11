@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { CatalogMediaError, validateCatalogMediaUpload } from "./catalogMedia.mjs";
+import { CatalogMediaError, prepareCatalogMedia } from "./catalogMedia.mjs";
+import { allowedExternalImage } from "../../shared/imagePolicy.mjs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const CLOUDINARY_PATH_PATTERN = /^editor-media\/(clubs|players|tournaments)\/cloudinary\/[a-f0-9]{24}\/[a-zA-Z0-9_-]{1,128}$/;
@@ -140,7 +141,9 @@ export class CloudinaryMediaService {
         503,
       );
     }
-    const { mimeType, mediaType } = validateCatalogMediaUpload(suppliedMimeType, bytes);
+    const prepared = await prepareCatalogMedia(suppliedMimeType, bytes);
+    const { mimeType, mediaType } = prepared;
+    bytes = prepared.bytes;
     const path = cloudinaryPublicId(entity, recordId, this.idFactory());
     const timestamp = Math.floor(this.now() / 1000);
     const payload = await this.#post("upload", { public_id: path, timestamp }, {
@@ -149,7 +152,9 @@ export class CloudinaryMediaService {
       extension: mediaType.extension,
     });
     const url = clean(payload.secure_url);
-    if (!url.startsWith("https://") || clean(payload.public_id) !== path) {
+    if (!allowedExternalImage(url) || new URL(url).hostname !== "res.cloudinary.com"
+      || !new URL(url).pathname.startsWith(`/${this.cloudName}/image/upload/`)
+      || clean(payload.public_id) !== path) {
       await this.remove(path).catch(() => {});
       throw providerFailure(
         "Cloudinary devolveu uma resposta de imagem invalida",

@@ -397,6 +397,8 @@ test("8. diretoria forte mantem treinador apesar da rejeicao da torcida", () => 
   assert.ok(result.evaluation.boardSupport.privateValue >= 58);
   assert.equal(result.evaluation.boardSupport.realIntent, "retain");
   assert.equal(result.evaluation.recommendation, "retain");
+  assert.equal(result.actions.find(({ type }) => type === 'COACH_SECURITY_FAN_PROTEST')?.message,
+    'A rejeição chegou a um nível insustentável e aumentou a pressão sobre a diretoria.');
 });
 
 test("9. diretoria fragil cede mais rapidamente a pressao da torcida", () => {
@@ -807,6 +809,18 @@ test("declaracao publica persistida altera o apoio da torcida uma unica vez", ()
   assert.ok(withStatement.evaluation.fanSupport.value > withoutStatement.evaluation.fanSupport.value);
   assert.equal(withStatement.evaluation.fanSupport.publicDeclarations.count, 1);
   assert.equal(withStatement.evaluation.factors.some(({ code }) => code === "public_declarations_support"), true);
+  const support = withStatement.evaluation.factors.find(({ code }) => code === 'public_declarations_support');
+  assert.equal(support.label, 'Boa repercussão das declarações');
+  assert.equal(support.detail, '1 coletiva(s) desde a última avaliação.');
+
+  const criticism = structuredClone(publicStatement);
+  criticism.pressConferenceSubmissions[0].effects.squadMoraleDelta = -5;
+  const pressure = evaluate({
+    league, room: roomFixture({ league, completedMatches: [criticism] }),
+    matches: [match(1, 'A', 'C', [1, 1])],
+  }).evaluation.factors.find(({ code }) => code === 'public_declarations_pressure');
+  assert.equal(pressure.label, 'Declarações aumentaram a pressão');
+  assert.equal(pressure.detail, '1 coletiva(s) desde a última avaliação.');
 });
 
 test("apoio da torcida gera bonus pequeno e auditavel apenas para o mandante", () => {

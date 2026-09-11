@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import reactPlugin from "@vitejs/plugin-react";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
@@ -46,6 +45,7 @@ let vite;
 let EditorRecordForm;
 let profilePlayersFromLocalRoster;
 let SquadView;
+let AuthContext;
 let mutationPayload;
 let calculatePlayerOverall;
 let playerGoalkeeperRating;
@@ -56,14 +56,16 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
     appType: "custom",
     logLevel: "silent",
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true },
   });
   ({ EditorRecordForm } = await vite.ssrLoadModule("/src/components/editor/EditorRecordForm.tsx"));
   ({ profilePlayersFromLocalRoster } = await vite.ssrLoadModule("/src/components/player/playerProfileModel.ts"));
   ({ SquadView } = await vite.ssrLoadModule("/src/views/SquadView.tsx"));
+  ({ AuthContext } = await vite.ssrLoadModule("/src/auth/AuthContext.tsx"));
   ({ mutationPayload } = await vite.ssrLoadModule("/src/hooks/useEditorCatalog.ts"));
   ({ calculatePlayerOverall, playerGoalkeeperRating, playerPhysicalRating, playerPositionRating } = await vite.ssrLoadModule("/src/utils/playerRating.ts"));
 });
@@ -82,6 +84,12 @@ function renderEditor(record) {
 
 function fold(value) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function renderSquad(props) {
+  return renderToStaticMarkup(React.createElement(AuthContext.Provider, {
+    value: { identity: null, getIdToken: async () => null },
+  }, React.createElement(SquadView, props)));
 }
 
 test("Editor separa tecnicos e fisicos e so mostra bloco de goleiro para GOL", () => {
@@ -165,17 +173,17 @@ test("Perfil compartilhado preserva atributos fisicos e de goleiro", () => {
 });
 
 test("Elenco resume nota posicional, fisico e GK sem inflar colunas", () => {
-  const html = renderToStaticMarkup(React.createElement(SquadView, {
+  const html = renderSquad({
     players: [visualPlayer("GOL"), visualPlayer("MC")], club, room: null, socket: null, managerId: "", onToast() {},
-  }));
+  });
   assert.match(html, /Nota pos\./i);
   assert.match(fold(html), /FIS/i);
   assert.match(html, />GK</i);
-  assert.match(html, /player-rating-cell--goalkeeper">â€”|player-rating-cell--goalkeeper">—/);
+  assert.match(html, /player-rating-cell--goalkeeper">—/);
 });
 
 test("Elenco abre ordenado por goleiros, zagueiros, meias e atacantes", () => {
-  const html = renderToStaticMarkup(React.createElement(SquadView, {
+  const html = renderSquad({
     players: [
       visualPlayer("ATA", { id: "ata", name: "Atacante Ordem" }),
       visualPlayer("MEI", { id: "mei", name: "Meia Ordem" }),
@@ -187,7 +195,7 @@ test("Elenco abre ordenado por goleiros, zagueiros, meias e atacantes", () => {
     socket: null,
     managerId: "",
     onToast() {},
-  }));
+  });
 
   const goalkeeper = html.indexOf("Goleiro Ordem");
   const defender = html.indexOf("Zagueiro Ordem");

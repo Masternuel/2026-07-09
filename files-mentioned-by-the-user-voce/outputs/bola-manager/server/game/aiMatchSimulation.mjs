@@ -9,6 +9,7 @@ import { applyFanAtmosphereToFixture } from "./coachJobSecurity.mjs";
 import { applyMatchPlayerProgression, mergePlayerStates } from "./playerProgression.mjs";
 import { calculateTacticalMatchup } from "./tacticalAnalysis.mjs";
 import { calculateTacticalProfile, createAiTacticPlan } from "./tactics.mjs";
+import { validateSymmetricRosterCoverage } from "./rosterCoverage.mjs";
 import {
   calculateStarImpact,
   isPlayerAvailableForMatch,
@@ -95,6 +96,27 @@ function preparedTeam(room, clubId, rawPlayers) {
       ? calculateTacticalProfile(tactics, roster, lineupIds)
       : null,
   };
+}
+
+function preparedFixtureRosters(room, fixture, rosters) {
+  const homeClubId = identifier(fixture?.homeClubId);
+  const awayClubId = identifier(fixture?.awayClubId);
+  const home = preparedTeam(room, homeClubId, rosterFor(rosters, homeClubId));
+  const away = preparedTeam(room, awayClubId, rosterFor(rosters, awayClubId));
+  const coverage = validateSymmetricRosterCoverage({
+    clubId: homeClubId,
+    players: home.roster,
+    lineupIds: home.lineupIds,
+  }, {
+    clubId: awayClubId,
+    players: away.roster,
+    lineupIds: away.lineupIds,
+  });
+  return { homeClubId, awayClubId, home, away, coverage };
+}
+
+export function validateAiFixtureRosterCoverage(room, fixture, rosters) {
+  return preparedFixtureRosters(room, fixture, rosters).coverage;
 }
 
 function tacticalContext(home, away) {
@@ -185,10 +207,11 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
   fixture = applyFanAtmosphereToFixture(room, fixture);
   const fixtureId = fixtureIdentity(fixture);
   const competitionId = identifier(fixture?.leagueId ?? fixture?.tournamentId ?? fixture?.competitionId) || null;
-  const homeClubId = identifier(fixture?.homeClubId);
-  const awayClubId = identifier(fixture?.awayClubId);
-  const home = preparedTeam(room, homeClubId, rosterFor(rosters, homeClubId));
-  const away = preparedTeam(room, awayClubId, rosterFor(rosters, awayClubId));
+  const prepared = preparedFixtureRosters(room, fixture, rosters);
+  const { homeClubId, awayClubId, coverage: rosterCoverageState } = prepared;
+  // Never mix catalog bonuses from one club with legacy fallback on the other.
+  const home = rosterCoverageState.valid ? prepared.home : preparedTeam(room, homeClubId, []);
+  const away = rosterCoverageState.valid ? prepared.away : preparedTeam(room, awayClubId, []);
   const tactical = tacticalContext(home, away);
   const homeTacticalProfile = tactical ? home.tacticalProfile : null;
   const awayTacticalProfile = tactical ? away.tacticalProfile : null;
@@ -209,7 +232,7 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
   ].join("|");
   // Individual incidents are only authoritative when both catalog rosters are
   // available. A partial fetch must not create an asymmetric statistical record.
-  const canTrackPlayers = home.roster.length > 0 && away.roster.length > 0;
+  const canTrackPlayers = rosterCoverageState.valid;
   const simulated = simulationMetadata(simulateMatch({
     simulationVersion: canTrackPlayers ? 2 : undefined,
     roomCode: room.code,
@@ -250,6 +273,8 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
   }), home, away, tactical, strengthProfile);
   simulated.clubCareerEffects = careerEffects;
   simulated.strengthProfile = strengthProfile;
+  simulated.rosterMode = canTrackPlayers ? "catalog" : "symmetric_fallback";
+  simulated.rosterCoverage = rosterCoverageState;
   const progressionIdentity = {
     id: `ai:${room.id}:${room.currentSeason}:${fixtureId}`,
     homeClubId,

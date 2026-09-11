@@ -195,7 +195,9 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
         completedBytes += item.file.size;
       }
       setProgress(100); setStatusText('Arquivos enviados. Lendo times e jogadores…');
-      const payload = await apiRequest<ImportPayload>(`/api/editor/brasfoot-import/sessions/${encodeURIComponent(session.sessionId)}/preview`, credentials, { method: 'POST', signal: controller.signal });
+      const payload = await apiRequest<ImportPayload>(`/api/editor/brasfoot-import/sessions/${encodeURIComponent(session.sessionId)}/preview`, credentials, {
+        method: 'POST', signal: controller.signal, timeoutMs: 120_000,
+      });
       setPreview(payload); setAllowPartial(false); setStage('preview'); setStatusText('Análise concluída. Revise antes de importar.');
     } catch (nextError) {
       if (nextError instanceof DOMException && nextError.name === 'AbortError') return;
@@ -214,7 +216,7 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
     setStage('committing'); setError(null); setStatusText('Gravando dados no Firebase…');
     try {
       const payload = await apiRequest<ImportPayload>(`/api/editor/brasfoot-import/sessions/${encodeURIComponent(session.sessionId)}/commit`, credentials, {
-        method: 'POST', body: { allowPartial, importAssets },
+        method: 'POST', body: { allowPartial, importAssets }, timeoutMs: 300_000,
       });
       setResult(payload); setStage('done'); setStatusText('Importação concluída.');
     } catch (nextError) {

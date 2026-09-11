@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import type { ScoutingController } from '../../hooks/useScouting';
 import {
   Activity,
   ArrowLeft,
@@ -85,6 +86,7 @@ export interface RankingPlayerProfileProps {
   ownClub?: boolean;
   untradeable?: boolean;
   offerState?: RankingPlayerOfferState;
+  scouting?: ScoutingController;
   onClose: () => void;
   onOffer?: (
     player: RankingProfilePlayer,
@@ -311,6 +313,7 @@ export function RankingPlayerProfile({
   ownClub: explicitOwnClub,
   untradeable: explicitUntradeable,
   offerState,
+  scouting,
   onClose,
   onOffer,
   additionalContent = null,
@@ -536,13 +539,29 @@ export function RankingPlayerProfile({
         <section className="rankings-player-profile__actions" aria-label="Ações do jogador">
           <h4>Ações</h4>
           <div>
-            <Button size="sm" variant="ghost" disabled title="Lista de observação ainda não possui persistência no servidor" icon={<ListPlus size={14} />}>Observação indisponível</Button>
+            <Button size="sm" variant={scouting?.record?.watching ? 'primary' : 'ghost'} aria-pressed={scouting?.record?.watching ?? false} disabled={!scouting?.available || !scouting.ready || scouting.loading || Boolean(scouting.pending) || ownClub && !scouting.record?.watching} icon={<ListPlus size={14} />} onClick={() => void scouting?.act(scouting.record?.watching ? 'unwatch' : 'watch')}>{scouting?.record?.watching ? 'Remover da observação' : 'Observar jogador'}</Button>
             <Button size="sm" variant={reportRequested ? 'primary' : 'ghost'} aria-pressed={reportRequested} icon={<Binoculars size={14} />} onClick={() => runAction('report')}>{reportRequested ? 'Relatório aberto' : 'Abrir relatório'}</Button>
             <Button size="sm" variant="ghost" icon={<Scale size={14} />} onClick={() => runAction('compare')}>Comparar</Button>
-            <Button size="sm" variant="ghost" disabled title="Registro de interesse ainda não possui persistência no servidor" icon={<HeartHandshake size={14} />}>Interesse indisponível</Button>
-            <Button size="sm" variant="ghost" disabled title="Contato com jogador ainda não possui integração no servidor" icon={<Contact size={14} />}>Contato indisponível</Button>
+            <Button size="sm" variant={scouting?.record?.interested ? 'primary' : 'ghost'} aria-pressed={scouting?.record?.interested ?? false} disabled={!scouting?.available || !scouting.ready || scouting.loading || Boolean(scouting.pending) || ownClub && !scouting.record?.interested} icon={<HeartHandshake size={14} />} onClick={() => void scouting?.act(scouting.record?.interested ? 'withdraw-interest' : 'interest')}>{scouting?.record?.interested ? 'Retirar interesse' : 'Demonstrar interesse'}</Button>
+            <Button size="sm" variant="ghost" disabled={!scouting?.available || !scouting.ready || scouting.loading || Boolean(scouting.pending) || ownClub} icon={<Contact size={14} />} onClick={() => void scouting?.act('contact-agent')}>Contatar empresário</Button>
           </div>
+          {!scouting?.available && <p role="status">Observação disponível durante uma carreira ativa, com um clube sob seu comando.</p>}
+          {(scouting?.loading || scouting?.pending) && <p role="status">{scouting.pending ? 'Salvando observação…' : 'Carregando observação…'}</p>}
+          {scouting?.error && <div role="alert"><p>{scouting.error}</p><Button size="sm" variant="ghost" onClick={() => void scouting.reload()}>Atualizar observação</Button></div>}
+          {scouting?.available && scouting.ready && !scouting.loading && !scouting.error && <p role="status">{scouting.record?.watching || scouting.record?.interested ? 'Preferências de observação salvas para o seu clube.' : 'Sem observação ou interesse registrado.'}</p>}
         </section>
+
+        {scouting?.record?.agentContact && <section className="rankings-player-profile__comparison" aria-label="Resposta do empresário">
+          <h4><Contact size={14} /> Representação do jogador · resposta simulada</h4>
+          <p>{scouting.record.agentContact.message}</p>
+          <dl className="rankings-player-profile__summary">
+            <div><dt>Salário atual informado</dt><dd>{scouting.record.agentContact.currentWage === null ? 'Não informado' : formatCurrency(scouting.record.agentContact.currentWage)}</dd></div>
+            <div><dt>Valor de mercado na consulta</dt><dd>{scouting.record.agentContact.marketValue === null ? 'Não informado' : formatCurrency(scouting.record.agentContact.marketValue)}</dd></div>
+            <div><dt>Contato registrado</dt><dd>{new Date(scouting.record.agentContact.contactedAt).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</dd></div>
+            <div><dt>Nova avaliação a partir de</dt><dd>{new Date(scouting.record.agentContact.nextContactAt).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</dd></div>
+          </dl>
+          <p>Consulta inicial, sem promessa de contratação. Use a proposta de mercado para negociar valores e contrato.</p>
+        </section>}
 
         {reportRequested && <section className="rankings-player-profile__comparison" aria-label="Relatório do jogador">
           <h4><Binoculars size={14} /> Relatório disponível</h4>
