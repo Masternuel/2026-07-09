@@ -27,14 +27,30 @@ const competitionCatalog = [
   },
 ];
 
+async function listTestPlayers(clubId) {
+  const players = [{
+    id: `${clubId}-P1`,
+    clubId,
+    name: `Jogador ${clubId}`,
+    position: "GOL",
+    overall: 10,
+    active: true,
+  }];
+  return { players, count: players.length, source: "catalog-fixture-test" };
+}
+
 function catalogStore() {
-  return { async listCompetitionCatalog() { return structuredClone(competitionCatalog); } };
+  return {
+    async listCompetitionCatalog() { return structuredClone(competitionCatalog); },
+    listPlayers: listTestPlayers,
+  };
 }
 
 function mutableCatalogStore(initialCatalog) {
   let current = structuredClone(initialCatalog);
   return {
     async listCompetitionCatalog() { return structuredClone(current); },
+    listPlayers: listTestPlayers,
     replace(nextCatalog) { current = structuredClone(nextCatalog); },
   };
 }
@@ -67,6 +83,7 @@ test("sala fixa o dono da base e sempre resolve o catalogo pessoal do criador", 
       return {
         async ensureInitialized() {},
         async listCompetitionCatalog() { return structuredClone(competitionCatalog); },
+        listPlayers: listTestPlayers,
       };
     },
   };
@@ -316,7 +333,10 @@ test("cada liga inicia sua propria primeira rodada", async () => {
   });
   const store = new RoomStore({
     persistence: new MemoryRoomPersistence(),
-    catalogStore: { async listCompetitionCatalog() { return structuredClone(catalog); } },
+    catalogStore: {
+      async listCompetitionCatalog() { return structuredClone(catalog); },
+      listPlayers: listTestPlayers,
+    },
     codeFactory: () => "BOLA-MULT",
   });
   const room = await store.createRoom({

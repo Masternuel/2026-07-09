@@ -18,12 +18,13 @@ interface RankingTableProps<T> {
   items: T[];
   rowKey: (item: T) => string;
   sort: { column: string; direction: RankingSortDirection };
-  onSortChange: (sort: { column: string; direction: RankingSortDirection }) => void;
+  onSortChange?: (sort: { column: string; direction: RankingSortDirection }) => void;
   onRowClick?: (item: T, trigger: HTMLButtonElement) => void;
   rowClassName?: (item: T, index: number) => string;
   emptyTitle?: string;
   emptyMessage?: string;
   rankOffset?: number;
+  serverSorted?: boolean;
 }
 
 function compareValues(left: string | number, right: string | number) {
@@ -43,9 +44,10 @@ export function RankingTable<T>({
   emptyTitle = 'Nenhum resultado',
   emptyMessage = 'Ajuste os filtros ou aguarde novas estatísticas.',
   rankOffset = 0,
+  serverSorted = false,
 }: RankingTableProps<T>) {
   const activeColumn = columns.find((column) => column.id === sort.column && column.sortable && column.value);
-  const sorted = activeColumn
+  const sorted = activeColumn && !serverSorted
     ? [...items].sort((left, right) => {
       const leftValue = activeColumn.value?.(left);
       const rightValue = activeColumn.value?.(right);
@@ -58,7 +60,7 @@ export function RankingTable<T>({
     : items;
 
   function changeSort(column: RankingColumn<T>) {
-    if (!column.sortable || !column.value) return;
+    if (!onSortChange || !column.sortable || !column.value) return;
     onSortChange({
       column: column.id,
       direction: sort.column === column.id && sort.direction === 'desc' ? 'asc' : 'desc',
@@ -73,7 +75,7 @@ export function RankingTable<T>({
           <tr>
             {columns.map((column) => (
               <th key={column.id} className={column.className} scope="col" aria-sort={sort.column === column.id ? (sort.direction === 'asc' ? 'ascending' : 'descending') : undefined}>
-                {column.sortable && column.value ? (
+                {onSortChange && column.sortable && column.value ? (
                   <button type="button" onClick={() => changeSort(column)}>
                     {column.label}
                     {sort.column === column.id

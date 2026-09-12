@@ -30,6 +30,7 @@ Sem Redis, produção permanece viva em `/health`, mas `/ready` e APIs retornam 
 | `RATE_LIMIT_WINDOW_MS` | janela HTTP/Socket |
 | `RATE_LIMIT_HTTP_MAX` | requisições por IP/janela |
 | `RATE_LIMIT_SOCKET_MAX` | conexões/eventos por identidade/janela |
+| `METRICS_TOKEN` | segredo exclusivo do coletor; vazio desativa `/metrics` |
 | `DEPENDENCY_TIMEOUT_MS` | timeout Redis/Firestore no readiness |
 | `SHUTDOWN_TIMEOUT_MS` | limite do graceful shutdown |
 | `IMPORT_OBJECT_TTL_DAYS` | retenção externa dos uploads temporários |
@@ -38,11 +39,23 @@ Sem Redis, produção permanece viva em `/health`, mas `/ready` e APIs retornam 
 
 - `/health`: liveness, sem dependências externas.
 - `/ready`: Redis e Firestore com timeout; `503` durante falha ou drain.
-- `/metrics`: contadores/gauges/sumários de HTTP, erros, sockets, locks, rate-limit e dependências.
+- `/metrics`: JSON de contadores/gauges/sumários; desativado (`404`) sem `METRICS_TOKEN`. Quando configurado, exige `Authorization: Bearer <segredo>`; tokens Firebase, cookies, query string e IP local não concedem acesso. Não é formato Prometheus/OpenMetrics.
 - Logs JSON incluem `instanceId`, evento, duração e request ID; tokens e segredos são removidos.
 - `SIGTERM` marca not-ready, cancela playback, persiste estado, libera locks e fecha Socket.IO, importador e Redis.
 
 Alertas mínimos: readiness `503`, lock perdido/timeout, erros `5xx`, latência elevada, rate-limit hits, Redis desconectado e crescimento de arquivos temporários.
+
+### Coleta privada de métricas
+
+Configure um segredo aleatório exclusivo (32–256 caracteres ASCII seguros) no backend e no coletor, nunca no frontend, repositório ou URL. Use HTTPS ou rede privada protegida. Para rotacionar, substitua o segredo no backend/coletor e reinicie as réplicas; não há tolerância simultânea ao token anterior. O controle de acesso não substitui isolamento de rede, conforme o [modelo de segurança do Prometheus](https://prometheus.io/docs/operating/security/).
+
+O endpoint permite GET/HEAD autenticados, com `Cache-Control: no-store, private`, sem acesso às APIs de jogo. Limite: 60 coletas/minuto por instância, compartilhado pelos coletores; excesso retorna `429` e `Retry-After`. O limite é local e independente do Redis, para preservar diagnóstico durante indisponibilidade. Tentativas não autorizadas não consomem a cota dos coletores; proteção volumétrica deve existir no proxy/rede.
+
+O registro preserva o formato de contadores, gauges e sumários, mas passa a aceitar somente métricas e labels declarados em `server/infrastructure/metricPolicy.mjs`. Rotas HTTP agregam por família (`/api/rooms`, `/api/editor`, etc.); rotas não atendidas usam `unmatched`. Locks usam `resource=match` ou `other`, sem códigos de sala. Eventos conhecidos são preservados; valores desconhecidos viram `other`; labels extras são removidos. Isso segue a orientação de [evitar dimensões de alta cardinalidade](https://prometheus.io/docs/practices/instrumentation/). Ajuste dashboards que filtravam rotas completas ou recursos individuais.
+
+Limites por instância: 2048 séries no total e 256 por métrica. Nomes/tipos desconhecidos, amostras inválidas e novas séries acima do teto são descartados; séries existentes continuam atualizando. `registry.series`, `maxSeries`, `maxSeriesPerMetric` e `droppedSamples` aparecem no JSON; alerte sobre crescimento de `droppedSamples`. Não existe fila de amostras descartadas. Novas instrumentações precisam ser declaradas na política; opções internas do registro têm tetos absolutos de 4096/512. Reinício ou `reset()` zera métricas; não são dados persistidos da carreira.
+
+Resultados desta correção: [etapa `/metrics`](./ETAPA_METRICS.md).
 
 ## Riscos residuais
 

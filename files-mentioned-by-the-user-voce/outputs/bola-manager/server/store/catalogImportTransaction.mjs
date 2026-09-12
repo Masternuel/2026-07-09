@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { canonicalChecksum } from "./roomPersistenceSections.mjs";
 
 const IMPORT_LEASE_MS = 10 * 60 * 1000;
 const DEFAULT_BATCH_SIZE = 400;
@@ -36,16 +37,25 @@ async function writeRecords(
   references,
   onBatch,
 ) {
-  for (let offset = 0; offset < records.length; offset += batchSize) {
+  for (let offset = 0; offset < records.length;) {
     const batch = rootFirestore.batch();
-    const slice = records.slice(offset, offset + batchSize);
+    const slice = [];
+    let bytes = 0;
+    while (offset + slice.length < records.length && slice.length < batchSize) {
+      const record = records[offset + slice.length];
+      const size = Buffer.byteLength(JSON.stringify(record), "utf8") + 1024;
+      if (slice.length && bytes + size > 8 * 1024 * 1024) break;
+      slice.push(record);
+      bytes += size;
+    }
     for (const record of slice) {
       const reference = targetFirestore.collection(collectionName).doc(String(record.id));
       references.push(reference);
       batch.set(reference, record);
     }
     await batch.commit();
-    await onBatch?.(Math.min(offset + slice.length, records.length), records.length);
+    offset += slice.length;
+    await onBatch?.(offset, records.length);
   }
 }
 
@@ -87,7 +97,6 @@ async function restoreMetadata({
   originalMetadata,
   runId,
   generationId,
-  baseRevision,
 }) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -96,13 +105,13 @@ async function restoreMetadata({
         const current = await transaction.get(metadataReference);
         const operation = current.data()?.importOperation;
         if (operation?.runId !== runId || operation?.generationId !== generationId) return;
-        const revisionChanged = Number(current.data()?.revision || 0) !== baseRevision;
-        if (revisionChanged) {
-          transaction.set(metadataReference, {
-            ...current.data(),
-            importOperation: originalMetadata?.importOperation ?? null,
-          });
-        } else if (metadataExisted) transaction.set(metadataReference, originalMetadata);
+        // Only release our lease; never restore stale metadata over concurrent changes.
+        const released = { ...current.data() };
+        if (Object.hasOwn(originalMetadata ?? {}, "importOperation")
+          || released.revision !== originalMetadata?.revision
+          || released.activeGenerationId !== originalMetadata?.activeGenerationId) released.importOperation = null;
+        else delete released.importOperation;
+        if (metadataExisted || Object.keys(released).length) transaction.set(metadataReference, released);
         else transaction.delete(metadataReference);
       });
       return;
@@ -125,6 +134,14 @@ export async function commitCatalogGeneration({
   now = () => new Date(),
   onProgress = async () => {},
   metadataCounts = (counts) => counts,
+  operationType = "brasfoot",
+  operationReference = null,
+  inputChecksum = null,
+  expectedGenerationId = undefined,
+  transformRecord = (_collection, existing, record) => ({ ...existing, ...record }),
+  verifyStaging = false,
+  validateRecords = null,
+  activationMetadata = () => ({}),
 }) {
   if (!rootFirestore?.runTransaction || !rootFirestore?.batch) {
     throw new CatalogImportTransactionError(
@@ -140,18 +157,38 @@ export async function commitCatalogGeneration({
   let originalMetadata = null;
   let metadataExisted = false;
   let idempotentGenerationId = null;
+  let idempotentResult = null;
+  const importIdField = operationType === "json" ? "lastJsonImportId" : "lastBrasfootImportId";
+  const importAtField = operationType === "json" ? "lastJsonImportAt" : "lastBrasfootImportAt";
 
   try {
     await rootFirestore.runTransaction(async (transaction) => {
-      const current = await transaction.get(metadataReference);
+      idempotentGenerationId = null;
+      idempotentResult = null;
+      const [current, receipt] = await Promise.all([
+        transaction.get(metadataReference),
+        operationReference ? transaction.get(operationReference) : null,
+      ]);
       const metadata = current.exists ? current.data() : {};
       metadataExisted = current.exists;
       originalMetadata = current.exists ? { ...metadata } : null;
       baseRevision = Math.max(0, Number(metadata.revision) || 0);
       baseGenerationId = metadata.activeGenerationId ?? null;
-      if (metadata.lastBrasfootImportId === runId && metadata.activeGenerationId) {
+      if (receipt?.exists && receipt.data().inputChecksum !== inputChecksum) {
+        throw new CatalogImportTransactionError("Identificador de importacao reutilizado com outro arquivo",
+          "BRASFOOT_IMPORT_ID_CONFLICT", 409);
+      }
+      if (receipt?.data()?.status === "completed") {
+        idempotentResult = { ...receipt.data().result, activeGenerationId: baseGenerationId, idempotent: true };
+        return;
+      }
+      if (!operationReference && metadata[importIdField] === runId && metadata.activeGenerationId) {
         idempotentGenerationId = metadata.activeGenerationId;
         return;
+      }
+      if (expectedGenerationId !== undefined && expectedGenerationId !== baseGenerationId) {
+        throw new CatalogImportTransactionError("A base mudou; recarregue o Editor antes de importar",
+          "BRASFOOT_IMPORT_CONFLICT", 409);
       }
       if (["importing", "initializing"].includes(metadata.status)) {
         throw new CatalogImportTransactionError(
@@ -162,7 +199,7 @@ export async function commitCatalogGeneration({
       }
       if (metadata.importOperation && !importLeaseExpired(metadata.importOperation, startedAt)) {
         throw new CatalogImportTransactionError(
-          "Ja existe uma importacao Brasfoot em andamento nesta base",
+          "Ja existe uma importacao em andamento nesta base",
           "BRASFOOT_IMPORT_IN_PROGRESS",
           409,
         );
@@ -170,13 +207,18 @@ export async function commitCatalogGeneration({
       transaction.set(metadataReference, {
         ...metadata,
         importOperation: {
-          type: "brasfoot",
+          type: operationType,
           runId,
           generationId,
           baseRevision,
           startedAt,
           heartbeatAt: startedAt,
         },
+      });
+      if (operationReference) transaction.set(operationReference, {
+        type: operationType, runId, inputChecksum, generationId, baseGenerationId, baseRevision,
+        status: "staging", startedAt,
+        ...(receipt?.exists ? { previousAttemptGenerationId: receipt.data().generationId } : {}),
       });
     });
   } catch (error) {
@@ -194,7 +236,15 @@ export async function commitCatalogGeneration({
     }
     const metadata = reconciled.data?.() ?? {};
     const operation = metadata.importOperation;
-    if (metadata.lastBrasfootImportId === runId && metadata.activeGenerationId) {
+    if (operationReference) {
+      const receipt = await readForReconciliation(operationReference);
+      if (receipt.data()?.inputChecksum === inputChecksum && receipt.data()?.status === "completed") {
+        idempotentResult = { ...receipt.data().result,
+          activeGenerationId: metadata.activeGenerationId ?? null, idempotent: true };
+      }
+    }
+    if (idempotentResult) return idempotentResult;
+    if (!operationReference && metadata[importIdField] === runId && metadata.activeGenerationId) {
       idempotentGenerationId = metadata.activeGenerationId;
       baseRevision = Math.max(0, Number(metadata.revision) || 0);
     } else if (operation?.runId !== runId || operation?.generationId !== generationId) {
@@ -202,6 +252,7 @@ export async function commitCatalogGeneration({
     }
   }
 
+  if (idempotentResult) return idempotentResult;
   if (idempotentGenerationId) {
     return { generationId: idempotentGenerationId, revision: baseRevision, idempotent: true };
   }
@@ -211,6 +262,7 @@ export async function commitCatalogGeneration({
   const stagedReferences = [];
   let activated = false;
   let promotionOutcomeUncertain = false;
+  const expectedCollections = new Map();
 
   const heartbeat = async () => {
     const heartbeatAt = timestamp(now);
@@ -223,6 +275,10 @@ export async function commitCatalogGeneration({
           "BRASFOOT_IMPORT_REPLACED",
           409,
         );
+      }
+      if (importLeaseExpired(operation, heartbeatAt)) {
+        throw new CatalogImportTransactionError("A importacao perdeu seu prazo; tente novamente",
+          "BRASFOOT_IMPORT_REPLACED", 409);
       }
       transaction.set(metadataReference, {
         ...current.data(),
@@ -241,9 +297,11 @@ export async function commitCatalogGeneration({
       ]));
       for (const record of records) {
         const id = String(record.id);
-        merged.set(id, { ...(merged.get(id) ?? {}), ...record, id });
+        merged.set(id, { ...transformRecord(collectionName, merged.get(id) ?? {}, record), id });
       }
       const completeRecords = [...merged.values()];
+      if (verifyStaging) expectedCollections.set(collectionName,
+        new Map(completeRecords.map((record) => [record.id, canonicalChecksum(record)])));
       counts[collectionName] = completeRecords.length;
       await writeRecords(
         rootFirestore,
@@ -263,38 +321,64 @@ export async function commitCatalogGeneration({
       if (completeRecords.length === 0) await onProgress(collectionName, records.length);
     }
 
+    if (verifyStaging) {
+      const verifiedCollections = {};
+      for (const [collectionName, expected] of expectedCollections) {
+        await heartbeat();
+        const staged = await generationFirestore.collection(collectionName).get();
+        if (staged.docs.length !== expected.size || staged.docs.some((document) => (
+          !expected.has(document.id) || expected.get(document.id) !== canonicalChecksum(document.data())
+        ))) {
+          throw new CatalogImportTransactionError("A geracao importada esta incompleta ou corrompida",
+            "BRASFOOT_IMPORT_VALIDATION_FAILED", 500, { collectionName });
+        }
+        if (validateRecords) verifiedCollections[collectionName] = staged.docs.map((document) => document.data());
+      }
+      if (validateRecords) await validateRecords(verifiedCollections);
+    }
+
     const completedAt = timestamp(now);
+    const result = { generationId, revision: baseRevision + 1, counts, idempotent: false };
     try {
       await rootFirestore.runTransaction(async (transaction) => {
         const current = await transaction.get(metadataReference);
         const metadata = current.data() ?? {};
-        if (metadata.lastBrasfootImportId === runId
+        if (metadata[importIdField] === runId
           && metadata.activeGenerationId === generationId) return;
         const operation = metadata.importOperation;
         if (operation?.runId !== runId
           || operation?.generationId !== generationId
-          || Number(metadata.revision || 0) !== baseRevision) {
+          || Number(metadata.revision || 0) !== baseRevision
+          || (metadata.activeGenerationId ?? null) !== baseGenerationId
+          || importLeaseExpired(operation, timestamp(now))) {
           throw new CatalogImportTransactionError(
-            "A base mudou durante a importacao Brasfoot",
+            "A base mudou durante a importacao",
             "BRASFOOT_IMPORT_CONFLICT",
             409,
           );
         }
         transaction.set(metadataReference, {
           ...metadata,
+          ...activationMetadata(completedAt),
           activeGenerationId: generationId,
           revision: baseRevision + 1,
-          lastBrasfootImportId: runId,
-          lastBrasfootImportAt: completedAt,
+          [importIdField]: runId,
+          [importAtField]: completedAt,
           importOperation: null,
           counts: metadataCounts(counts),
+        });
+        if (operationReference) transaction.set(operationReference, {
+          type: operationType, runId, inputChecksum, generationId, baseGenerationId, baseRevision,
+          status: "completed", startedAt, completedAt, validated: verifyStaging, result,
         });
       });
       activated = true;
     } catch (error) {
       let reconciled;
+      let receipt;
       try {
         reconciled = await readForReconciliation(metadataReference);
+        if (operationReference) receipt = await readForReconciliation(operationReference);
       } catch (reconciliationError) {
         promotionOutcomeUncertain = true;
         throw new CatalogImportTransactionError(
@@ -309,12 +393,13 @@ export async function commitCatalogGeneration({
         );
       }
       const metadata = reconciled.data?.();
-      if (metadata?.lastBrasfootImportId === runId
-        && metadata?.activeGenerationId === generationId) activated = true;
+      if ((metadata?.[importIdField] === runId && metadata?.activeGenerationId === generationId)
+        || (receipt?.data()?.status === "completed" && receipt.data().generationId === generationId
+          && receipt.data().inputChecksum === inputChecksum)) activated = true;
       else throw error;
     }
 
-    return { generationId, revision: baseRevision + 1, counts, idempotent: false };
+    return result;
   } catch (error) {
     if (!activated && !promotionOutcomeUncertain) {
       let cleanupError = null;
@@ -330,10 +415,17 @@ export async function commitCatalogGeneration({
         originalMetadata,
         runId,
         generationId,
-        baseRevision,
       }).catch((failure) => {
         cleanupError ??= failure;
       });
+      if (operationReference) await rootFirestore.runTransaction(async (transaction) => {
+        const receipt = await transaction.get(operationReference);
+        if (receipt.data()?.generationId !== generationId || receipt.data()?.status === "completed") return;
+        transaction.set(operationReference, {
+          ...receipt.data(), status: "failed", failedAt: timestamp(now),
+          errorCode: error?.code ?? "IMPORT_FAILED", stagingCleanupFailed: Boolean(cleanupError),
+        });
+      }).catch((failure) => { cleanupError ??= failure; });
       if (cleanupError && error && typeof error === "object") {
         error.details = { ...(error.details ?? {}), stagingCleanupFailed: cleanupError.message };
       }

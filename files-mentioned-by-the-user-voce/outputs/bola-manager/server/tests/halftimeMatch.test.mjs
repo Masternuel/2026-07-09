@@ -63,7 +63,8 @@ function testCatalog() {
     store: {
       source: "test",
       async listPlayers(clubId) {
-        const players = playersByClub[clubId] ?? [];
+        playersByClub[clubId] ??= createPlayers(clubId);
+        const players = playersByClub[clubId];
         return { players, count: players.length, source: "test" };
       },
       async getStarImpact(clubId, options) {

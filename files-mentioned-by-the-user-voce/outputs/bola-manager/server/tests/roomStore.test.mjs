@@ -134,6 +134,10 @@ test("projecao inicial do viewer usa leitura parcial e omite estado pesado", asy
     "professionalLeaveState",
     "seasonHistory",
     "completedMatches",
+    "matchHistoryPending",
+    "matchHistoryVersion",
+    "scoutingState",
+    "tacticalStudyState",
   ]);
   assert.equal(room.competitionCatalog[0].id, "BR-A");
   for (const path of requested.options.excludePaths) assert.equal(path in room, false);

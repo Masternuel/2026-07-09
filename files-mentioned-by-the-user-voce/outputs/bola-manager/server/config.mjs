@@ -1,3 +1,5 @@
+import { validateMetricsToken } from "./infrastructure/metricsEndpoint.mjs";
+
 function nonNegativeInteger(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
@@ -55,7 +57,14 @@ export function getServerConfig(env = process.env) {
     rateLimitWindowMs: positiveInteger(env.RATE_LIMIT_WINDOW_MS, 60_000),
     rateLimitHttpMax: positiveInteger(env.RATE_LIMIT_HTTP_MAX, 240),
     rateLimitSocketMax: positiveInteger(env.RATE_LIMIT_SOCKET_MAX, 120),
+    metricsToken: validateMetricsToken(env.METRICS_TOKEN),
     dependencyTimeoutMs: positiveInteger(env.DEPENDENCY_TIMEOUT_MS, 2_500),
+    authTimeoutMs: positiveInteger(env.AUTH_TIMEOUT_MS, 10_000),
+    socketAuthRecheckMs: positiveInteger(env.SOCKET_AUTH_RECHECK_MS, 60_000),
+    httpSlowMs: positiveInteger(env.HTTP_SLOW_MS, 5_000),
+    socketSlowMs: positiveInteger(env.SOCKET_SLOW_MS, 5_000),
+    eventLoopWarnMs: positiveInteger(env.EVENT_LOOP_WARN_MS, 250),
+    matchPersistenceTimeoutMs: positiveInteger(env.MATCH_PERSISTENCE_TIMEOUT_MS, 15_000),
     shutdownTimeoutMs: positiveInteger(env.SHUTDOWN_TIMEOUT_MS, 10_000),
     importObjectTtlDays: positiveInteger(env.IMPORT_OBJECT_TTL_DAYS, 1),
   };

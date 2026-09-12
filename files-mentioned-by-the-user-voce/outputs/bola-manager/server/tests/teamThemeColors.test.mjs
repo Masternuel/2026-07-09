@@ -3,7 +3,6 @@ import { readFile, stat } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import reactPlugin from "@vitejs/plugin-react";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
@@ -47,7 +46,8 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     appType: "custom",
     logLevel: "silent",
     server: { middlewareMode: true },
@@ -147,7 +147,7 @@ test("AppShell renderiza um unico backdrop apenas quando existe clube controlado
   const club = {
     id: "SAN", name: "Santos", code: "SAN", city: "Santos", stars: 4,
     budget: "R$ 50 mi", color: "#ffffff", darkThemeColor: "#e7e7e7", lightThemeColor: "#171a17",
-    crestImageUrl: "https://cdn.example.com/santos.png",
+    crestImageUrl: "/assets/santos.png",
   };
   const props = {
     route: "home",
@@ -181,18 +181,18 @@ test("ClubMark mantem imagem e emite variantes para fallback por tema", () => {
   }));
   const image = renderToStaticMarkup(React.createElement(ClubMark, {
     code: "SAN", color: "#ffffff", darkThemeColor: "#e7e7e7", lightThemeColor: "#171a17",
-    imageUrl: "https://cdn.example.com/santos.png",
+    imageUrl: "/assets/santos.png",
   }));
   assert.match(fallback, /--club-color-dark:#e7e7e7/);
   assert.match(fallback, /--club-color-light:#171a17/);
   assert.match(fallback, />SAN<\/span>/);
   assert.match(image, /club-mark--image/);
-  assert.match(image, /<img src="https:\/\/cdn\.example\.com\/santos\.png"/);
+  assert.match(image, /<img src="\/assets\/santos\.png"/);
 });
 
 test("ClubBackdrop usa o escudo do clube e oferece monograma sem imagem", async () => {
   const image = renderToStaticMarkup(React.createElement(ClubBackdrop, {
-    club: { name: "Santos", code: "SAN", crestImageUrl: "https://cdn.example.com/santos.png" },
+    club: { name: "Santos", code: "SAN", crestImageUrl: "/assets/santos.png" },
   }));
   const fallback = renderToStaticMarkup(React.createElement(ClubBackdrop, {
     club: { name: "Santos", code: "SAN", crestImageUrl: null },
@@ -208,7 +208,7 @@ test("ClubBackdrop usa o escudo do clube e oferece monograma sem imagem", async 
   assert.match(image, /class="club-backdrop" aria-hidden="true"/);
   assert.match(image, /class="club-backdrop__stadium"/);
   assert.match(image, /class="club-backdrop__horizon"/);
-  assert.match(image, /class="club-backdrop__crest-image" src="https:\/\/cdn\.example\.com\/santos\.png"/);
+  assert.match(image, /class="club-backdrop__crest-image" src="\/assets\/santos\.png"/);
   assert.match(fallback, /class="club-backdrop__monogram">SAN<\/span>/);
   assert.ok(panorama.size > 0 && panorama.size <= 180_000);
   assert.match(dashboardCss, /height:\s*294px/);
@@ -272,7 +272,7 @@ test("schema aceita legado, persiste os campos e rejeita hexadecimal invalido", 
 test("catalogos do cliente nao descartam campos tematicos nem cores secundarias", () => {
   const catalogClub = normalizeClub({
     ...clubRecord,
-    crestImageUrl: "https://cdn.example.com/santos.png",
+    crestImageUrl: "/assets/santos.png",
   }, new Map());
   assert.equal(catalogClub.darkThemeColor, "#e7e7e7");
   assert.equal(catalogClub.lightThemeColor, "#171a17");

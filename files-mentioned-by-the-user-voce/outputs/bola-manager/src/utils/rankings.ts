@@ -1,6 +1,7 @@
 import type { ClubChoice, LeagueTeam, Player, Room, RoomClubSnapshot, RoomLeagueSnapshot, RoomManager } from '../types';
 import { buildSeasonTable, findRoomLeagueForClub } from './leagueStandings';
 import { playerPositionRating } from './playerRating';
+import type { RankingQuery } from '../../shared/rankingQuery.mjs';
 
 export type RankingFormResult = 'W' | 'D' | 'L';
 export type PlayerRankingCategory = 'goals' | 'assists' | 'contributions' | 'rating' | 'minutes' | 'appearances' | 'keyPasses' | 'tackles' | 'saves' | 'cleanSheets' | 'cards';
@@ -355,6 +356,13 @@ export interface RankingTimelineEntry {
 }
 
 export interface RankingsSnapshot {
+  selection?: {
+    query: RankingQuery;
+    playerIds: string[];
+    clubIds: string[];
+    managers: RankingManager[];
+    managerScope: RankingManager[];
+  };
   scope: RankingsScope;
   options: RankingsOptions;
   meta: RankingsMeta;

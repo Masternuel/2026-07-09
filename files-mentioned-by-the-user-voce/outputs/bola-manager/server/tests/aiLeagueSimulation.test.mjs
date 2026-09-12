@@ -24,6 +24,27 @@ function leagueCatalog(size = 6) {
   }];
 }
 
+function rosterCatalog(leagues) {
+  const positions = ["GOL", "LD", "ZAG", "ZAG", "LE", "VOL", "MC", "MEI", "PD", "PE", "ATA"];
+  return {
+    async listCompetitionCatalog() {
+      return structuredClone(leagues);
+    },
+    async listPlayers(clubId) {
+      const players = positions.map((position, index) => ({
+        id: `${clubId}-P${index + 1}`,
+        clubId,
+        name: `${clubId} Jogador ${index + 1}`,
+        position,
+        overall: 10,
+        condition: 100,
+        active: true,
+      }));
+      return { players, count: players.length, source: "ai-league-test" };
+    },
+  };
+}
+
 function scheduleRoom(size) {
   return {
     managers: [{ id: "m1", clubId: "C1" }],
@@ -95,14 +116,15 @@ test("migracao v2 preserva pares concluidos e preenche resultado compacto", () =
   assert.equal(ensureFixtureSchedule(room), true);
   assert.equal(room.scheduleCompatibility, "v2-preserved");
   assert.deepEqual(
-    room.fixtureSchedule.slice(0, 2).map((fixture) => [fixture.fixtureId, fixture.homeClubId, fixture.awayClubId]),
+    ["abertura", "rodada-2"].map((id) => room.fixtureSchedule.find((fixture) => fixture.fixtureId === id))
+      .map((fixture) => [fixture.fixtureId, fixture.homeClubId, fixture.awayClubId]),
     [["abertura", "C1", "C3"], ["rodada-2", "C2", "C1"]],
   );
   assert.equal(room.fixtureSchedule.length, 6);
   assert.equal(Math.max(...room.fixtureSchedule.map((fixture) => fixture.round)), 6);
   assert.equal(room.leagueMatchResults.length, 1);
   assert.deepEqual(room.leagueMatchResults[0].score, [1, 2]);
-  assert.equal(room.currentFixtureId, "rodada-2");
+  assert.equal(room.currentFixtureId, "rodada-3", "confronto preservado nao pode furar ordem cronologica");
 });
 
 async function startedTwoManagerRoom({ seasonLength = 1 } = {}) {
@@ -112,7 +134,7 @@ async function startedTwoManagerRoom({ seasonLength = 1 } = {}) {
     persistence,
     now,
     codeFactory: () => "BOLA-AI01",
-    catalogStore: { async listCompetitionCatalog() { return leagueCatalog(6); } },
+    catalogStore: rosterCatalog(leagueCatalog(6)),
   });
   const room = await store.createRoom({
     name: "Liga IA",
@@ -259,7 +281,7 @@ test("liga somente IA avanca rodada a rodada junto da liga do manager", async ()
     persistence: new MemoryRoomPersistence(),
     now: () => new Date("2026-07-16T12:00:00.000Z"),
     codeFactory: () => "BOLA-PAR1",
-    catalogStore: { async listCompetitionCatalog() { return [primary, secondary]; } },
+    catalogStore: rosterCatalog([primary, secondary]),
   });
   const room = await store.createRoom({
     name: "Ligas paralelas", creatorId: "m1", creatorName: "Um", clubId: "C1",
@@ -311,7 +333,7 @@ test("liga impar conclui rodada de BYE composta somente por IA", async () => {
     persistence: new MemoryRoomPersistence(),
     now: () => new Date("2026-07-16T12:00:00.000Z"),
     codeFactory: () => "BOLA-ODD1",
-    catalogStore: { async listCompetitionCatalog() { return catalog; } },
+    catalogStore: rosterCatalog(catalog),
   });
   const room = await store.createRoom({
     name: "Liga impar", creatorId: "m1", creatorName: "Um", clubId: "C1",
@@ -340,7 +362,7 @@ test("liga impar simula rodada de BYE intermediaria antes do proximo jogo humano
     persistence: new MemoryRoomPersistence(),
     now: () => new Date("2026-07-16T12:00:00.000Z"),
     codeFactory: () => "BOLA-ODD5",
-    catalogStore: { async listCompetitionCatalog() { return catalog; } },
+    catalogStore: rosterCatalog(catalog),
   });
   const room = await store.createRoom({
     name: "Liga impar cinco", creatorId: "m1", creatorName: "Um", clubId: "C1",
@@ -424,7 +446,7 @@ test("calendario enorme e bloqueado antes de ultrapassar documento Firestore", a
   const store = new RoomStore({
     persistence: new MemoryRoomPersistence(),
     codeFactory: () => "BOLA-HUGE",
-    catalogStore: { async listCompetitionCatalog() { return catalog; } },
+    catalogStore: rosterCatalog(catalog),
   });
   const room = await store.createRoom({
     name: "Liga enorme", creatorId: "m1", creatorName: "Um", clubId: "C1",

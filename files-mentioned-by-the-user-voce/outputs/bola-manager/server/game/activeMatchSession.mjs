@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export const ACTIVE_MATCH_SNAPSHOT_VERSION = 1;
 
 function clone(value) {
@@ -8,6 +10,15 @@ function activeMatchError(message) {
   const error = new Error(message);
   error.code = "ACTIVE_MATCH_CORRUPT";
   return error;
+}
+
+function persistenceSequence(value) {
+  if (value == null) return 0;
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw activeMatchError("Sequencia da partida ativa e invalida");
+  }
+  return sequence;
 }
 
 function serializeRoster(roster) {
@@ -65,9 +76,13 @@ export function serializeActiveMatchSession(session, now = () => new Date()) {
     throw activeMatchError("Sessao ativa sem partida ou fixture");
   }
   const createdAt = session.persistedCreatedAt ?? now().toISOString();
+  const generation = String(session.persistenceGeneration ?? "").trim() || randomUUID();
   session.persistedCreatedAt = createdAt;
+  session.persistenceGeneration = generation;
   return {
     version: ACTIVE_MATCH_SNAPSHOT_VERSION,
+    _matchSequence: persistenceSequence(session.persistenceSequence),
+    _matchGeneration: generation,
     code: session.code,
     matchId: session.match.id,
     fixtureId: session.fixture.fixtureId,
@@ -133,6 +148,7 @@ export function hydrateActiveMatchSession(snapshot, fixture, expectedCode = snap
   )));
   const homeManagerId = snapshot.homeManagerId ?? null;
   const awayManagerId = snapshot.awayManagerId ?? null;
+  const restoredPersistenceSequence = persistenceSequence(snapshot._matchSequence);
   return {
     code: canonicalCode,
     preparing: false,
@@ -148,6 +164,8 @@ export function hydrateActiveMatchSession(snapshot, fixture, expectedCode = snap
     playback: null,
     playbackStarted: false,
     persistChain: Promise.resolve(),
+    persistenceSequence: restoredPersistenceSequence,
+    persistenceGeneration: String(snapshot._matchGeneration ?? "").trim() || randomUUID(),
     persistedCreatedAt: snapshot.createdAt ?? snapshot.updatedAt ?? new Date().toISOString(),
     fixture,
     match: clone(snapshot.match),

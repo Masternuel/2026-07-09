@@ -7,6 +7,8 @@ import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { ClubMark } from '../shared/ClubMark';
 import { ResilientImage } from '../shared/ResilientImage';
+import { createImagePreview, releaseImagePreview } from '../../lib/imageSources';
+import { allowedExternalImage } from '../../../shared/imagePolicy.mjs';
 import type {
   EditorClub,
   EditorEntity,
@@ -188,6 +190,7 @@ function MediaField({ entity, record, file, previewUrl, progress, error, pending
         </div>
         <div className="editor-media-field__controls">
           <p>{file ? <><strong>{file.name}</strong><small>{(file.size / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} KB · será enviada ao salvar</small></> : <><strong>{currentUrl ? 'Imagem associada' : 'Nenhuma imagem selecionada'}</strong><small>Use uma imagem nítida; o recorte se adapta à interface.</small></>}</p>
+          {!file && currentUrl && !allowedExternalImage(currentUrl) && <p role="status">Origem da imagem bloqueada. Reenvie o arquivo pelo Editor.</p>}
           <input
             ref={inputRef}
             className="sr-only"
@@ -248,9 +251,14 @@ export function EditorRecordForm({
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const previewUrl = useMemo(() => mediaFile ? URL.createObjectURL(mediaFile) : null, [mediaFile]);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+  useEffect(() => {
+    if (!mediaFile) { setPreviewUrl(null); return; }
+    const url = createImagePreview(mediaFile);
+    setPreviewUrl(url);
+    return () => releaseImagePreview(url);
+  }, [mediaFile]);
   useEffect(() => {
     const preserveMedia = Boolean(record && record.id && record.id === draft.id && mediaFile);
     setDraft(contextualRecord(record));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { emitSocketRequest } from '../lib/socketRequest';
 import type {
-  AckResponse,
   BolaSocket,
   ClubFacilityProject,
   ProfessionalAffiliationType,
@@ -87,18 +87,6 @@ type CareerStaffEvent =
   | 'career:staff:renew'
   | 'career:professional:lifecycle';
 
-function emitCareerStaff<T extends RoomMutation>(
-  socket: BolaSocket,
-  event: CareerStaffEvent,
-  payload: Record<string, unknown>,
-  acknowledge: (response: AckResponse<T>) => void,
-) {
-  const runtimeSocket = socket as unknown as {
-    emit: (eventName: CareerStaffEvent, data: Record<string, unknown>, callback: (response: AckResponse<T>) => void) => void;
-  };
-  runtimeSocket.emit(event, payload, acknowledge);
-}
-
 function sameId(left: unknown, right: unknown) {
   return String(left ?? '').trim().toLocaleUpperCase('pt-BR')
     === String(right ?? '').trim().toLocaleUpperCase('pt-BR');
@@ -117,16 +105,11 @@ function compactLifecyclePayload(payload: Record<string, unknown>) {
 }
 
 function mutation<T extends RoomMutation>(
-  invoke: (acknowledge: (response: AckResponse<T>) => void) => void,
+  socket: BolaSocket,
+  event: CareerStaffEvent | 'club:upgrade' | 'club:news-read',
+  payload: Record<string, unknown>,
 ): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para confirmar a operacao.')), 12_000);
-    invoke((response) => {
-      window.clearTimeout(timer);
-      if (response?.ok) resolve(response);
-      else reject(new Error(response?.error?.message ?? 'O servidor retornou uma resposta invalida.'));
-    });
-  });
+  return emitSocketRequest<T>(socket, event, payload);
 }
 
 export function useClubCareer(room: Room | null, socket: BolaSocket | null, clubId: string, managerId: string) {
@@ -230,9 +213,11 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
     if (!room || !socket) throw new Error('Save indisponivel.');
     const intent = `upgrade:${room.code}:${clubId}:${areaId}`;
     const operationId = operationIdFor(intent);
-    const response = await mutation<{ room: Room; project: ClubFacilityProject }>((acknowledge) => {
-      socket.emit('club:upgrade', { code: room.code, clubId, areaId, requestId: operationId, ...options }, acknowledge);
-    });
+    const response = await mutation<{ room: Room; project: ClubFacilityProject }>(
+      socket,
+      'club:upgrade',
+      { code: room.code, clubId, areaId, requestId: operationId, ...options },
+    );
     completeIntent(intent);
     return response.project;
   }), [clubId, completeIntent, operationIdFor, room, run, socket]);
@@ -242,11 +227,11 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
       if (!room || !socket) throw new Error('Save indisponivel.');
       const intent = `hire:${room.code}:${clubId}:${staffId}:${JSON.stringify(options)}`;
       const operationId = operationIdFor(intent);
-      const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>((acknowledge) => {
-        emitCareerStaff(socket, 'career:staff:hire', {
-          code: room.code, clubId, staffId, requestId: operationId, ...options,
-        }, acknowledge);
-      });
+      const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>(
+        socket,
+        'career:staff:hire',
+        { code: room.code, clubId, staffId, requestId: operationId, ...options },
+      );
       completeIntent(intent);
       return response.member;
     })
@@ -256,11 +241,11 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
     if (!room || !socket) throw new Error('Save indisponivel.');
     const intent = `fire:${room.code}:${clubId}:${staffId}:${JSON.stringify(options)}`;
     const operationId = operationIdFor(intent);
-    const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>((acknowledge) => {
-      emitCareerStaff(socket, 'career:staff:fire', {
-        code: room.code, clubId, staffId, requestId: operationId, ...options,
-      }, acknowledge);
-    });
+    const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>(
+      socket,
+      'career:staff:fire',
+      { code: room.code, clubId, staffId, requestId: operationId, ...options },
+    );
     completeIntent(intent);
     return response.member;
   }), [clubId, completeIntent, operationIdFor, room, run, socket]);
@@ -270,11 +255,11 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
       if (!room || !socket) throw new Error('Save indisponivel.');
       const intent = `renew:${room.code}:${clubId}:${staffId}:${JSON.stringify(options)}`;
       const operationId = operationIdFor(intent);
-      const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>((acknowledge) => {
-        emitCareerStaff(socket, 'career:staff:renew', {
-          code: room.code, clubId, staffId, requestId: operationId, ...options,
-        }, acknowledge);
-      });
+      const response = await mutation<{ room: Room; member: CareerStaffMember; contract: CareerStaffContract }>(
+        socket,
+        'career:staff:renew',
+        { code: room.code, clubId, staffId, requestId: operationId, ...options },
+      );
       completeIntent(intent);
       return response.member;
     })
@@ -293,8 +278,10 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
       room: Room;
       member?: CareerStaffMember;
       lifecycle?: ProfessionalLifecycleRecord;
-    }>((acknowledge) => {
-      emitCareerStaff(socket, 'career:professional:lifecycle', {
+    }>(
+      socket,
+      'career:professional:lifecycle',
+      {
         ...compactPayload,
         code: room.code,
         clubId,
@@ -302,8 +289,8 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
         professionalId: staffId,
         requestId: operationId,
         action,
-      }, acknowledge);
-    });
+      },
+    );
     completeIntent(intent);
     return response.lifecycle ?? response.member ?? response.room;
   }), [clubId, completeIntent, operationIdFor, room, run, socket]);
@@ -322,8 +309,10 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
     };
     const intent = `staff-package:${room.code}:${clubId}:${managerId}:${JSON.stringify(payload)}`;
     const operationId = operationIdFor(intent);
-    const response = await mutation<{ room: Room; lifecycle?: ProfessionalLifecycleRecord }>((acknowledge) => {
-      emitCareerStaff(socket, 'career:professional:lifecycle', {
+    const response = await mutation<{ room: Room; lifecycle?: ProfessionalLifecycleRecord }>(
+      socket,
+      'career:professional:lifecycle',
+      {
         ...payload,
         code: room.code,
         clubId,
@@ -332,17 +321,19 @@ export function useClubCareer(room: Room | null, socket: BolaSocket | null, club
         coachId: managerId,
         requestId: operationId,
         action: 'staff_package_hire',
-      }, acknowledge);
-    });
+      },
+    );
     completeIntent(intent);
     return response.room;
   }), [clubId, completeIntent, managerId, operationIdFor, room, run, socket]);
 
   const markNewsRead = useCallback((newsIds: string[]) => run('news-read', async () => {
     if (!room || !socket || newsIds.length === 0) return 0;
-    const response = await mutation<{ room: Room; readCount: number }>((acknowledge) => {
-      socket.emit('club:news-read', { code: room.code, newsIds }, acknowledge);
-    });
+    const response = await mutation<{ room: Room; readCount: number }>(
+      socket,
+      'club:news-read',
+      { code: room.code, newsIds },
+    );
     return response.readCount;
   }), [room, run, socket]);
 

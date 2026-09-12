@@ -11,6 +11,7 @@ import { getServerConfig, loadLocalEnvironment } from "./config.mjs";
 import { createRoomsRouter } from "./routes/rooms.mjs";
 import { createMarketRouter } from "./routes/market.mjs";
 import { createMatchRouter } from "./routes/match.mjs";
+import { createScoutingRouter } from "./routes/scouting.mjs";
 import { createNewsRouter } from "./routes/news.mjs";
 import { createTeamsRouter } from "./routes/teams.mjs";
 import { createLeaguesRouter } from "./routes/leagues.mjs";
@@ -47,6 +48,8 @@ import {
   createRedisReadinessCheck,
 } from "./infrastructure/readiness.mjs";
 import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure/redisRuntime.mjs";
+import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
+import { createImagesRouter } from "./routes/images.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -132,12 +135,15 @@ export async function createBolaManagerServer({
     }),
     catalogStore,
     coachInterviewAi,
+    logger: structuredLogger,
+    metrics,
   });
   const matchSessionStore = injectedMatchSessionStore ?? createMatchSessionPersistence({
     firestore: firebase.firestore,
     mode: injectedStore && !firebase.firestore ? "memory" : config.roomStoreMode,
     nodeEnv: config.nodeEnv,
     allowDemoAuth: config.allowDemoAuth,
+    operationTimeoutMs: config.matchPersistenceTimeoutMs,
   });
 
   const app = express();
@@ -177,6 +183,20 @@ export async function createBolaManagerServer({
   });
 
   let draining = false;
+  const eventLoopIntervalMs = 1_000;
+  let expectedEventLoopAt = Date.now() + eventLoopIntervalMs;
+  let lastEventLoopWarningAt = 0;
+  const eventLoopMonitor = setInterval(() => {
+    const now = Date.now();
+    const lagMs = Math.max(0, now - expectedEventLoopAt);
+    expectedEventLoopAt = now + eventLoopIntervalMs;
+    metrics.setGauge("event_loop_lag_ms", lagMs);
+    if (lagMs >= config.eventLoopWarnMs && now - lastEventLoopWarningAt >= 10_000) {
+      lastEventLoopWarningAt = now;
+      structuredLogger.warn("event_loop.slow", { lagMs, thresholdMs: config.eventLoopWarnMs });
+    }
+  }, eventLoopIntervalMs);
+  eventLoopMonitor.unref?.();
   const liveness = createLivenessPayload({ instanceId: config.instanceId });
   const firestoreRequired = !injectedStore && config.roomStoreMode === "firestore";
   const productionCoordinationRequired = config.nodeEnv === "production" && !injectedStore;
@@ -201,13 +221,37 @@ export async function createBolaManagerServer({
     const startedAt = Date.now();
     request.requestId = String(request.headers["x-request-id"] ?? randomUUID()).slice(0, 128);
     response.setHeader("X-Request-Id", request.requestId);
-    response.once("finish", () => structuredLogger.info("http.request", {
+    const context = {
       requestId: request.requestId,
       method: request.method,
       path: request.path,
-      status: response.statusCode,
-      durationMs: Date.now() - startedAt,
-    }));
+    };
+    structuredLogger.info("http.request_start", context);
+    let finished = false;
+    const slowTimer = setTimeout(() => {
+      structuredLogger.warn("http.request_slow", {
+        ...context,
+        durationMs: Date.now() - startedAt,
+        thresholdMs: config.httpSlowMs,
+      });
+    }, config.httpSlowMs);
+    slowTimer.unref?.();
+    response.once("finish", () => {
+      finished = true;
+      clearTimeout(slowTimer);
+      structuredLogger.info("http.request_end", {
+        ...context,
+        status: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+    response.once("close", () => {
+      clearTimeout(slowTimer);
+      if (!finished) structuredLogger.warn("http.request_aborted", {
+        ...context,
+        durationMs: Date.now() - startedAt,
+      });
+    });
     if (draining && !["/health", "/ready", "/metrics"].includes(request.path)) {
       response.status(503).json({ error: { code: "SERVER_DRAINING", message: "Servidor encerrando" } });
       return;
@@ -215,6 +259,7 @@ export async function createBolaManagerServer({
     next();
   });
   app.use(createHttpMetricsMiddleware(metrics));
+  app.all("/metrics", createMetricsHandler({ token: config.metricsToken, metrics, instanceId: config.instanceId }));
   app.use(express.json({ limit: "256kb" }));
 
   app.get("/health", (_request, response) => {
@@ -242,10 +287,6 @@ export async function createBolaManagerServer({
     });
   });
 
-  app.get("/metrics", (_request, response) => {
-    response.json({ instanceId: config.instanceId, ...metrics.snapshot() });
-  });
-
   if (rateLimiter) {
     app.use(createRateLimitMiddleware(rateLimiter, {
       keyResolver: (request) => `http:${request.ip || request.socket?.remoteAddress || "unknown"}`,
@@ -260,21 +301,26 @@ export async function createBolaManagerServer({
     });
   }
 
+  app.use("/api/media", createImagesRouter());
+
   const expressAuth = createExpressAuthMiddleware({
     auth: firebase.auth,
     allowDemoAuth: config.allowDemoAuth,
     nodeEnv: config.nodeEnv,
+    timeoutMs: config.authTimeoutMs,
   });
   app.use("/api/rooms", expressAuth, createRoomsRouter(store, catalogStore, {
     broadcastRoom(room) {
       return emitRoomForViewers(io, room);
     },
+    logger: structuredLogger,
   }));
   app.use("/api/teams", expressAuth, createTeamsRouter(firebase.firestore, catalogStore, store));
   app.use("/api/leagues", expressAuth, createLeaguesRouter(catalogStore, store));
   app.use("/api/tournaments", expressAuth, createTournamentsRouter(catalogStore, store));
   app.use("/api/matches", expressAuth, createMatchRouter(store));
   app.use("/api/market", expressAuth, createMarketRouter(store));
+  app.use("/api/scouting", expressAuth, createScoutingRouter(store));
   app.use("/api/news", expressAuth, createNewsRouter(store, newsStore, socialAi, {
     logger: structuredLogger,
     broadcast(post) {
@@ -296,9 +342,15 @@ export async function createBolaManagerServer({
       error: { code: "NOT_FOUND", message: `Rota nao encontrada: ${request.method} ${request.path}` },
     });
   });
-  app.use((error, _request, response, _next) => {
+  app.use((error, request, response, _next) => {
     const status = Number.isInteger(error.status) ? error.status : 500;
-    if (status >= 500) structuredLogger.error("http.request_error", { error });
+    if (status >= 500) structuredLogger.error("http.request_error", {
+      requestId: request.requestId,
+      method: request.method,
+      path: request.path,
+      status,
+      error,
+    });
     response.status(status).json({
       error: {
         code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
@@ -328,12 +380,16 @@ export async function createBolaManagerServer({
       }
     });
   }
-  io.use(createSocketAuthMiddleware({
+  const authenticateSocket = createSocketAuthMiddleware({
     auth: firebase.auth,
     allowDemoAuth: config.allowDemoAuth,
     nodeEnv: config.nodeEnv,
-  }));
+    timeoutMs: config.authTimeoutMs,
+    recheckMs: config.socketAuthRecheckMs,
+  });
+  io.use(authenticateSocket);
   const sockets = registerSocketHandlers(io, {
+    authenticateSocket,
     store,
     catalogStore,
     mediaService,
@@ -345,6 +401,8 @@ export async function createBolaManagerServer({
     rateLimiter,
     socketRateLimit: config.rateLimitSocketMax,
     rateLimitWindowMs: config.rateLimitWindowMs,
+    socketSlowMs: config.socketSlowMs,
+    matchPersistenceTimeoutMs: config.matchPersistenceTimeoutMs,
     metrics,
     logger: structuredLogger,
   });
@@ -353,10 +411,17 @@ export async function createBolaManagerServer({
     metrics.increment("socket_connections_total");
     metrics.setGauge("socket_connections_active", io.engine.clientsCount);
     structuredLogger.info("socket.connected", { socketId: socket.id });
-    socket.once("disconnect", () => {
+    socket.once("disconnect", (reason) => {
       metrics.increment("socket_disconnections_total");
       metrics.setGauge("socket_connections_active", io.engine.clientsCount);
-      structuredLogger.info("socket.disconnected", { socketId: socket.id });
+      structuredLogger.info("socket.disconnected", { socketId: socket.id, reason });
+    });
+  });
+  io.engine.on("connection_error", (error) => {
+    structuredLogger.warn("socket.connection_error", {
+      code: error.code,
+      message: error.message,
+      transport: error.context?.transport?.name,
     });
   });
 
@@ -391,6 +456,7 @@ export async function createBolaManagerServer({
     async close() {
       if (!closePromise) {
         draining = true;
+        clearInterval(eventLoopMonitor);
         metrics.setGauge("server_ready", 0);
         closePromise = (async () => {
           const graceful = (async () => {

@@ -1077,21 +1077,21 @@ function professionalLifecycleNews(event) {
   const displayName = professional;
   const copies = {
     PROFESSIONAL_NOTICE_STARTED: {
-      title: `${professional} entra em aviso prÃ©vio`,
-      summary: `${professional}${club ? ` e ${club}` : ""} iniciaram uma transiÃ§Ã£o profissional planejada.`,
+      title: `${professional} entra em aviso prévio`,
+      summary: `${professional}${club ? ` e ${club}` : ""} iniciaram uma transição profissional planejada.`,
       importance: "alta",
     },
     PROFESSIONAL_NOTICE_COMPLETED: {
-      title: `${professional} conclui aviso prÃ©vio`,
-      summary: `${professional}${club ? ` encerrou o vÃ­nculo com ${club}` : " concluiu o perÃ­odo de aviso"}.`,
+      title: `${professional} conclui aviso prévio`,
+      summary: `${professional}${club ? ` encerrou o vínculo com ${club}` : " concluiu o período de aviso"}.`,
     },
     PROFESSIONAL_NOTICE_ENDED_EARLY: {
-      title: `${professional} encerra transiÃ§Ã£o antecipadamente`,
-      summary: `O aviso prÃ©vio de ${professional}${club ? ` no ${club}` : ""} terminou antes da data prevista.`,
+      title: `${professional} encerra transição antecipadamente`,
+      summary: `O aviso prévio de ${professional}${club ? ` no ${club}` : ""} terminou antes da data prevista.`,
     },
     PROFESSIONAL_RETIREMENT_ANNOUNCED: {
       title: `${professional} anuncia aposentadoria`,
-      summary: `${professional} confirmou que encerrarÃ¡ a carreira profissional.`,
+      summary: `${professional} confirmou que encerrará a carreira profissional.`,
       importance: "alta",
     },
     PROFESSIONAL_RETIREMENT_POSTPONED: {
@@ -1130,41 +1130,41 @@ function professionalLifecycleNews(event) {
     },
     PROFESSIONAL_MUTUAL_AGREEMENT_COMPLETED: {
       title: `${professional} deixa ${club || "o clube"} em comum acordo`,
-      summary: `${professional}${club ? ` e ${club}` : ""} formalizaram a rescisÃ£o consensual.`,
+      summary: `${professional}${club ? ` e ${club}` : ""} formalizaram a rescisão consensual.`,
       importance: "alta",
     },
     PROFESSIONAL_MUTUAL_SEPARATION_PROPOSED: {
-      title: `${professional} negocia saÃ­da de ${club || "seu clube"}`,
-      summary: `${professional}${club ? ` e ${club}` : ""} abriram uma negociaÃ§Ã£o de rescisÃ£o consensual.`,
+      title: `${professional} negocia saída de ${club || "seu clube"}`,
+      summary: `${professional}${club ? ` e ${club}` : ""} abriram uma negociação de rescisão consensual.`,
     },
     PROFESSIONAL_MUTUAL_SEPARATION_COUNTER: {
-      title: `NegociaÃ§Ã£o com ${professional} recebe contraproposta`,
-      summary: `As condiÃ§Ãµes para a saÃ­da de ${professional} foram revistas.`,
+      title: `Negociação com ${professional} recebe contraproposta`,
+      summary: `As condições para a saída de ${professional} foram revistas.`,
     },
     PROFESSIONAL_MUTUAL_SEPARATION_ACCEPT: {
-      title: `Acordo com ${professional} Ã© aceito`,
-      summary: `${professional}${club ? ` e ${club}` : ""} chegaram a um entendimento sujeito Ã  assinatura.`,
+      title: `Acordo com ${professional} é aceito`,
+      summary: `${professional}${club ? ` e ${club}` : ""} chegaram a um entendimento sujeito à assinatura.`,
     },
     PROFESSIONAL_MUTUAL_SEPARATION_REJECT: {
-      title: `Acordo com ${professional} Ã© recusado`,
-      summary: `A negociaÃ§Ã£o de saÃ­da de ${professional} terminou sem consenso.`,
+      title: `Acordo com ${professional} é recusado`,
+      summary: `A negociação de saída de ${professional} terminou sem consenso.`,
     },
     PROFESSIONAL_MUTUAL_SEPARATION_SIGN: {
-      title: `Acordo com ${professional} Ã© assinado`,
-      summary: `As partes formalizaram as condiÃ§Ãµes para a saÃ­da de ${professional}.`,
+      title: `Acordo com ${professional} é assinado`,
+      summary: `As partes formalizaram as condições para a saída de ${professional}.`,
     },
     PROFESSIONAL_MUTUAL_SEPARATION_EXECUTED: {
       title: `${professional} deixa ${club || "o clube"} em comum acordo`,
-      summary: `${professional}${club ? ` e ${club}` : ""} concluÃ­ram a rescisÃ£o consensual.`,
+      summary: `${professional}${club ? ` e ${club}` : ""} concluíram a rescisão consensual.`,
       importance: "alta",
     },
     PROFESSIONAL_MUTUAL_SEPARATION_EXPIRED: {
-      title: `NegociaÃ§Ã£o com ${professional} expira`,
-      summary: `O prazo do acordo de saÃ­da terminou sem conclusÃ£o.`,
+      title: `Negociação com ${professional} expira`,
+      summary: `O prazo do acordo de saída terminou sem conclusão.`,
     },
     STAFF_RETIREMENT_ANNOUNCED: {
       title: `${professional} anuncia aposentadoria`,
-      summary: `${professional} informou quando encerrarÃ¡ a carreira na comissÃ£o tÃ©cnica.`,
+      summary: `${professional} informou quando encerrará a carreira na comissão técnica.`,
       importance: "alta",
     },
     STAFF_RETIRED: {
@@ -1174,7 +1174,7 @@ function professionalLifecycleNews(event) {
     },
     STAFF_SEPARATED_BY_AGREEMENT: {
       title: `${professional} deixa ${club || "o clube"} em comum acordo`,
-      summary: `A rescisÃ£o de ${professional} foi concluÃ­da de forma consensual.`,
+      summary: `A rescisão de ${professional} foi concluída de forma consensual.`,
     },
     STAFF_INTERIM_PROMOTED: {
       title: `${professional} assume interinamente`,
@@ -1182,13 +1182,13 @@ function professionalLifecycleNews(event) {
       importance: "alta",
     },
     STAFF_PACKAGE_HIRED: {
-      title: `${club || "Clube"} confirma nova comissÃ£o`,
-      summary: `${club || "O clube"} concluiu a contrataÃ§Ã£o conjunta do treinador e sua equipe tÃ©cnica.`,
+      title: `${club || "Clube"} confirma nova comissão`,
+      summary: `${club || "O clube"} concluiu a contratação conjunta do treinador e sua equipe técnica.`,
       importance: "alta",
     },
     COACH_STAFF_PACKAGE_HIRED: {
-      title: `${club || "Clube"} confirma nova comissÃ£o`,
-      summary: `${club || "O clube"} concluiu a contrataÃ§Ã£o conjunta do treinador e sua equipe tÃ©cnica.`,
+      title: `${club || "Clube"} confirma nova comissão`,
+      summary: `${club || "O clube"} concluiu a contratação conjunta do treinador e sua equipe técnica.`,
       importance: "alta",
     },
     COACH_PREFERRED_STAFF_UPDATED: {

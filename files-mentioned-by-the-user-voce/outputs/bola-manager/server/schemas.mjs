@@ -10,6 +10,8 @@ export const roomCodeSchema = z.string()
   .pipe(z.string().regex(/^BOLA-[A-Z0-9]{4}$/, "Codigo de sala invalido"));
 
 export const createRoomSchema = z.object({
+  operationId: z.string().trim().regex(/^[a-zA-Z0-9_.:-]{1,128}$/).optional(),
+  requestId: z.string().trim().regex(/^[a-zA-Z0-9_.:-]{1,128}$/).optional(),
   name: z.string().trim().min(3).max(80),
   creatorId: legacyIdentifier,
   creatorName: z.string().trim().min(2).max(60).optional(),

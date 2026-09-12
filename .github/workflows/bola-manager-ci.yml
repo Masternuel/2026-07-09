@@ -1,0 +1,70 @@
+name: Bola Manager CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bola-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: files-mentioned-by-the-user-voce/outputs/bola-manager
+
+jobs:
+  quality:
+    name: Typecheck, build, backend e frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:server
+      - run: npm run test:frontend
+  smoke:
+    name: Smoke E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: e2e-report
+          path: |
+            files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/report
+            files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/results
+          retention-days: 7
+  required:
+    name: Bola Manager required
+    if: ${{ always() }}
+    needs: [quality, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exigir todas as verificações
+        working-directory: .
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          SMOKE: ${{ needs.smoke.result }}
+        run: test "$QUALITY" = success && test "$SMOKE" = success

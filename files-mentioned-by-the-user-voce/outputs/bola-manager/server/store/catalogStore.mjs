@@ -7,7 +7,9 @@ import {
   MAX_CATALOG_DATABASE_BYTES,
   createCatalogDatabasePackage,
   parseCatalogDatabase,
+  validateCatalogDatabaseReferences,
 } from "../services/catalogDatabase.mjs";
+import { canonicalChecksum } from "./roomPersistenceSections.mjs";
 import {
   catalogDatabaseDocument,
   createGlobalCatalogGenerationFirestore,
@@ -584,7 +586,7 @@ export class CatalogStore {
     return database;
   }
 
-  async importDatabase(databaseValue, updatedBy) {
+  async importDatabase(databaseValue, updatedBy, { operationId, batchSize = 400, onProgress } = {}) {
     this.#assertAvailable();
     if (!this.ownerId || !this.rootFirestore) {
       throw new CatalogStoreError(
@@ -594,146 +596,64 @@ export class CatalogStore {
       );
     }
     const database = parseCatalogDatabase(databaseValue);
+    const inputChecksum = canonicalChecksum(database);
+    const runId = operationId ?? inputChecksum;
+    if (typeof runId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(runId)) {
+      throw new CatalogStoreError("Identificador de importacao invalido", "CATALOG_DATABASE_IMPORT_ID_INVALID", 400);
+    }
     const metadataReference = catalogDatabaseDocument(this.rootFirestore, this.ownerId);
-    const startedAt = this.now().toISOString();
-    let revision = 1;
-    await this.rootFirestore.runTransaction(async (transaction) => {
-      const metadata = await transaction.get(metadataReference);
-      if (metadata.data()?.status === "importing" || metadata.data()?.importOperation) {
-        throw new CatalogStoreError(
-          "Ja existe uma importacao em andamento nesta base",
-          "CATALOG_DATABASE_IMPORT_IN_PROGRESS",
-          409,
-        );
-      }
-      if ((metadata.data()?.activeGenerationId ?? null) !== (this.generationId ?? null)) {
-        throw new CatalogStoreError(
-          "A base mudou; recarregue o Editor antes de importar",
-          "CATALOG_DATABASE_STALE",
-          409,
-        );
-      }
-      revision = Math.max(1, Number(metadata.data()?.revision) || 1);
-      transaction.set(metadataReference, {
-        ...(metadata.exists ? metadata.data() : {}),
-        ownerId: this.ownerId,
-        initialized: true,
-        status: "importing",
-        importStartedAt: startedAt,
-        updatedAt: startedAt,
-      });
-    });
-
     const timestamp = this.now().toISOString();
-    const operations = CATALOG_DATABASE_ENTITIES.flatMap((entity) => (
-      database.records[entity].map((record) => ({
-        entity,
-        reference: this.#collection(entity).doc(record.id),
-        record: {
-          ...record,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          updatedBy,
-        },
-      }))
-    ));
-    const backups = [];
-    const previousMediaPaths = new Set();
-    let writeStarted = false;
-    let rollbackSucceeded = true;
+    const counts = Object.fromEntries(CATALOG_DATABASE_ENTITIES.map((entity) => [entity, database.records[entity].length]));
+    const entitiesByCollection = Object.fromEntries(Object.entries(COLLECTIONS).map(([entity, collection]) => [collection, entity]));
     try {
-      for (const chunk of transactionChunks(operations)) {
-        const documents = typeof this.rootFirestore.getAll === "function"
-          ? await this.rootFirestore.getAll(...chunk.map((operation) => operation.reference))
-          : await Promise.all(chunk.map((operation) => operation.reference.get()));
-        documents.forEach((document, documentIndex) => {
-          const operation = chunk[documentIndex];
-          const existing = document.exists ? { ...document.data(), id: document.id } : null;
-          const media = MEDIA_FIELDS[operation.entity];
-          if (existing?.createdAt) operation.record.createdAt = existing.createdAt;
-          if (media && existing?.[media.path]) {
-            if ((existing[media.url] ?? null) === (operation.record[media.url] ?? null)) {
-              operation.record[media.path] = existing[media.path];
-            } else {
-              operation.record[media.path] = null;
-              previousMediaPaths.add(existing[media.path]);
-            }
-          }
-          backups.push({
-            reference: operation.reference,
-            exists: document.exists,
-            record: existing,
-          });
-        });
-      }
-
-      for (const chunk of transactionChunks(operations)) {
-        writeStarted = true;
-        await this.rootFirestore.runTransaction(async (transaction) => {
-          for (const operation of chunk) transaction.set(operation.reference, operation.record);
-        });
-      }
-
-      const completedAt = this.now().toISOString();
-      const counts = Object.fromEntries(CATALOG_DATABASE_ENTITIES.map((entity) => [
-        entity,
-        database.records[entity].length,
-      ]));
-      await this.rootFirestore.runTransaction(async (transaction) => {
-        const current = await transaction.get(metadataReference);
-        if (current.data()?.status !== "importing"
-          || Number(current.data()?.revision || 0) !== revision) {
-          throw new CatalogStoreError(
-            "A base mudou durante a importacao",
-            "CATALOG_DATABASE_IMPORT_CONFLICT",
-            409,
-          );
-        }
-        transaction.set(metadataReference, {
-          ...(current.exists ? current.data() : {}),
-          status: "ready",
-          revision: revision + 1,
-          lastImportAt: completedAt,
-          lastImportBy: updatedBy,
-          updatedAt: completedAt,
-          counts,
-        });
+      const result = await commitCatalogGeneration({
+        rootFirestore: this.rootFirestore,
+        metadataReference,
+        sourceFirestoreForGeneration: (generationId) => generationId
+          ? createScopedCatalogFirestore(this.rootFirestore, this.ownerId, generationId) : this.scopeFirestore,
+        generationFirestoreForId: (generationId) => createScopedCatalogFirestore(this.rootFirestore, this.ownerId, generationId),
+        collectionPlan: [
+          ...CATALOG_DATABASE_ENTITIES.map((entity) => ({ collectionName: COLLECTIONS[entity], records: database.records[entity] })),
+          { collectionName: "brasfootCups", records: [] },
+        ],
+        runId, batchSize, now: this.now, onProgress,
+        operationType: "json", inputChecksum,
+        operationReference: metadataReference.collection("jsonImports").doc(runId),
+        expectedGenerationId: this.generationId,
+        verifyStaging: true,
+        validateRecords: (collections) => validateCatalogDatabaseReferences(Object.fromEntries(
+          CATALOG_DATABASE_ENTITIES.map((entity) => [entity, collections[COLLECTIONS[entity]]]),
+        )),
+        transformRecord: (collection, existing, record) => {
+          const media = MEDIA_FIELDS[entitiesByCollection[collection]];
+          return {
+            ...record,
+            createdAt: existing.createdAt || timestamp, updatedAt: timestamp, updatedBy,
+            ...(media ? {
+              [media.path]: (existing[media.url] ?? null) === (record[media.url] ?? null)
+                ? existing[media.path] ?? null : null,
+            } : {}),
+          };
+        },
+        metadataCounts: (collectionCounts) => Object.fromEntries(CATALOG_DATABASE_ENTITIES.map(
+          (entity) => [entity, collectionCounts[COLLECTIONS[entity]] ?? 0],
+        )),
+        activationMetadata: (completedAt) => ({
+          ownerId: this.ownerId, initialized: true, status: "ready", lastImportAt: completedAt,
+          lastImportBy: updatedBy, updatedAt: completedAt,
+        }),
       });
+      await this.ensureInitialized();
       return {
-        imported: true,
-        mode: "merge",
-        revision: revision + 1,
-        counts,
-        total: operations.length,
-        previousMediaPaths: [...previousMediaPaths],
+        imported: true, mode: "merge", revision: result.revision, counts,
+        total: Object.values(counts).reduce((sum, count) => sum + count, 0),
+        operationId: runId, generationId: result.generationId, idempotent: result.idempotent,
+        // Older generations still reference their assets; never delete them on activation.
+        previousMediaPaths: [],
       };
     } catch (error) {
-      if (writeStarted) {
-        try {
-          for (const chunk of transactionChunks(backups)) {
-            await this.rootFirestore.runTransaction(async (transaction) => {
-              for (const backup of chunk) {
-                if (backup.exists) transaction.set(backup.reference, backup.record);
-                else transaction.delete(backup.reference);
-              }
-            });
-          }
-        } catch {
-          rollbackSucceeded = false;
-        }
-      }
-      await this.rootFirestore.runTransaction(async (transaction) => {
-        const current = await transaction.get(metadataReference);
-        transaction.set(metadataReference, {
-          ...(current.exists ? current.data() : {}),
-          status: rollbackSucceeded ? "ready" : "import_failed",
-          importFailedAt: this.now().toISOString(),
-          updatedAt: this.now().toISOString(),
-        });
-      }).catch(() => {});
-      if (!rollbackSucceeded && error && typeof error === "object") {
-        error.details = { ...(error.details ?? {}), recoveryRequired: true };
-      }
+      if (typeof error?.code === "string" && error.code.startsWith("BRASFOOT_IMPORT_"))
+        error.code = error.code.replace("BRASFOOT_IMPORT_", "CATALOG_DATABASE_IMPORT_");
       throw error;
     }
   }

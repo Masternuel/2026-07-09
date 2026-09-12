@@ -25,85 +25,50 @@ import {
 import { roomForViewer } from "../services/roomVisibility.mjs";
 import { buildRoomRankings } from "../services/rankings.mjs";
 import { catalogForOwner } from "../store/catalogScope.mjs";
-import { buildOpponentStudy } from "../game/opponentStudy.mjs";
-import { mergePlayerStates } from "../game/playerProgression.mjs";
-import { listRoomPlayers } from "../game/roomRoster.mjs";
-import { clubCareerPerformanceEffects } from "../game/clubCareerSystem.mjs";
+import { rankingQuerySchema } from "../../shared/rankingQuery.mjs";
 
-const rankingsQuerySchema = z.object({
+const rankingsQuerySchema = rankingQuerySchema.extend({
   clubId: editorRecordIdSchema.optional(),
   competitionId: editorRecordIdSchema.optional(),
 }).strict();
 
 const opponentStudyQuerySchema = z.object({
   depth: z.enum(["quick", "standard", "deep"]).default("standard"),
+  clubId: editorRecordIdSchema.optional(),
+}).strict();
+const opponentStudyStartSchema = opponentStudyQuerySchema.extend({
+  clubId: editorRecordIdSchema,
+  viewerClubId: editorRecordIdSchema,
 }).strict();
 
 const coachCareerRecordIdSchema = z.string().trim().min(1).max(160);
-
-function key(value) {
-  return String(value ?? "").trim().toLocaleUpperCase("pt-BR");
-}
-
-function opponentStudyDto(report) {
-  if (!report) return null;
-  const sectors = Object.values(report.sectors ?? {}).map((sector) => ({
-    key: String(sector.code ?? "").toLocaleLowerCase("pt-BR"),
-    label: sector.label,
-    rating: sector.rating ?? 0,
-    level: sector.classification === "strong"
-      ? "strong"
-      : sector.classification === "vulnerable" ? "vulnerable" : "balanced",
-  }));
-  return {
-    fixtureId: report.fixtureId,
-    opponentClubId: report.opponent?.id ?? "",
-    opponentName: report.opponent?.name ?? "Adversário",
-    depth: report.confidence?.depth ?? "standard",
-    confidence: report.confidence?.score ?? 0,
-    estimatedStudyHours: report.confidence?.estimatedStudyHours ?? 0,
-    scoutingSpeedMultiplier: report.confidence?.scoutingSpeedMultiplier ?? 1,
-    source: report.evidence?.tacticSource === "public-preview" ? "observed" : "estimated",
-    probableFormation: report.probableFormation?.id ?? "4-3-3",
-    style: report.style?.label ?? "Equilibrado",
-    probableLineup: (report.probableLineup ?? []).map((player) => ({
-      id: player.id,
-      name: player.name,
-      position: player.position,
-      rating: player.overall ?? 0,
-      reason: `Provável função: ${player.role}`,
-    })),
-    dangerousPlayers: (report.dangerousPlayers ?? []).map((player) => ({
-      id: player.id,
-      name: player.name,
-      position: player.position,
-      rating: player.score ?? 0,
-      reason: (player.reasons ?? []).map((reason) => reason.label).join(" e ") || "Destaque pelos dados do elenco",
-    })),
-    sectors,
-    strengths: report.strengths ?? [],
-    weaknesses: report.weaknesses ?? [],
-    recommendations: report.recommendations ?? [],
-  };
-}
 
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 }
 
-export function createRoomsRouter(store, catalogStore = null, { broadcastRoom = null } = {}) {
+export function createRoomsRouter(store, catalogStore = null, { broadcastRoom = null, logger = console } = {}) {
   const router = Router();
+
+  const broadcastInBackground = (room) => {
+    if (!room || typeof broadcastRoom !== "function") return;
+    setImmediate(() => {
+      Promise.resolve(broadcastRoom(room)).catch((error) => {
+        logger.error?.("room.broadcast_failed", { code: room.code, error });
+      });
+    });
+  };
 
   const coachMutationResponse = async (response, result, managerId) => {
     const room = result?.room ?? result;
     const coachCareer = result?.coachCareer
       ?? result?.snapshot
       ?? await store.getCoachCareerSnapshot(room.code, managerId);
-    if (room && typeof broadcastRoom === "function") await broadcastRoom(room);
     response.json({
       coachCareer,
       ...(room ? { room: roomForViewer(room, managerId) } : {}),
     });
+    broadcastInBackground(room);
   };
 
   router.get("/", asyncRoute(async (request, response) => {
@@ -130,66 +95,14 @@ export function createRoomsRouter(store, catalogStore = null, { broadcastRoom = 
   router.get("/:code/opponent-study", asyncRoute(async (request, response) => {
     const code = parseOrThrow(roomCodeSchema, request.params.code);
     const query = parseOrThrow(opponentStudyQuerySchema, request.query);
-    const room = await store.requireMembership(code, request.user.uid);
-    const manager = (room.managers ?? []).find((candidate) => candidate.id === request.user.uid);
-    if (!manager?.clubId) {
-      response.json({ study: null });
-      return;
-    }
-    const completed = new Set((room.completedFixtureIds ?? []).map(key));
-    const fixture = (room.fixtureSchedule ?? []).find((candidate) => (
-      !completed.has(key(candidate.fixtureId))
-      && [candidate.homeClubId, candidate.awayClubId].some((clubId) => key(clubId) === key(manager.clubId))
-    ));
-    if (!fixture) {
-      response.json({ study: null });
-      return;
-    }
-    const opponentClubId = key(fixture.homeClubId) === key(manager.clubId)
-      ? fixture.awayClubId
-      : fixture.homeClubId;
-    const opponentManager = (room.managers ?? []).find((candidate) => key(candidate.clubId) === key(opponentClubId));
-    const opponentLineup = (room.lineups ?? []).find((candidate) => (
-      (opponentManager && candidate.managerId === opponentManager.id)
-      || key(candidate.clubId) === key(opponentClubId)
-    ));
-    const publicTactics = opponentLineup?.tactics?.secret === false
-      ? opponentLineup.tactics
-      : null;
-    const tacticPreview = publicTactics
-      ? {
-          formationId: publicTactics.formationId,
-          ...(query.depth !== "quick" ? { mentality: publicTactics.mentality } : {}),
-          ...(query.depth === "deep"
-            ? { teamInstructions: structuredClone(publicTactics.teamInstructions) }
-            : {}),
-        }
-      : null;
-    const observedLineup = publicTactics && query.depth === "deep"
-      ? { lineupIds: opponentLineup.lineupIds }
-      : null;
-    const activeCatalog = await catalogForOwner(catalogStore, room.catalogOwnerId || room.ownerId);
-    const roster = await listRoomPlayers(activeCatalog, room, opponentClubId);
-    const players = mergePlayerStates(roster.players ?? [], room, opponentClubId);
-    const opponentClub = (room.competitionCatalog ?? [])
-      .flatMap((league) => league.clubs ?? [])
-      .find((candidate) => key(candidate.id) === key(opponentClubId)) ?? {
-        id: opponentClubId,
-        name: key(fixture.homeClubId) === key(opponentClubId) ? fixture.homeTeam : fixture.awayTeam,
-      };
-    const careerEffects = clubCareerPerformanceEffects(room, manager.clubId);
-    const report = buildOpponentStudy({
-      fixture,
-      viewerClubId: manager.clubId,
-      opponentClub,
-      players,
-      lineup: observedLineup,
-      tacticPreview,
-      depth: query.depth,
-      professionalConfidenceBonus: careerEffects.analysisConfidenceBonus + careerEffects.scoutingConfidenceBonus,
-      professionalSpeedMultiplier: careerEffects.scoutingSpeedMultiplier,
-    });
-    response.json({ study: opponentStudyDto(report) });
+    response.json({ study: await store.getOpponentStudy(code, request.user.uid, query, catalogStore) });
+  }));
+
+  router.post("/:code/opponent-study", asyncRoute(async (request, response) => {
+    const code = parseOrThrow(roomCodeSchema, request.params.code);
+    const input = parseOrThrow(opponentStudyStartSchema, request.body);
+    await store.startOpponentStudy(code, request.user.uid, input);
+    response.json({ study: await store.getOpponentStudy(code, request.user.uid, input, catalogStore) });
   }));
 
   router.post("/:code/join", asyncRoute(async (request, response) => {
@@ -219,7 +132,7 @@ export function createRoomsRouter(store, catalogStore = null, { broadcastRoom = 
 
   router.get("/:code/rankings", asyncRoute(async (request, response) => {
     const code = parseOrThrow(roomCodeSchema, request.params.code);
-    const query = parseOrThrow(rankingsQuerySchema, request.query);
+    const { clubId, competitionId, ...query } = parseOrThrow(rankingsQuerySchema, request.query);
     const room = await store.requireMembership(code, request.user.uid);
     const activeCatalog = await catalogForOwner(
       catalogStore,
@@ -228,9 +141,10 @@ export function createRoomsRouter(store, catalogStore = null, { broadcastRoom = 
     const rankings = await buildRoomRankings({
       room,
       catalogStore: activeCatalog,
-      clubId: query.clubId,
-      competitionId: query.competitionId,
+      clubId,
+      competitionId,
       viewerId: request.user.uid,
+      query,
     });
     response.json({ rankings });
   }));

@@ -29,6 +29,20 @@ function waitForRoomState(socket, predicate) {
   });
 }
 
+const MATCH_POSITIONS = ["GOL", "LE", "ZAG", "ZAG", "LD", "VOL", "MC", "MC", "PE", "ATA", "PD"];
+
+function completeRoster(clubId, { starCount = 0 } = {}) {
+  return MATCH_POSITIONS.map((position, index) => ({
+    id: `${clubId.toLocaleLowerCase()}-complete-${index}`,
+    clubId,
+    name: `${clubId} ${index}`,
+    position,
+    overall: 15,
+    active: true,
+    isStar: index < starCount,
+  }));
+}
+
 test("cada manager ve apenas a propria escalacao enquanto a partida usa ambas", async (context) => {
   const positions = ["GOL", "LE", "ZAG", "ZAG", "LD", "VOL", "MC", "MC", "PE", "ATA", "PD"];
   const roster = (clubId) => positions.map((position, index) => ({
@@ -225,10 +239,11 @@ test("partida usa estrela da escalacao salva mesmo quando seria reserva por over
   const catalogStore = {
     source: "firestore",
     async listPlayers(clubId) {
-      return { players: clubId === "AUR" ? auroraPlayers : [], count: auroraPlayers.length, source: "firestore" };
+      const players = clubId === "AUR" ? auroraPlayers : completeRoster(clubId);
+      return { players, count: players.length, source: "firestore" };
     },
     async getStarImpact(clubId, options) {
-      return calculateStarImpact(clubId, clubId === "AUR" ? auroraPlayers : [], options);
+      return calculateStarImpact(clubId, clubId === "AUR" ? auroraPlayers : completeRoster(clubId), options);
     },
   };
   const { server, url } = await startTestServer({ catalogStore });
@@ -265,8 +280,16 @@ test("partida usa estrela da escalacao salva mesmo quando seria reserva por over
 test("partida real aplica perfil de estrelas uma unica vez e persiste metadados", async (context) => {
   const catalogStore = {
     source: "test",
-    async getStarImpact(clubId) {
-      return stars(clubId, clubId === "AUR" ? 4 : 0);
+    async listPlayers(clubId) {
+      const players = completeRoster(clubId, { starCount: clubId === "AUR" ? 4 : 0 });
+      return { players, count: players.length, source: "test" };
+    },
+    async getStarImpact(clubId, options) {
+      return calculateStarImpact(
+        clubId,
+        completeRoster(clubId, { starCount: clubId === "AUR" ? 4 : 0 }),
+        options,
+      );
     },
   };
   const { server, url } = await startTestServer({ catalogStore });

@@ -1248,3 +1248,33 @@ test("GET rankings exige membership e usa a base pessoal do dono da sala", async
   ]);
   assert.equal(JSON.stringify(body).includes("privateAudit"), false);
 });
+
+test('GET rankings aplica filtros, ordenação e período enviados pela interface', async (context) => {
+  const { url } = await routeHarness(context);
+  const params = new URLSearchParams({ clubId: 'A', competitionId: 'L1', search: 'alice', nationalityFilter: 'BRA',
+    positionFilter: 'ATA', ageFilter: '22-25', playerColumn: 'player', playerDirection: 'asc', managerPeriod: 'last5' });
+  const response = await jsonRequest(`${url}/api/rooms/BOLA-R4NK/rankings?${params}`, 'owner-token');
+  assert.equal(response.status, 200);
+  const { rankings } = await response.json();
+  assert.deepEqual(rankings.selection.playerIds, ['A-9']);
+  assert.equal(rankings.players.length, 3, 'perfis e opções não são truncados pelo filtro');
+  assert.equal(rankings.selection.query.search, 'alice');
+  assert.deepEqual(rankings.selection.managers, [], 'busca também restringe treinadores');
+  const manager = rankings.selection.managerScope.find((row) => row.id === 'owner-1');
+  assert.equal(manager.played, 2);
+  assert.equal(manager.points, 4);
+  assert.equal(manager.rankingPoints, null);
+  const asc = await jsonRequest(`${url}/api/rooms/BOLA-R4NK/rankings?clubId=A&competitionId=L1&clubColumn=points&clubDirection=asc`, 'owner-token');
+  assert.deepEqual((await asc.json()).rankings.selection.clubIds, ['B', 'A']);
+});
+
+test('GET rankings rejeita consulta inválida sem calcular outra seleção silenciosamente', async (context) => {
+  const { url, calls } = await routeHarness(context);
+  for (const query of ['managerPeriod=last-five', 'playerColumn=invalid', 'search=' + 'x'.repeat(121), 'unexpected=1', 'playerDirection=asc&playerDirection=desc']) {
+    const response = await jsonRequest(`${url}/api/rooms/BOLA-R4NK/rankings?${query}`, 'owner-token');
+    assert.equal(response.status, 400, query);
+  }
+  assert.deepEqual(calls, [], 'validação ocorre antes da leitura da carreira');
+  const future = await jsonRequest(`${url}/api/rooms/BOLA-R4NK/rankings?season=9999`, 'owner-token');
+  assert.equal(future.status, 400);
+});

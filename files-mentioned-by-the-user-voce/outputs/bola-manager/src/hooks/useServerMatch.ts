@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { emitSocketRequest } from '../lib/socketRequest';
 import type {
-  AckResponse,
   BolaSocket,
   HalftimeTactics,
   LineupSaveResponse,
@@ -22,18 +22,6 @@ import type {
 import { toClientMatchEvent } from '../utils/matchEventAdapter';
 
 export type ServerMatchPhase = 'idle' | 'syncing' | 'starting' | 'running' | 'halftime' | 'finished' | 'error';
-
-function waitForAck<T extends object>(invoke: (callback: (response: AckResponse<T>) => void) => void): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder.')), 8000);
-    invoke((response: unknown) => {
-      window.clearTimeout(timer);
-      const validated = validateAckResponse<T>(response);
-      if (validated.ok) resolve(validated.value);
-      else reject(new Error(validated.message));
-    });
-  });
-}
 
 export function validateAckResponse<T extends object>(
   value: unknown,
@@ -228,7 +216,7 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     if (!enabled || !socket?.connected || !room) return;
     let cancelled = false;
     setPhase((current) => current === 'idle' || current === 'error' ? 'syncing' : current);
-    void waitForAck<MatchSyncResponse>((acknowledge) => socket.emit('match:sync', { code: room.code }, acknowledge))
+    void emitSocketRequest<MatchSyncResponse>(socket, 'match:sync', { code: room.code })
       .then((synced) => {
         if (cancelled) return;
         const startedMatchId = synced.started?.id ?? null;
@@ -275,11 +263,10 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setSpeedPending(null);
     setError(null);
     try {
-      await waitForAck<{ matchId: string }>((acknowledge) => socket.emit(
-        'match:start',
-        { code: room.code, fixtureId: room.currentFixtureId ?? undefined },
-        acknowledge,
-      ));
+      await emitSocketRequest<{ matchId: string }>(socket, 'match:start', {
+        code: room.code,
+        fixtureId: room.currentFixtureId ?? undefined,
+      });
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : 'Não foi possível iniciar a partida.';
       setError(message);
@@ -302,11 +289,11 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setSpeedPending(nextSpeed);
     setError(null);
     try {
-      const response = await waitForAck<{ changed: boolean; speed: ServerMatchSpeed }>((acknowledge) => socket.emit(
+      const response = await emitSocketRequest<{ changed: boolean; speed: ServerMatchSpeed }>(
+        socket,
         'match:speed',
         { code: roomCode, matchId, speed: nextSpeed },
-        acknowledge,
-      ));
+      );
       if (
         roomCodeRef.current !== roomCode
         || activeMatchIdRef.current !== matchId
@@ -335,11 +322,11 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setReadyPending(true);
     setError(null);
     try {
-      return await waitForAck<MatchReadyResponse>((acknowledge) => socket.emit(
-        'match:ready',
-        { code: room.code, fixtureId: room.currentFixtureId ?? undefined, ready },
-        acknowledge,
-      ));
+      return await emitSocketRequest<MatchReadyResponse>(socket, 'match:ready', {
+        code: room.code,
+        fixtureId: room.currentFixtureId ?? undefined,
+        ready,
+      });
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : 'Não foi possível confirmar a prontidão.';
       setError(message);
@@ -355,11 +342,11 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     if (new Set(lineupIds).size !== lineupIds.length) throw new Error('A escalação não pode repetir jogadores.');
     setError(null);
     try {
-      return await waitForAck<LineupSaveResponse>((acknowledge) => socket.emit(
-        'lineup:save',
-        { code: room.code, lineupIds, tactics },
-        acknowledge,
-      ));
+      return await emitSocketRequest<LineupSaveResponse>(socket, 'lineup:save', {
+        code: room.code,
+        lineupIds,
+        tactics,
+      });
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : 'Não foi possível salvar a escalação.';
       setError(message);
@@ -369,7 +356,7 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
 
   const skip = useCallback(async () => {
     if (!socket?.connected || !room) throw new Error('A conexão com a partida foi interrompida.');
-    await waitForAck<{ skipped: boolean }>((acknowledge) => socket.emit('match:skip', { code: room.code }, acknowledge));
+    await emitSocketRequest<{ skipped: boolean }>(socket, 'match:skip', { code: room.code });
   }, [socket, room]);
 
   const saveHalftimePlan = useCallback(async (lineupIds: string[], tactics: HalftimeTactics) => {
@@ -383,11 +370,12 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setHalftimePending('plan');
     setError(null);
     try {
-      const response = await waitForAck<MatchHalftimeResponse>((acknowledge) => socket.emit(
-        'match:halftime-plan',
-        { code: room.code, matchId: halftime.matchId, lineupIds, tactics },
-        acknowledge,
-      ));
+      const response = await emitSocketRequest<MatchHalftimeResponse>(socket, 'match:halftime-plan', {
+        code: room.code,
+        matchId: halftime.matchId,
+        lineupIds,
+        tactics,
+      });
       setHalftime((current) => mergeHalftimeState(current, response.halftime));
       setPhase('halftime');
       return response.halftime;
@@ -409,11 +397,11 @@ export function useServerMatch(socket: BolaSocket | null, room: Room | null, ena
     setHalftimePending('ready');
     setError(null);
     try {
-      const response = await waitForAck<MatchHalftimeResponse>((acknowledge) => socket.emit(
-        'match:halftime-ready',
-        { code: room.code, matchId: halftime.matchId, ready },
-        acknowledge,
-      ));
+      const response = await emitSocketRequest<MatchHalftimeResponse>(socket, 'match:halftime-ready', {
+        code: room.code,
+        matchId: halftime.matchId,
+        ready,
+      });
       if (response.resumed) {
         setHalftime((current) => mergeHalftimeState(current, response.halftime));
         setPhase('running');

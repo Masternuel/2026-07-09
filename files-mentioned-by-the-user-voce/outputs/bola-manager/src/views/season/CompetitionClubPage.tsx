@@ -24,9 +24,10 @@ import {
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
 import { ClubMark } from '../../components/shared/ClubMark';
-import { ProgressBar } from '../../components/shared/ProgressBar';
 import { ResilientImage } from '../../components/shared/ResilientImage';
 import { usePlayerCatalog } from '../../hooks/usePlayerCatalog';
+import { useOpponentStudy } from '../../hooks/useOpponentStudy';
+import { OpponentStudyPanel } from '../../components/tactics/OpponentStudyPanel';
 import {
   loadCompetitionClubDetail,
   type CompetitionClubDetail,
@@ -44,6 +45,7 @@ interface CompetitionClubPageProps {
   club: CompetitionClubIdentity;
   managerClubId: string;
   roomCode?: string | null;
+  revision?: number;
   currentSeason: number;
   competitionName: string;
   position: number | null;
@@ -80,30 +82,6 @@ const negotiabilityLabels: Record<CompetitionClubSquadMember['negotiability'], s
   listed: 'Listado',
   unknown: 'Mercado indisponível',
 };
-
-const tacticLabels = {
-  possession: 'Posse de bola',
-  direct: 'Jogo direto',
-  counterattack: 'Contra-ataque',
-  'wing-play': 'Jogo pelos lados',
-  'high-press': 'Pressão alta',
-  cautious: 'Cautelosa',
-  balanced: 'Equilibrada',
-  positive: 'Positiva',
-  attacking: 'Ofensiva',
-  defensive: 'Defensiva',
-  zonal: 'Por zona',
-  mixed: 'Mista',
-  'man-to-man': 'Individual',
-  passive: 'Passiva',
-  moderate: 'Moderada',
-  intense: 'Intensa',
-  aggressive: 'Agressiva',
-} as const;
-
-function labelFor(value: string) {
-  return tacticLabels[value as keyof typeof tacticLabels] ?? value;
-}
 
 function formatDate(value: string | null) {
   if (!value) return 'Data a definir';
@@ -209,6 +187,7 @@ export function CompetitionClubPage({
   club,
   managerClubId,
   roomCode = null,
+  revision = 0,
   currentSeason,
   competitionName,
   position,
@@ -244,6 +223,7 @@ export function CompetitionClubPage({
     country: club.country,
   }), [club]);
   const playerCatalog = usePlayerCatalog(playerCatalogClub, roomCode);
+  const studyController = useOpponentStudy(roomCode ?? undefined, revision, activeTab === 'tactics', club.id, managerClubId);
 
   useEffect(() => {
     if (playerCatalog.loading) {
@@ -314,7 +294,7 @@ export function CompetitionClubPage({
   }
 
   const identity = detail.identity;
-  const tactical = detail.tacticalIntel;
+  const tactical = studyController.study;
   const publicSquadValue = publicSnapshot && publicSnapshot.squadValue > 0
     ? publicSnapshot.squadValue
     : detail.finances.squadValue;
@@ -415,28 +395,12 @@ export function CompetitionClubPage({
 
         {activeTab === 'squad' && (
           <section className="competition-club-card competition-club-squad">
-            <header><div><p className="eyebrow">ELENCO PRINCIPAL · {detail.squad.length} JOGADORES</p><h2>Plantel de {identity.name}</h2></div><span className="competition-club-knowledge"><Shield size={14} /> {tactical ? `Scout nível ${detail.scoutLevel}/5` : 'Relatório indisponível'}</span></header>
+            <header><div><p className="eyebrow">ELENCO PRINCIPAL · {detail.squad.length} JOGADORES</p><h2>Plantel de {identity.name}</h2></div><span className="competition-club-knowledge"><Shield size={14} /> Dados do elenco</span></header>
             {detail.visibility.squad ? <SquadList members={detail.squad} contractsVisible={detail.visibility.contracts} onPlayerSelect={handlePlayerSelect} /> : <ProtectedPanel title="Elenco indisponível" message="Nenhum roster real foi retornado para este clube." />}
           </section>
         )}
 
-        {activeTab === 'tactics' && (
-          detail.visibility.tactics && tactical ? (
-            <div className="competition-club-tactics">
-              <section className="competition-club-card competition-club-tactic-summary">
-                <header><div><p className="eyebrow">RELATÓRIO DO ADVERSÁRIO</p><h2>Espiar tática</h2></div><Badge tone={tactical.confidence >= 70 ? 'positive' : 'warning'}>{tactical.confidence}% de confiança</Badge></header>
-                <div className="competition-club-tactic-summary__primary"><strong>{tactical.formation}</strong><span><small>Formação mais utilizada</small>{labelFor(tactical.style)} · {labelFor(tactical.mentality)}</span></div>
-                <dl><div><dt>Marcação</dt><dd>{labelFor(tactical.marking)}</dd></div><div><dt>Pressão</dt><dd>{labelFor(tactical.pressing)}</dd></div><div><dt>Estilo</dt><dd>{labelFor(tactical.style)}</dd></div></dl>
-                <div className="competition-club-intel-meter"><span><small>Qualidade do conhecimento</small><strong>Nível {detail.scoutLevel}/5</strong></span><ProgressBar value={tactical.confidence} tone={tactical.confidence >= 70 ? 'accent' : 'warning'} label="Confiança do relatório" /></div>
-              </section>
-              <section className="competition-club-card competition-club-sectors"><header><div><p className="eyebrow">RAIO-X</p><h2>Força por setor</h2></div></header>{Object.entries(tactical.sectors).map(([sector, value]) => <div key={sector}><span>{({ goalkeeping: 'Goleiro', defense: 'Defesa', midfield: 'Meio-campo', attack: 'Ataque', physical: 'Físico' } as Record<string, string>)[sector]}</span><ProgressBar value={value} tone={value >= 72 ? 'accent' : value < 58 ? 'warning' : 'info'} label={`Nota de ${sector}`} /><strong>{value}</strong></div>)}</section>
-              <section className="competition-club-card competition-club-intel-list"><header><div><p className="eyebrow">JOGADORES-CHAVE</p><h2>Principais ameaças</h2></div></header>{tactical.dangerousPlayers.map((player) => <button type="button" key={player.playerId} onClick={() => { const member = detail.squad.find((candidate) => candidate.player.id === player.playerId); if (member) handlePlayerSelect(member); }}><span>{player.position}</span><strong>{player.name}</strong><small>OVR {player.overall.toFixed(1)}</small></button>)}</section>
-              <section className="competition-club-card competition-club-intel-list"><header><div><p className="eyebrow">ANÁLISE</p><h2>Pontos fortes</h2></div></header>{tactical.strengths.map((item) => <p key={item}><TrendingUp size={14} />{item}</p>)}</section>
-              <section className="competition-club-card competition-club-intel-list"><header><div><p className="eyebrow">VULNERABILIDADES</p><h2>Pontos fracos</h2></div></header>{detail.visibility.weaknesses ? tactical.weaknesses.map((item) => <p key={item}><Target size={14} />{item}</p>) : <ProtectedPanel title="Análise incompleta" message="Um scout de nível superior precisa confirmar as fraquezas." />}</section>
-              <section className="competition-club-card competition-club-intel-list"><header><div><p className="eyebrow">PLANO SUGERIDO</p><h2>Recomendações</h2></div></header>{detail.visibility.weaknesses ? tactical.recommendations.map((item) => <p key={item}><Sparkles size={14} />{item}</p>) : <p className="competition-club-muted">Aumente o conhecimento para receber recomendações confiáveis.</p>}</section>
-            </div>
-          ) : <ProtectedPanel title="Tática indisponível" message="Nenhuma tática ou formação histórica real foi registrada para este clube." />
-        )}
+        {activeTab === 'tactics' && <OpponentStudyPanel controller={studyController} onPlayerSelect={onPlayerSelect} />}
 
         {activeTab === 'calendar' && <section className="competition-club-card"><header><div><p className="eyebrow">TEMPORADA {detail.currentSeason}</p><h2>Calendário de {identity.name}</h2></div><Badge tone="info">{allMatches.length} jogos conhecidos</Badge></header><MatchList matches={allMatches} emptyMessage="Calendário indisponível" /></section>}
 

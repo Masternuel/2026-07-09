@@ -152,7 +152,7 @@ function assertUniqueIds(entity, records) {
   return ids;
 }
 
-function canonicalizeReferences(records) {
+export function validateCatalogDatabaseReferences(records) {
   const leagueIds = assertUniqueIds("leagues", records.leagues);
   const clubIds = assertUniqueIds("clubs", records.clubs);
   assertUniqueIds("players", records.players);
@@ -222,7 +222,7 @@ export function parseCatalogDatabase(value) {
     }
     records[entity] = source.map((record, index) => normalizeRecord(entity, record, index));
   }
-  canonicalizeReferences(records);
+  validateCatalogDatabaseReferences(records);
   return {
     format: CATALOG_DATABASE_FORMAT,
     version: CATALOG_DATABASE_VERSION,
@@ -235,7 +235,7 @@ export function createCatalogDatabasePackage(records, now = new Date()) {
     entity,
     (records[entity] ?? []).map((record, index) => normalizeRecord(entity, record, index)),
   ]));
-  canonicalizeReferences(normalizedRecords);
+  validateCatalogDatabaseReferences(normalizedRecords);
   const countries = [...new Set([
     ...normalizedRecords.leagues.map((record) => record.country),
     ...normalizedRecords.clubs.map((record) => record.country),

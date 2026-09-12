@@ -480,6 +480,10 @@ export function ensureMarketState(room, now = new Date()) {
     aiMarketHistory: Array.isArray(raw.aiMarketHistory)
       ? raw.aiMarketHistory.slice(-MAX_AI_MARKET_HISTORY).map((item) => structuredClone(item))
       : [],
+    aiTickRuns: Array.isArray(raw.aiTickRuns)
+      ? raw.aiTickRuns.filter((item) => item && typeof item.tickKey === "string")
+        .slice(-MAX_AI_MARKET_HISTORY).map((item) => structuredClone(item))
+      : [],
     lastAiTransferTick: raw.lastAiTransferTick && typeof raw.lastAiTransferTick === "object"
       ? structuredClone(raw.lastAiTransferTick)
       : null,
@@ -3548,7 +3552,7 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
         bidCount: action.auction?.bidHistory.length ?? 0,
       });
     } catch (error) {
-      if (error instanceof MarketError) {
+      if (error instanceof MarketError && error.status >= 400 && error.status < 500) {
         failedAttempts.push({ method: action.method, code: error.code });
         continue;
       }
@@ -3561,6 +3565,7 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
       deals: completedDeals,
       dealCount: completedDeals.length,
       attempts,
+      failedAttempts: failedAttempts.slice(-8),
     });
   }
   return finish("no-deal", {

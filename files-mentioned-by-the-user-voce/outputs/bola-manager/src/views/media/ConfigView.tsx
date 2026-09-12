@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
+import { ResilientImage } from '../../components/shared/ResilientImage';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useUserPreferences } from '../../preferences/UserPreferencesContext';
@@ -190,7 +191,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
             <header>
               <div><p className="eyebrow">PERFIL DO MANAGER</p><h2>Sua conta</h2></div>
               <span className="avatar avatar--large">
-                {identity?.photoURL ? <img src={identity.photoURL} alt="" referrerPolicy="no-referrer" /> : initials(managerName)}
+                <ResilientImage src={identity?.photoURL} alt="" fallback={initials(managerName)} />
               </span>
             </header>
             <div className="settings-form">
@@ -298,7 +299,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
         <aside className="settings-aside">
           <div className="manager-card">
             <span className="avatar avatar--large">
-              {identity?.photoURL ? <img src={identity.photoURL} alt="" referrerPolicy="no-referrer" /> : initials(managerName)}
+              <ResilientImage src={identity?.photoURL} alt="" fallback={initials(managerName)} />
             </span>
             <h3>{managerName}</h3>
             <p>{identity?.email ?? 'Conta sem e-mail'}</p>

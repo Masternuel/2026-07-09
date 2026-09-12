@@ -3,5 +3,9 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "headers": [{ "source": "/(.*)", "headers": [
+    { "key": "Content-Security-Policy", "value": "img-src 'self' blob:; object-src 'none'; base-uri 'self'" },
+    { "key": "X-Content-Type-Options", "value": "nosniff" }
+  ] }]
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { inspectEncoding } from '../../scripts/check-encoding.mjs';
 import {
   CAREER_EVENT_TYPES,
   CAREER_RETENTION_LIMITS,
@@ -19,6 +20,37 @@ import {
 } from "../domain/careerEvents.mjs";
 
 const WHEN = "2026-08-02T19:00:00.000Z";
+
+test('notícias profissionais preservam acentos e nomes após serialização', () => {
+  const cases = [
+    ['PROFESSIONAL_NOTICE_STARTED', 'aviso prévio'],
+    ['PROFESSIONAL_NOTICE_COMPLETED', 'aviso prévio'],
+    ['PROFESSIONAL_NOTICE_ENDED_EARLY', 'transição'],
+    ['PROFESSIONAL_RETIREMENT_ANNOUNCED', 'encerrará'],
+    ['PROFESSIONAL_MUTUAL_AGREEMENT_COMPLETED', 'rescisão'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_PROPOSED', 'negociação'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_COUNTER', 'condições'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_ACCEPT', 'sujeito à assinatura'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_REJECT', 'é recusado'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_SIGN', 'é assinado'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_EXECUTED', 'concluíram'],
+    ['PROFESSIONAL_MUTUAL_SEPARATION_EXPIRED', 'conclusão'],
+    ['STAFF_RETIREMENT_ANNOUNCED', 'comissão técnica'],
+    ['STAFF_SEPARATED_BY_AGREEMENT', 'rescisão'],
+    ['STAFF_PACKAGE_HIRED', 'contratação'],
+    ['COACH_STAFF_PACKAGE_HIRED', 'equipe técnica'],
+  ];
+  for (const [type, expected] of cases) {
+    const news = buildCareerNews(event(type, `encoding:${type}`, {
+      coachName: 'João Müller', staffName: 'João Müller', clubName: 'São Paulo',
+    }));
+    assert.ok(news, type);
+    const copy = `${news.title} ${news.summary}`;
+    assert.ok(copy.includes(expected), `${type}: ${copy}`);
+    assert.deepEqual(inspectEncoding(Buffer.from(copy)), [], type);
+    assert.deepEqual(JSON.parse(JSON.stringify(news)), news, type);
+  }
+});
 
 function event(type, operationId, payload = {}) {
   return { type, operationId, occurredAt: WHEN, seasonNumber: 1, payload };

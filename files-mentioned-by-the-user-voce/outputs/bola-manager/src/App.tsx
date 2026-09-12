@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { buildCalendarSchedule } from './views/season/calendarItems';
 import { AppShell } from './components/layout/AppShell';
 import { Toast } from './components/shared/Toast';
 import { useAuth } from './hooks/useAuth';
@@ -117,7 +118,9 @@ function App() {
   const opponentStudy = useOpponentStudy(
     roomCode,
     rooms.room?.revision ?? 0,
-    rooms.room?.status === 'active' && stage === 'game',
+    rooms.room?.status === 'active' && stage === 'game' && ['home', 'tactics', 'match'].includes(route),
+    undefined,
+    rooms.room?.managers.find((manager) => manager.id === auth.identity?.uid)?.clubId ?? undefined,
   );
   const tournamentCatalog = useTournamentCatalog(roomCode);
   const [toast, setToast] = useState<string | null>(null);
@@ -130,16 +133,7 @@ function App() {
   const hasManagerClub = Boolean(managerClubId);
   const managerLineup = roomLineups.find((lineup) => lineup.managerId === auth.identity?.uid);
   const managerLineupIds = managerLineup?.lineupIds;
-  const completedFixtureIds = new Set(
-    (Array.isArray(rooms.room?.completedFixtureIds) ? rooms.room.completedFixtureIds : [])
-      .filter((fixtureId): fixtureId is string => typeof fixtureId === 'string')
-      .map((fixtureId) => fixtureId.toLocaleLowerCase('pt-BR')),
-  );
-  const managerFixture = roomFixtures.find((fixture) => (
-    typeof fixture.fixtureId === 'string'
-    && !completedFixtureIds.has(fixture.fixtureId.toLocaleLowerCase('pt-BR'))
-    && (sameClubId(fixture.homeClubId, managerClubId) || sameClubId(fixture.awayClubId, managerClubId))
-  )) ?? null;
+  const managerFixture = buildCalendarSchedule(rooms.room, managerClubId).currentFixture?.fixture ?? null;
   const opponentName = managerFixture
     ? sameClubId(managerFixture.homeClubId, managerClubId)
       ? managerFixture.awayTeam
@@ -302,7 +296,7 @@ function App() {
       case 'home': return homeView;
       case 'coach-career': return <CoachCareerView roomCode={roomCode} revision={rooms.room?.revision ?? 0} onToast={showToast} />;
       case 'squad': return <SquadView players={playerCatalog.players} club={club} room={rooms.room} socket={realtime.socket} managerId={auth.identity?.uid ?? ''} careerState={careerState} onRosterChanged={refreshMarketData} onToast={showToast} />;
-      case 'tactics': return <TacticsView players={playerCatalog.players} club={club} room={rooms.room} socket={realtime.socket} managerId={auth.identity?.uid ?? ''} onRosterChanged={refreshMarketData} opponentName={opponentName} opponentStudy={opponentStudy.study} opponentStudyLoading={opponentStudy.loading} opponentStudyError={opponentStudy.error} studyDepth={opponentStudy.depth} onStudyDepthChange={opponentStudy.setDepth} savedLineup={managerLineup} savedLineupIds={managerLineupIds} currentSeason={rooms.room?.currentSeason} onSaveLineup={serverMatch?.saveLineup} onToast={showToast} />;
+      case 'tactics': return <TacticsView players={playerCatalog.players} club={club} room={rooms.room} socket={realtime.socket} managerId={auth.identity?.uid ?? ''} onRosterChanged={refreshMarketData} opponentName={opponentName} studyController={opponentStudy} savedLineup={managerLineup} savedLineupIds={managerLineupIds} currentSeason={rooms.room?.currentSeason} onSaveLineup={serverMatch?.saveLineup} onToast={showToast} />;
       case 'calendar': return <CalendarView room={rooms.room} managerClubId={managerClubId} onNavigate={navigate} />;
       case 'competitions': return <CompetitionsView club={club} room={rooms.room} tournaments={tournamentCatalog.tournaments} loadingTournaments={tournamentCatalog.loading} tournamentError={tournamentCatalog.error} clubs={clubCatalog.clubs} managerPlayers={playerCatalog.players} socket={realtime.socket} managerId={auth.identity?.uid ?? ''} onRosterChanged={refreshMarketData} onToast={showToast} />;
       case 'market': return <MarketView

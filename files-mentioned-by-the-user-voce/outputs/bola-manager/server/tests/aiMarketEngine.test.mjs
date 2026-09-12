@@ -278,6 +278,14 @@ test("motor respeita limite de elenco e teto salarial reais", () => {
   assert.equal(tick(capped.room, capped.players, "negotiation", 7).status, "no-deal");
 });
 
+test("falha interna de integridade nao vira no-deal e reverte todo o tick", () => {
+  const { room, players } = makeRoom({ seed: "corrupt-career" });
+  room.careerState.players.push(...structuredClone(players.filter((player) => player.clubId !== "HUM")));
+  const before = structuredClone(room);
+  assert.throws(() => tick(room, players, "negotiation", 4), (error) => error.code === "MARKET_INTEGRITY_CAREER");
+  assert.deepEqual(room, before);
+});
+
 test("mercado inclui outras ligas e respeita jogadores inegociaveis", () => {
   const crossLeague = makeRoom({ seed: "cross-league" });
   const clubs = crossLeague.room.competitionCatalog[0].clubs;

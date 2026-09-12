@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { emitSocketRequest } from '../lib/socketRequest';
 import type {
-  AckResponse,
   BolaSocket,
   MarketListingInput,
   MarketMutationResponse,
@@ -10,8 +10,6 @@ import type {
   MarketUpdatedEvent,
   Room,
 } from '../types';
-
-const ACK_TIMEOUT_MS = 10_000;
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
@@ -80,28 +78,6 @@ function normalizeSnapshot(value: unknown): MarketSnapshot | null {
   };
 }
 
-function waitForAck<T extends object>(
-  invoke: (acknowledge: (response: AckResponse<T>) => void) => void,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('O servidor demorou para responder.')), ACK_TIMEOUT_MS);
-    invoke((response: unknown) => {
-      window.clearTimeout(timer);
-      const record = objectRecord(response);
-      if (record?.ok === true) {
-        resolve(record as unknown as T);
-        return;
-      }
-      const serverError = objectRecord(record?.error);
-      reject(new Error(
-        typeof serverError?.message === 'string' && serverError.message.trim()
-          ? serverError.message
-          : 'O servidor enviou uma resposta inválida.',
-      ));
-    });
-  });
-}
-
 export interface MarketController {
   snapshot: MarketSnapshot | null;
   loading: boolean;
@@ -137,59 +113,74 @@ export function useMarket(
   const snapshotRef = useRef<MarketSnapshot | null>(snapshot);
   const rosterChangedRef = useRef(onRosterChanged);
   const requestIdsRef = useRef(new Map<string, string>());
+  const syncInFlightRef = useRef<Promise<void> | null>(null);
+  const syncQueuedRef = useRef(false);
   roomCodeRef.current = room?.code ?? null;
   snapshotRef.current = snapshot;
   rosterChangedRef.current = onRosterChanged;
 
-  const syncMarket = useCallback(async (background = false) => {
+  const syncMarket = useCallback((background = false): Promise<void> => {
     if (!enabled) {
       setLoading(false);
       setSyncing(false);
-      return;
+      return Promise.resolve();
     }
     const code = room?.code;
-    if (!code || !socket || !managerId) {
+    if (!code || !socket?.connected || !managerId) {
       setLoading(false);
       setSyncing(false);
-      return;
+      return Promise.resolve();
+    }
+    if (syncInFlightRef.current) {
+      syncQueuedRef.current = true;
+      return syncInFlightRef.current;
     }
     const generation = ++generationRef.current;
     if (background) setSyncing(true);
     else setLoading(true);
     setError(null);
-    try {
-      const response = await waitForAck<{ snapshot: MarketSnapshot }>((acknowledge) => {
-        socket.emit('market:sync', { code }, acknowledge);
-      });
-      const normalized = normalizeSnapshot(response.snapshot);
-      if (!normalized) throw new Error('O servidor enviou dados inválidos do mercado.');
-      if (generation !== generationRef.current || roomCodeRef.current !== code) return;
-      setSnapshot(normalized);
-    } catch (nextError) {
-      if (generation !== generationRef.current || roomCodeRef.current !== code) return;
-      setError(errorMessage(nextError, 'Não foi possível sincronizar o mercado.'));
-    } finally {
-      if (generation === generationRef.current && roomCodeRef.current === code) {
-        setLoading(false);
-        setSyncing(false);
+    const request = (async () => {
+      try {
+        do {
+          syncQueuedRef.current = false;
+          const response = await emitSocketRequest<{ snapshot: MarketSnapshot }>(socket, 'market:sync', { code });
+          const normalized = normalizeSnapshot(response.snapshot);
+          if (!normalized) throw new Error('O servidor enviou dados inválidos do mercado.');
+          if (generation !== generationRef.current || roomCodeRef.current !== code) return;
+          snapshotRef.current = normalized;
+          setSnapshot(normalized);
+        } while (syncQueuedRef.current && socket.connected);
+      } catch (nextError) {
+        if (generation !== generationRef.current || roomCodeRef.current !== code) return;
+        setError(errorMessage(nextError, 'Não foi possível sincronizar o mercado.'));
+      } finally {
+        if (generation === generationRef.current) syncInFlightRef.current = null;
+        if (generation === generationRef.current && roomCodeRef.current === code) {
+          setLoading(false);
+          setSyncing(false);
+        }
       }
-    }
+    })();
+    syncInFlightRef.current = request;
+    return request;
   }, [enabled, managerId, room?.code, socket]);
 
   useEffect(() => {
     generationRef.current += 1;
+    syncInFlightRef.current = null;
+    syncQueuedRef.current = false;
     requestIdsRef.current.clear();
     setSnapshot(null);
     setError(null);
     setActionError(null);
     setPendingAction(null);
-    if (!enabled || !room?.code || !socket || !managerId) {
+    if (!enabled || !room?.code || !socket?.connected || !managerId) {
       setLoading(false);
       setSyncing(false);
       return;
     }
     void syncMarket();
-  }, [enabled, managerId, room?.code, socket, syncMarket]);
+  }, [enabled, managerId, room?.code, socket, socket?.connected, syncMarket]);
 
   useEffect(() => {
     const code = room?.code;
@@ -200,12 +191,9 @@ export function useMarket(
       if (Number(payload.revision) <= (snapshotRef.current?.revision ?? -1)) return;
       void syncMarket(true);
     };
-    const onConnect = () => void syncMarket(true);
     socket.on('market:updated', onUpdated);
-    socket.on('connect', onConnect);
     return () => {
       socket.off('market:updated', onUpdated);
-      socket.off('connect', onConnect);
     };
   }, [enabled, managerId, room?.code, socket, syncMarket]);
 
@@ -218,9 +206,16 @@ export function useMarket(
     try {
       const response = await invoke();
       const returnedSnapshot = normalizeSnapshot(response.snapshot);
-      if (returnedSnapshot && roomCodeRef.current === room?.code) setSnapshot(returnedSnapshot);
+      if (
+        returnedSnapshot
+        && roomCodeRef.current === room?.code
+        && returnedSnapshot.revision >= (snapshotRef.current?.revision ?? -1)
+      ) {
+        snapshotRef.current = returnedSnapshot;
+        setSnapshot(returnedSnapshot);
+      }
       rosterChangedRef.current();
-      await syncMarket(true);
+      if (!returnedSnapshot) await syncMarket(true);
       return response;
     } catch (nextError) {
       const message = errorMessage(nextError);
@@ -250,64 +245,64 @@ export function useMarket(
   }, [room?.code, runMutation]);
 
   const offer = useCallback((input: MarketOfferInput) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
-    return runIdempotentMutation(`offer:${input.playerId}`, input, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:offer', { code, requestId, ...input }, acknowledge);
-    }));
+    return runIdempotentMutation(`offer:${input.playerId}`, input, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:offer', { code, requestId, ...input })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   const respond = useCallback((offerId: string, action: MarketResponseAction, counterAmount?: number, noticeApproval = false) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
     const payload = { offerId, action, counterAmount, noticeApproval };
-    return runIdempotentMutation(`respond:${offerId}`, payload, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:respond', {
+    return runIdempotentMutation(`respond:${offerId}`, payload, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:respond', {
         code,
         requestId,
         offerId,
         action,
         ...(counterAmount !== undefined ? { counterAmount } : {}),
         ...(noticeApproval ? { noticeApproval: true } : {}),
-      }, acknowledge);
-    }));
+      })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   const list = useCallback((input: MarketListingInput) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
-    return runIdempotentMutation(`list:${input.playerId}`, input, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:list', { code, requestId, ...input }, acknowledge);
-    }));
+    return runIdempotentMutation(`list:${input.playerId}`, input, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:list', { code, requestId, ...input })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   const bid = useCallback((listingId: string, amount: number, noticeApproval = false) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
-    return runIdempotentMutation(`bid:${listingId}`, { listingId, amount, noticeApproval }, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:bid', { code, requestId, listingId, amount, ...(noticeApproval ? { noticeApproval: true } : {}) }, acknowledge);
-    }));
+    return runIdempotentMutation(`bid:${listingId}`, { listingId, amount, noticeApproval }, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:bid', { code, requestId, listingId, amount, ...(noticeApproval ? { noticeApproval: true } : {}) })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   const cancelListing = useCallback((listingId: string) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
-    return runIdempotentMutation(`cancel:${listingId}`, { listingId }, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:cancel-listing', { code, requestId, listingId }, acknowledge);
-    }));
+    return runIdempotentMutation(`cancel:${listingId}`, { listingId }, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:cancel-listing', { code, requestId, listingId })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   const exerciseLoanOption = useCallback((loanId: string, noticeApproval = false) => {
-    if (!socket || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponÃ­vel.'));
+    if (!socket?.connected || !room?.code) return Promise.reject(new Error('Mercado em tempo real indisponível.'));
     const code = room.code;
-    return runIdempotentMutation(`exercise-option:${loanId}`, { loanId, noticeApproval }, (requestId) => waitForAck<MarketMutationResponse>((acknowledge) => {
-      socket.emit('market:exercise-loan-option', {
+    return runIdempotentMutation(`exercise-option:${loanId}`, { loanId, noticeApproval }, (requestId) => (
+      emitSocketRequest<MarketMutationResponse>(socket, 'market:exercise-loan-option', {
         code,
         requestId,
         loanId,
         ...(noticeApproval ? { noticeApproval: true } : {}),
-      }, acknowledge);
-    }));
+      })
+    ));
   }, [room?.code, runIdempotentMutation, socket]);
 
   return useMemo(() => ({

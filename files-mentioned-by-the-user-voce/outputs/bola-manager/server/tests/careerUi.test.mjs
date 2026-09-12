@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import reactPlugin from '@vitejs/plugin-react';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
@@ -28,6 +27,8 @@ function player(overrides = {}) {
   };
 }
 
+import { withTestAuth } from './helpers/withTestAuth.mjs';
+
 let vite;
 let PlayerCareerActions;
 let SquadView;
@@ -37,13 +38,15 @@ before(async () => {
   vite = await createServer({
     root: projectRoot,
     configFile: false,
-    plugins: [reactPlugin()],
+    esbuild: { jsx: 'automatic' },
+    optimizeDeps: { noDiscovery: true, include: [] },
     appType: 'custom',
     logLevel: 'silent',
     server: { middlewareMode: true },
   });
   ({ PlayerCareerActions } = await vite.ssrLoadModule('/src/components/player/PlayerCareerActions.tsx'));
   ({ SquadView } = await vite.ssrLoadModule('/src/views/SquadView.tsx'));
+  SquadView = await withTestAuth(vite, SquadView);
   ({ normalizeCareerSnapshot } = await vite.ssrLoadModule('/src/hooks/useCareerState.ts'));
 });
 

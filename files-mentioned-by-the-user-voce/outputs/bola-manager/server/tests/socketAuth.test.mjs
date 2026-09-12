@@ -160,7 +160,15 @@ test("match:sync devolve metadados e eventos enriquecidos da sessao viva", async
 });
 
 test("partida transmite inicio, eventos e resultado para todos os managers", async (context) => {
-  const { server, store, url } = await startTestServer();
+  const catalogStore = {
+    async listPlayers(clubId) {
+      const players = ["GOL", "LE", "ZAG", "ZAG", "LD", "VOL", "MC", "MEI", "PE", "ATA", "PD"].map((position, index) => ({
+        id: `${clubId}-P${index}`, clubId, name: `${clubId} Jogador ${index}`, position, overall: 12, active: true,
+      }));
+      return { players, count: players.length, source: 'socket-test' };
+    },
+  };
+  const { server, store, url } = await startTestServer({ catalogStore });
   context.after(() => server.close());
   const owner = await connect(url, { token: "owner-token" });
   const second = await connect(url, { token: "second-token" });

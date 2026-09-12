@@ -26,6 +26,17 @@ const catalogStore = {
       ],
     }];
   },
+  async listPlayers(clubId) {
+    const players = [{
+      id: `${clubId}-P1`,
+      clubId,
+      name: `Jogador ${clubId}`,
+      position: "GOL",
+      overall: 10,
+      active: true,
+    }];
+    return { players, count: players.length, source: "coach-lazy-test" };
+  },
 };
 
 function storeFor(persistence) {

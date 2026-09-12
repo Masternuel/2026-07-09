@@ -21,6 +21,7 @@ import {
 } from "../game/starImpact.mjs";
 import { mergePlayerStates } from "../game/playerProgression.mjs";
 import { listRoomPlayers } from "../game/roomRoster.mjs";
+import { validateSymmetricRosterCoverage } from "../game/rosterCoverage.mjs";
 import {
   matchControlSchema,
   matchHalftimePlanSchema,
@@ -33,6 +34,7 @@ import {
 import { emitRoomForViewers, roomForViewer } from "../services/roomVisibility.mjs";
 import { catalogForOwner } from "../store/catalogScope.mjs";
 import { channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
+import { withTimeout } from "../infrastructure/readiness.mjs";
 
 const DEMO_PLAYER_IDS = Array.from(
   { length: 20 },
@@ -62,6 +64,7 @@ const INSTRUCTION_MODIFIERS = Object.freeze({
 
 const DEFAULT_MATCH_LOCK_TTL_MS = 30_000;
 const DEFAULT_MATCH_LOCK_WAIT_MS = 1_000;
+const DEFAULT_MATCH_PERSISTENCE_TIMEOUT_MS = 15_000;
 
 function clone(value) {
   return value == null ? value : structuredClone(value);
@@ -126,16 +129,29 @@ function uniqueIds(values = []) {
   return [...new Set(values.filter((value) => typeof value === "string" && value.length > 0))];
 }
 
-async function loadRosterSnapshot(catalogStore, clubId, savedLineupIds, room) {
-  const unavailable = {
+function unavailableRosterSnapshot(clubId, savedLineupIds = []) {
+  return {
     clubId,
     source: "unavailable",
     players: [],
     playersById: new Map(),
-    knownIds: new Set(savedLineupIds ?? []),
-    initialLineupIds: [...(savedLineupIds ?? [])],
+    knownIds: new Set(savedLineupIds),
+    initialLineupIds: [...savedLineupIds],
     editable: false,
+    demoFallback: false,
   };
+}
+
+function unavailableStarImpact(clubId) {
+  return {
+    ...calculateStarImpact(clubId, [], { lineupIds: [] }),
+    source: "unavailable",
+    status: "unavailable",
+  };
+}
+
+async function loadRosterSnapshot(catalogStore, clubId, savedLineupIds, room) {
+  const unavailable = unavailableRosterSnapshot(clubId, savedLineupIds);
   if (typeof catalogStore?.listPlayers !== "function") return unavailable;
 
   try {
@@ -179,6 +195,7 @@ async function loadRosterSnapshot(catalogStore, clubId, savedLineupIds, room) {
       knownIds: new Set(playersById.keys()),
       initialLineupIds,
       editable: initialLineupIds.length > 0 && playersById.size > 0,
+      demoFallback,
     };
   } catch {
     return unavailable;
@@ -427,12 +444,17 @@ export function registerMatchHandlers(io, socket, {
   distributedLocks,
   matchLockTtlMs = DEFAULT_MATCH_LOCK_TTL_MS,
   matchLockWaitMs = DEFAULT_MATCH_LOCK_WAIT_MS,
+  matchPersistenceTimeoutMs = DEFAULT_MATCH_PERSISTENCE_TIMEOUT_MS,
   metrics,
   logger,
 }) {
   const user = socket.data.user;
   const ownershipTtlMs = Math.max(3_000, Number(matchLockTtlMs) || DEFAULT_MATCH_LOCK_TTL_MS);
   const ownershipWaitMs = Math.max(0, Number(matchLockWaitMs) || DEFAULT_MATCH_LOCK_WAIT_MS);
+  const persistenceTimeoutMs = Number.isFinite(Number(matchPersistenceTimeoutMs))
+    && Number(matchPersistenceTimeoutMs) > 0
+    ? Number(matchPersistenceTimeoutMs)
+    : DEFAULT_MATCH_PERSISTENCE_TIMEOUT_MS;
 
   function ownershipError(cause) {
     return matchError(
@@ -453,6 +475,26 @@ export function registerMatchHandlers(io, socket, {
 
   function assertSessionOwnership(session) {
     if (session.ownershipLost) throw ownershipError();
+  }
+
+  async function boundedPersistence(operation, label, context = {}) {
+    try {
+      return await withTimeout(
+        Promise.resolve().then(operation),
+        persistenceTimeoutMs,
+        `match-persistence:${label}`,
+      );
+    } catch (error) {
+      if (error?.name === "TimeoutError" || error?.code === "DEPENDENCY_TIMEOUT") {
+        throw matchError(
+          "O servidor nao conseguiu persistir a partida a tempo",
+          "MATCH_PERSISTENCE_TIMEOUT",
+          503,
+          { operation: label, timeoutMs: persistenceTimeoutMs, ...context },
+        );
+      }
+      throw error;
+    }
   }
 
   async function releaseOwnershipHandle(ownership) {
@@ -535,20 +577,41 @@ export function registerMatchHandlers(io, socket, {
   }
 
   function persistActiveSession(session) {
+    session.persistenceSequence = Math.max(0, Number(session.persistenceSequence) || 0) + 1;
     const snapshot = serializeActiveMatchSession(session);
+    const sequence = session.persistenceSequence;
     const write = (session.persistChain ?? Promise.resolve())
       .then(() => {
         assertSessionOwnership(session);
-        return matchSessionStore.save(snapshot, ownershipFor(session));
+        return boundedPersistence(
+          () => matchSessionStore.save(snapshot, ownershipFor(session)),
+          "save",
+          { code: session.code, sequence },
+        );
       });
-    session.persistChain = write.catch(() => {});
+    session.persistChain = write.catch((error) => {
+      metrics?.increment?.("match_persistence_failures_total", 1, {
+        operation: "save",
+        error: error.code || "MATCH_PERSISTENCE_ERROR",
+      });
+      logger?.warn?.("match.persistence_failed", {
+        code: session.code,
+        sequence,
+        operation: "save",
+        error,
+      });
+    });
     return write;
   }
 
   async function removePersistedSession(session) {
     await (session.persistChain ?? Promise.resolve());
     assertSessionOwnership(session);
-    return matchSessionStore.remove(session.code, session.match.id, ownershipFor(session));
+    return boundedPersistence(
+      () => matchSessionStore.remove(session.code, session.match.id, ownershipFor(session)),
+      "remove",
+      { code: session.code, sequence: session.persistenceSequence },
+    );
   }
 
   function buildPlayback(session) {
@@ -658,13 +721,21 @@ export function registerMatchHandlers(io, socket, {
       let claimed = false;
       let recoveredSession;
       try {
-        const snapshot = await matchSessionStore.get(code);
+        const snapshot = await boundedPersistence(
+          () => matchSessionStore.get(code),
+          "get",
+          { code },
+        );
         if (!snapshot) return null;
         const completed = room.completedFixtureIds?.some(
           (fixtureId) => clubKey(fixtureId) === clubKey(snapshot.fixtureId),
         ) || String(room.lastCompletedMatch?.id ?? "") === String(snapshot.matchId ?? "");
         if (completed) {
-          await matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership }));
+          await boundedPersistence(
+            () => matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership })),
+            "remove",
+            { code, sequence: snapshot._matchSequence },
+          );
           return null;
         }
         let fixture;
@@ -675,7 +746,11 @@ export function registerMatchHandlers(io, socket, {
           // O proprio fixtureId pode ser a parte corrompida. Limpar a prontidao
           // da fixture atual garante que todos confirmem novamente.
           const resetRoom = await store.clearMatchReadiness(code);
-          await matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership }));
+          await boundedPersistence(
+            () => matchSessionStore.remove(code, snapshot.matchId, ownershipFor({ ownership })),
+            "remove",
+            { code, sequence: snapshot._matchSequence },
+          );
           await emitRoomForViewers(io, resetRoom);
           throw matchError(
             "A partida salva estava inconsistente e foi descartada. Confirme a prontidao novamente.",
@@ -738,6 +813,7 @@ export function registerMatchHandlers(io, socket, {
       playback: null,
       playbackStarted: false,
       persistChain: Promise.resolve(),
+      persistenceSequence: 0,
       nextEventIndex: 0,
       skipped: false,
       fixture,
@@ -756,7 +832,7 @@ export function registerMatchHandlers(io, socket, {
         catalogStore,
         room.catalogOwnerId || room.ownerId,
       );
-      const [catalogImpacts, homeRoster, awayRoster] = await Promise.all([
+      const [catalogImpacts, loadedHomeRoster, loadedAwayRoster] = await Promise.all([
         loadStarImpactsAtomically(roomCatalog, fixture.homeClubId, fixture.awayClubId, {
           homeLineupIds,
           awayLineupIds,
@@ -764,7 +840,31 @@ export function registerMatchHandlers(io, socket, {
         loadRosterSnapshot(roomCatalog, fixture.homeClubId, homeLineupIds, room),
         loadRosterSnapshot(roomCatalog, fixture.awayClubId, awayLineupIds, room),
       ]);
-      const impacts = {
+      const rosterCoverage = validateSymmetricRosterCoverage({
+        clubId: fixture.homeClubId,
+        players: loadedHomeRoster.players,
+        lineupIds: loadedHomeRoster.initialLineupIds,
+        demoFallback: loadedHomeRoster.demoFallback,
+      }, {
+        clubId: fixture.awayClubId,
+        players: loadedAwayRoster.players,
+        lineupIds: loadedAwayRoster.initialLineupIds,
+        demoFallback: loadedAwayRoster.demoFallback,
+      });
+      if (fixture.stageType === "knockout" && !rosterCoverage.valid) {
+        throw matchError(
+          "Elenco indisponivel para esta partida de mata-mata",
+          "DYNAMIC_KNOCKOUT_ROSTER_INVALID",
+          503,
+        );
+      }
+      const homeRoster = rosterCoverage.valid
+        ? loadedHomeRoster
+        : unavailableRosterSnapshot(fixture.homeClubId, homeLineupIds);
+      const awayRoster = rosterCoverage.valid
+        ? loadedAwayRoster
+        : unavailableRosterSnapshot(fixture.awayClubId, awayLineupIds);
+      const impacts = rosterCoverage.valid ? {
         home: homeRoster.source === "unavailable" ? catalogImpacts.home : {
           ...calculateStarImpact(fixture.homeClubId, homeRoster.players, {
             lineupIds: homeRoster.initialLineupIds,
@@ -777,6 +877,9 @@ export function registerMatchHandlers(io, socket, {
           }),
           status: "available",
         },
+      } : {
+        home: unavailableStarImpact(fixture.homeClubId),
+        away: unavailableStarImpact(fixture.awayClubId),
       };
       const matchLineup = (lineup, roster, clubId) => {
         const tactics = lineup?.tactics ?? createAiTacticPlan(roster.players, roster.initialLineupIds);
@@ -827,7 +930,7 @@ export function registerMatchHandlers(io, socket, {
             careerDateFor(room),
           ),
         ),
-        simulationVersion: 2,
+        simulationVersion: rosterCoverage.valid ? 2 : undefined,
         roomCode: code,
         fixtureId: fixture.fixtureId,
         seasonNumber: room.currentSeason,
@@ -837,6 +940,8 @@ export function registerMatchHandlers(io, socket, {
         awayRoster: awayRoster.players,
         homeTacticPlan: structuredClone(effectiveHomeLineup.tactics),
         awayTacticPlan: structuredClone(effectiveAwayLineup.tactics),
+        rosterMode: rosterCoverage.valid ? "catalog" : "symmetric_fallback",
+        rosterCoverage,
       };
       const match = {
         ...simulateMatch(adjustedFixture),
@@ -850,6 +955,8 @@ export function registerMatchHandlers(io, socket, {
         clubCareerEffects: adjustedFixture.clubCareerEffects,
         homeFormation: effectiveHomeLineup.tactics.formationId,
         awayFormation: effectiveAwayLineup.tactics.formationId,
+        rosterMode: adjustedFixture.rosterMode,
+        rosterCoverage: adjustedFixture.rosterCoverage,
       };
       const speed = {
         code,
@@ -879,6 +986,8 @@ export function registerMatchHandlers(io, socket, {
         clubCareerEffects: match.clubCareerEffects,
         homeFormation: match.homeFormation,
         awayFormation: match.awayFormation,
+        rosterMode: match.rosterMode,
+        rosterCoverage: match.rosterCoverage,
         speed: clone(speed),
       };
       Object.assign(session, {
@@ -924,7 +1033,13 @@ export function registerMatchHandlers(io, socket, {
     } catch (error) {
       if (matchSessions.get(code) === session) matchSessions.delete(code);
       if (session.match?.id) {
-        await matchSessionStore.remove(code, session.match.id, ownershipFor(session)).catch(() => {});
+        await boundedPersistence(
+          () => matchSessionStore.remove(code, session.match.id, ownershipFor(session)),
+          "remove",
+          { code, sequence: session.persistenceSequence },
+        ).catch((cleanupError) => {
+          logger?.warn?.("match.persistence_cleanup_failed", { code, error: cleanupError });
+        });
       }
       await releaseSessionOwnership(session);
       throw error;
@@ -942,13 +1057,26 @@ export function registerMatchHandlers(io, socket, {
     assertRoomAvailable(data.code, deletingRooms, deletedRooms);
     const fixtureId = room.currentFixtureId;
     const readiness = readinessFor(room, fixtureId);
-    await emitRoomForViewers(io, room);
-
     if (!data.ready || !readiness.allReady) {
-      return { room: roomForViewer(room, user.uid), started: false, ...readiness };
+      return {
+        room: roomForViewer(room, user.uid),
+        started: false,
+        ...readiness,
+        afterAcknowledgement: () => emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id }),
+      };
     }
     const start = await startMatchSession(room, data.code, fixtureId);
-    return { room: roomForViewer(room, user.uid), started: true, ...readiness, ...start };
+    const { afterAcknowledgement: startAfterAcknowledgement, ...startData } = start;
+    return {
+      room: roomForViewer(room, user.uid),
+      started: true,
+      ...readiness,
+      ...startData,
+      afterAcknowledgement: async () => {
+        await startAfterAcknowledgement?.();
+        await emitRoomForViewers(io, room, "room:state", { excludeSocketId: socket.id });
+      },
+    };
   });
 
   registerSafe(socket, "match:start", async (payload) => {
@@ -957,7 +1085,13 @@ export function registerMatchHandlers(io, socket, {
     const prepared = await store.prepareMatch(data.code, user.uid, data.fixtureId);
     assertRoomAvailable(data.code, deletingRooms, deletedRooms);
     rememberMembership(socket, data.code);
-    if (prepared.migrated) await emitRoomForViewers(io, prepared.room);
+    if (prepared.migrated) {
+      setImmediate(() => {
+        emitRoomForViewers(io, prepared.room).catch((error) => {
+          logger?.error?.("room.broadcast_failed", { code: data.code, error });
+        });
+      });
+    }
     if (await restorePersistedSession(prepared.room, data.code)) {
       throw matchError("A partida desta rodada ja esta em andamento", "MATCH_IN_PROGRESS");
     }

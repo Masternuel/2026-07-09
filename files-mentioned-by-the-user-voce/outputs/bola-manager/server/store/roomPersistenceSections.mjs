@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gzip, gzipSync, gunzip, gunzipSync } from "node:zlib";
 import { PAGE_INDEX_FORMAT, buildPageIndex } from "./roomPersistencePageIndex.mjs";
+
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 export const SAVE_SCHEMA_VERSION = 2;
 export const SAVE_STORAGE_FORMAT = "firestore-sections-v2";
@@ -145,7 +149,8 @@ export function contentPageId(page) {
 
 export function validateContentPageDocument(pageId, page) {
   const expectedId = String(pageId ?? "").trim().toLocaleLowerCase("en-US");
-  if (!/^[a-f0-9]{64}$/.test(expectedId) || contentPageId(page) !== expectedId) {
+  if (!/^[a-f0-9]{64}$/.test(expectedId)
+    || String(page?.checksum ?? "").trim().toLowerCase() !== expectedId) {
     throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Identidade da pagina do save nao confere");
   }
   // Validates the payload itself, not only the checksum copied into the
@@ -182,7 +187,7 @@ export function metadataRoomFromDocument(document) {
   };
 }
 
-export function splitRoomDomains(room) {
+export function splitRoomDomains(room, { cloneValues = true } = {}) {
   if (!room || typeof room !== "object" || !String(room.code ?? "").trim()) {
     throw persistenceError("SAVE_INVALID", "Save invalido", 400);
   }
@@ -197,12 +202,16 @@ export function splitRoomDomains(room) {
         sections.push({
           path: `${field}.${child}`,
           domain: sectionDomain(field),
-          value: clone(childValue),
+          value: cloneValues ? clone(childValue) : childValue,
         });
       }
       continue;
     }
-    sections.push({ path: field, domain: sectionDomain(field), value: clone(value) });
+    sections.push({
+      path: field,
+      domain: sectionDomain(field),
+      value: cloneValues ? clone(value) : value,
+    });
   }
   sections.sort((left, right) => left.path.localeCompare(right.path));
   containers.sort((left, right) => left.path.localeCompare(right.path));
@@ -252,6 +261,22 @@ function encodedPage(value, index, itemCount = undefined) {
   return jsonBytes(page) <= SAVE_DOCUMENT_SAFE_BYTES ? page : null;
 }
 
+async function encodedPageAsync(value, index, itemCount = undefined) {
+  const serialized = json(value);
+  const rawBytes = Buffer.byteLength(serialized, "utf8");
+  const compressed = (await gzipAsync(Buffer.from(serialized, "utf8"))).toString("base64");
+  const useGzip = compressed.length < serialized.length;
+  const page = {
+    index,
+    encoding: useGzip ? "gzip-json" : "json",
+    payload: useGzip ? compressed : serialized,
+    checksum: checksum(serialized),
+    rawBytes,
+    ...(itemCount === undefined ? {} : { itemCount }),
+  };
+  return jsonBytes(page) <= SAVE_DOCUMENT_SAFE_BYTES ? page : null;
+}
+
 function arrayPages(value) {
   const groups = [];
   let current = [];
@@ -271,8 +296,40 @@ function arrayPages(value) {
   return pages.every(Boolean) ? pages : null;
 }
 
+async function arrayPagesAsync(value) {
+  const groups = [];
+  let current = [];
+  let currentBytes = 2;
+  for (const item of value) {
+    const itemBytes = jsonBytes(item) + (current.length > 0 ? 1 : 0);
+    if (current.length > 0 && currentBytes + itemBytes > ARRAY_PAGE_TARGET_BYTES) {
+      groups.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(item);
+    currentBytes += itemBytes;
+  }
+  if (current.length > 0 || value.length === 0) groups.push(current);
+  const pages = [];
+  for (let index = 0; index < groups.length; index += 1) {
+    pages.push(await encodedPageAsync(groups[index], index, groups[index].length));
+  }
+  return pages.every(Boolean) ? pages : null;
+}
+
 function fragmentPages(serialized) {
   const compressed = gzipSync(Buffer.from(serialized, "utf8")).toString("base64");
+  const pages = [];
+  for (let offset = 0; offset < compressed.length; offset += PAGE_PAYLOAD_CHARACTERS) {
+    const payload = compressed.slice(offset, offset + PAGE_PAYLOAD_CHARACTERS);
+    pages.push({ index: pages.length, encoding: "gzip-json-fragment", payload, checksum: checksum(payload) });
+  }
+  return pages;
+}
+
+async function fragmentPagesAsync(serialized) {
+  const compressed = (await gzipAsync(Buffer.from(serialized, "utf8"))).toString("base64");
   const pages = [];
   for (let offset = 0; offset < compressed.length; offset += PAGE_PAYLOAD_CHARACTERS) {
     const payload = compressed.slice(offset, offset + PAGE_PAYLOAD_CHARACTERS);
@@ -345,6 +402,70 @@ export function encodeSectionValue(path, domain, value) {
   };
 }
 
+export async function encodeSectionValueAsync(path, domain, value) {
+  const serialized = json(value);
+  const rawBytes = Buffer.byteLength(serialized, "utf8");
+  const valueChecksum = checksum(value);
+  if (rawBytes <= DIRECT_JSON_BYTES) {
+    return {
+      manifest: {
+        path,
+        domain,
+        format: "json-v2",
+        payload: serialized,
+        checksum: valueChecksum,
+        rawBytes,
+        pageCount: 0,
+      },
+      pages: [],
+    };
+  }
+  if (Array.isArray(value)) {
+    const pages = await arrayPagesAsync(value);
+    if (pages) {
+      return {
+        manifest: {
+          path,
+          domain,
+          format: "json-array-pages-v2",
+          checksum: valueChecksum,
+          rawBytes,
+          itemCount: value.length,
+          pageCount: pages.length,
+        },
+        pages,
+      };
+    }
+  }
+  const compressed = (await gzipAsync(Buffer.from(serialized, "utf8"))).toString("base64");
+  if (compressed.length <= PAGE_PAYLOAD_CHARACTERS) {
+    return {
+      manifest: {
+        path,
+        domain,
+        format: "gzip-json-v2",
+        payload: compressed,
+        checksum: valueChecksum,
+        rawBytes,
+        pageCount: 0,
+      },
+      pages: [],
+    };
+  }
+  const pages = await fragmentPagesAsync(serialized);
+  return {
+    manifest: {
+      path,
+      domain,
+      format: "gzip-json-fragments-v2",
+      checksum: valueChecksum,
+      rawBytes,
+      pageCount: pages.length,
+    },
+    pages,
+  };
+}
+
 export function withContentPageReferences(manifest, pages) {
   if (!Array.isArray(pages) || pages.length === 0) return { ...manifest };
   return {
@@ -367,6 +488,34 @@ function decodePagePayload(page) {
   try {
     serialized = page.encoding === "gzip-json"
       ? gunzipSync(Buffer.from(page.payload, "base64")).toString("utf8")
+      : page.encoding === "json" ? page.payload : null;
+  } catch (cause) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Pagina compactada do save corrompida", 500, { cause });
+  }
+  if (serialized === null || checksum(serialized) !== page.checksum) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Checksum da pagina do save nao confere");
+  }
+  try {
+    return JSON.parse(serialized);
+  } catch (cause) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "JSON da pagina do save corrompido", 500, { cause });
+  }
+}
+
+async function decodePagePayloadAsync(page) {
+  if (!page || !Number.isInteger(Number(page.index)) || typeof page.payload !== "string") {
+    throw persistenceError("SAVE_INCOMPLETE", "Pagina do save ausente ou invalida");
+  }
+  if (page.encoding === "gzip-json-fragment") {
+    if (checksum(page.payload) !== page.checksum) {
+      throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Checksum da pagina do save nao confere");
+    }
+    return page.payload;
+  }
+  let serialized;
+  try {
+    serialized = page.encoding === "gzip-json"
+      ? (await gunzipAsync(Buffer.from(page.payload, "base64"))).toString("utf8")
       : page.encoding === "json" ? page.payload : null;
   } catch (cause) {
     throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Pagina compactada do save corrompida", 500, { cause });
@@ -407,6 +556,16 @@ export function validateManifestPageReferences(manifest) {
   return ids.map((id) => String(id).toLocaleLowerCase("en-US"));
 }
 
+export async function validateContentPageDocumentAsync(pageId, page) {
+  const expectedId = String(pageId ?? "").trim().toLocaleLowerCase("en-US");
+  if (!/^[a-f0-9]{64}$/.test(expectedId)
+    || String(page?.checksum ?? "").trim().toLowerCase() !== expectedId) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Identidade da pagina do save nao confere");
+  }
+  await decodePagePayloadAsync({ ...page, index: 0 });
+  return page;
+}
+
 export function decodeSectionValue(manifest, pages = []) {
   if (!manifest?.path || !manifest?.format || !manifest?.checksum) {
     throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Manifesto de secao corrompido");
@@ -429,6 +588,45 @@ export function decodeSectionValue(manifest, pages = []) {
     } else if (manifest.format === "gzip-json-fragments-v2") {
       const payload = orderedPages(manifest, pages).map(decodePagePayload).join("");
       value = JSON.parse(gunzipSync(Buffer.from(payload, "base64")).toString("utf8"));
+    } else {
+      throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Formato de secao desconhecido");
+    }
+  } catch (cause) {
+    if (cause?.code) throw cause;
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Secao do save corrompida", 500, { cause });
+  }
+  if (checksum(value) !== manifest.checksum) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Checksum da secao do save nao confere");
+  }
+  return value;
+}
+
+export async function decodeSectionValueAsync(manifest, pages = []) {
+  if (!manifest?.path || !manifest?.format || !manifest?.checksum) {
+    throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Manifesto de secao corrompido");
+  }
+  let value;
+  try {
+    if (manifest.format === "json-v2") {
+      value = JSON.parse(manifest.payload);
+    } else if (manifest.format === "gzip-json-v2") {
+      value = JSON.parse((await gunzipAsync(Buffer.from(manifest.payload, "base64"))).toString("utf8"));
+    } else if (manifest.format === "json-array-pages-v2") {
+      value = [];
+      for (const page of orderedPages(manifest, pages)) {
+        const items = await decodePagePayloadAsync(page);
+        if (!Array.isArray(items)) throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Pagina de lista invalida");
+        value.push(...items);
+      }
+      if (value.length !== Number(manifest.itemCount)) {
+        throw persistenceError("SAVE_INCOMPLETE", "Save incompleto: itens da secao nao conferem");
+      }
+    } else if (manifest.format === "gzip-json-fragments-v2") {
+      const fragments = [];
+      for (const page of orderedPages(manifest, pages)) {
+        fragments.push(await decodePagePayloadAsync(page));
+      }
+      value = JSON.parse((await gunzipAsync(Buffer.from(fragments.join(""), "base64"))).toString("utf8"));
     } else {
       throw persistenceError("SAVE_DOCUMENT_CORRUPT", "Formato de secao desconhecido");
     }

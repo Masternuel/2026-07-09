@@ -3,6 +3,7 @@ import test from "node:test";
 import { getServerConfig } from "../config.mjs";
 import { MAX_EDITOR_MEDIA_BYTES } from "../services/catalogMedia.mjs";
 import { CatalogStore } from "../store/catalogStore.mjs";
+import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
 import { fakeFirebase, jsonRequest, startTestServer } from "./testHarness.mjs";
 
 function fakeFirestore() {
@@ -598,7 +599,7 @@ test("exclusao em lote e atomica e respeita dependencias", async (context) => {
 });
 
 test("exporta, compartilha e importa bases sem misturar donos nem transferir posse da imagem", async (context) => {
-  const firestore = fakeFirestore();
+  const firestore = createFakeFirestore();
   const { server, url } = await startTestServer({
     firebase: fakeFirebase({ firestore }),
     env: { NODE_ENV: "production" },
@@ -654,8 +655,18 @@ test("exporta, compartilha e importa bases sem misturar donos nem transferir pos
   assert.equal(restoredOwnerCatalog.players[0].attributes.posicionamentoGol, 10);
 
   const failedDatabase = structuredClone(database);
-  failedDatabase.records.clubs[0].name = "Nome que deve sofrer rollback";
-  firestore.failCatalogTransactionAt = firestore.catalogTransactionCount + 1;
+  failedDatabase.records.clubs[0].name = "Nome que nao deve ser publicado";
+  const originalBatch = firestore.batch.bind(firestore);
+  firestore.batch = () => {
+    const batch = originalBatch();
+    const commit = batch.commit.bind(batch);
+    batch.commit = () => {
+      firestore.batch = originalBatch;
+      firestore.failBeforeCommit(new Error("falha simulada durante staging"));
+      return commit();
+    };
+    return batch;
+  };
   const failedImport = await fetch(`${url}/api/editor/database/import?mode=merge`, {
     method: "POST",
     headers: {
@@ -697,6 +708,28 @@ test("exporta, compartilha e importa bases sem misturar donos nem transferir pos
   await jsonRequest(`${url}/api/editor/clubs/RMA`, "second-token", {
     method: "PATCH", body: { name: "Real Madrid da copia" },
   });
+  const sendImport = (query = "", body = database) => fetch(`${url}/api/editor/database/import${query}`, {
+    method: "POST",
+    headers: { authorization: "Bearer second-token", "content-type": "application/octet-stream" },
+    body: Buffer.from(JSON.stringify(body)),
+  });
+  const retry = await sendImport();
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).idempotent, true);
+  const afterRetry = await (await jsonRequest(`${url}/api/editor/catalog`, "second-token")).json();
+  assert.equal(afterRetry.clubs[0].name, "Real Madrid da copia");
+  const deliberate = await sendImport("?operationId=explicit-reimport");
+  assert.equal(deliberate.status, 200);
+  const deliberateResult = await deliberate.json();
+  assert.equal(deliberateResult.operationId, "explicit-reimport");
+  assert.equal(deliberateResult.idempotent, false);
+  assert.notEqual(deliberateResult.generationId, imported.generationId);
+  const idConflict = await sendImport("?operationId=explicit-reimport", failedDatabase);
+  assert.equal(idConflict.status, 409);
+  assert.equal((await idConflict.json()).error.code, "CATALOG_DATABASE_IMPORT_ID_CONFLICT");
+  const invalidId = await sendImport("?operationId=invalid/path");
+  assert.equal(invalidId.status, 400);
+  assert.equal((await invalidId.json()).error.code, "CATALOG_DATABASE_IMPORT_ID_INVALID");
   const ownerCatalog = await (await jsonRequest(`${url}/api/editor/catalog`, "editor-token")).json();
   assert.equal(ownerCatalog.clubs[0].name, "Real Madrid");
 
@@ -944,9 +977,7 @@ test("upload de midia valida, associa ao registro e substitui o objeto anterior"
   await jsonRequest(`${url}/api/editor/players`, "editor-token", { method: "POST", body: player() });
   await jsonRequest(`${url}/api/editor/tournaments`, "editor-token", { method: "POST", body: tournament() });
 
-  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xd9]);
-  const webp = Buffer.from("RIFF0000WEBP", "ascii");
+  const { png, jpeg, webp } = await import("./helpers/imageFixtures.mjs");
   const uploadEntity = ({
     entity = "clubs",
     recordId = "AUR",

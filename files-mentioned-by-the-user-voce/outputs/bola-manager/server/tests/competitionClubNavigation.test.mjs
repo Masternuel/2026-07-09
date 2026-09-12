@@ -382,15 +382,11 @@ test('fontes usam host unico, estado real de oferta e nenhuma acao ou dado demo'
   assert.match(clubPageSource, /players: playerCatalog\.players/);
   assert.match(clubPageSource, /onPlayerSelect\(member\.player\.id\)/);
   assert.doesNotMatch(clubPageSource, /CompetitionPlayerProfile/);
-  assert.match(clubPageSource, /Tática indisponível/);
+  assert.match(clubPageSource, /useOpponentStudy\(roomCode \?\? undefined, revision, activeTab === 'tactics', club.id, managerClubId\)/);
+  assert.match(clubPageSource, /<OpponentStudyPanel controller=\{studyController\}/);
   assert.doesNotMatch(clubPageSource, /Últimas formações/);
   assert.match(clubPageSource, /type CompetitionClubTab = 'overview' \| 'squad' \| 'tactics' \| 'calendar' \| 'information'/);
-  assert.match(clubPageSource, /tactical\.formation/);
-  assert.match(clubPageSource, /Object\.entries\(tactical\.sectors\)/);
-  assert.match(clubPageSource, /tactical\.dangerousPlayers\.map/);
-  assert.match(clubPageSource, /tactical\.strengths\.map/);
-  assert.match(clubPageSource, /tactical\.weaknesses\.map/);
-  assert.match(clubPageSource, /tactical\.recommendations\.map/);
+  assert.doesNotMatch(clubPageSource, /Formação mais utilizada/);
 
   assert.match(rankingsSource, /CompetitionClubPage/);
   assert.match(rankingsSource, /<CompetitionClubPage[\s\S]*originLabel="Rankings"/);
@@ -411,9 +407,12 @@ test('fontes usam host unico, estado real de oferta e nenhuma acao ou dado demo'
   assert.match(hostSource, /pending: market\.pendingAction === `offer:/);
   assert.match(playerProfileSource, /offerDisabled/);
   assert.match(playerProfileSource, /offerStatusLabel/);
-  assert.match(playerProfileSource, /Observação indisponível/);
-  assert.match(playerProfileSource, /Interesse indisponível/);
-  assert.match(playerProfileSource, /Contato indisponível/);
+  assert.match(hostSource, /useScouting\(/);
+  assert.match(hostSource, /scouting=\{scouting\}/);
+  assert.match(playerProfileSource, /Observar jogador/);
+  assert.match(playerProfileSource, /Demonstrar interesse/);
+  assert.match(playerProfileSource, /scouting\?\.act\('contact-agent'\)/);
+  assert.doesNotMatch(playerProfileSource, /Observação indisponível|Interesse indisponível|Contato indisponível/);
   assert.doesNotMatch(playerProfileSource, /localStorage/);
 
   for (const forbidden of ['generateSquad', 'mock-player', 'loadMock', 'abortableDelay', 'setTimeout', 'allowGeneratedFallback', 'buildTacticalIntel']) {

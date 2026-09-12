@@ -4,6 +4,7 @@ import {
   MAX_FIXTURE_RESCHEDULE_DAYS,
   MIN_FIXTURE_REST_DAYS,
 } from "./globalFixtureCalendar.mjs";
+import { pendingManagedFixtures } from "./officialCalendar.mjs";
 
 const LEGACY_FIXTURE_CATALOG = Object.freeze({
   abertura: { homeSlot: 0, awaySlot: 1, fallbackAway: "SAN" },
@@ -326,6 +327,7 @@ export function hydrateLeagueFixture(room, fixture) {
     fixture.scheduledAt,
   );
   hydrated.fixtureId = fixture.leagueFixtureId;
+  if (fixture.status) hydrated.status = fixture.status;
   return hydrated;
 }
 
@@ -352,6 +354,7 @@ export function hydrateCompetitionFixture(room, fixture) {
   const competitionFixtureId = fixture.competitionFixtureId ?? fixture.id;
   return {
     ...hydrated,
+    ...(fixture.status ? { status: fixture.status } : {}),
     fixtureId: competitionFixtureId,
     competitionFixtureId,
     tournamentId: competitionId,
@@ -453,7 +456,7 @@ export function coordinateRoomFixtureCalendar(
   const minRestDays = options.minRestDays ?? MIN_FIXTURE_REST_DAYS;
   const completedLeague = completedLeagueFixtureKeys(room);
   const completedManaged = new Set((room?.completedFixtureIds ?? []).map(fixtureKey));
-  const leagueEntries = (leagueSchedule ?? []).map((fixture) => {
+  const leagueEntries = (leagueSchedule ?? []).filter((fixture) => !["cancelled", "canceled"].includes(fixture.status)).map((fixture) => {
     const id = fixtureKey(fixture?.leagueFixtureId);
     const completed = completedLeague.has(id);
     return {
@@ -463,6 +466,7 @@ export function coordinateRoomFixtureCalendar(
       kind: "league",
       scheduledAt: fixture?.scheduledAt,
       originalScheduledAt: fixture?.originalScheduledAt ?? fixture?.scheduledAt,
+      notBefore: fixture?.scheduledAt,
       homeClubId: fixture?.homeClubId,
       awayClubId: fixture?.awayClubId,
       priority: completed || fixtureHasFixedDate(fixture)
@@ -486,10 +490,11 @@ export function coordinateRoomFixtureCalendar(
       competitionFixtures: competitionSeason.fixtures,
     }));
   const competitionEntries = competitionSource
-    .filter(({ fixture }) => fixture?.homeClubId && fixture?.awayClubId)
+    .filter(({ fixture }) => fixture?.homeClubId && fixture?.awayClubId && !["cancelled", "canceled"].includes(fixture.status))
     .map(({ fixture, competitionId, competitionFixtures }) => {
       const id = competitionFixtureKey(fixture);
       const locked = fixtureHasFixedDate(fixture) || completedManaged.has(id);
+      const dependency = competitionFixtureNotBefore(competitionFixtures, fixture, minRestDays);
       return {
         calendarId: competitionCalendarKey(fixture, competitionId),
         id: fixture?.competitionFixtureId ?? fixture?.id,
@@ -498,7 +503,8 @@ export function coordinateRoomFixtureCalendar(
         kind: "competition",
         scheduledAt: fixture?.scheduledAt,
         originalScheduledAt: fixture?.originalScheduledAt ?? fixture?.scheduledAt,
-        notBefore: competitionFixtureNotBefore(competitionFixtures, fixture, minRestDays),
+        notBefore: dependency && Date.parse(dependency) > Date.parse(fixture.scheduledAt)
+          ? dependency : fixture.scheduledAt,
         homeClubId: fixture?.homeClubId,
         awayClubId: fixture?.awayClubId,
       priority: locked
@@ -664,7 +670,8 @@ export function createFixtureSchedule(room, fullSchedule = createLeagueFixtureSc
   return pairings
     .filter(([homeClubId, awayClubId]) => !clubIdsEqual(homeClubId, awayClubId))
     .map(([homeClubId, awayClubId], index) => (
-      scheduledFixture(homeClubId, awayClubId, managedByClub, index)
+      scheduledFixture(homeClubId, awayClubId, managedByClub, index, null, null, index + 1,
+        null, scheduledLeagueKickoff(room, index + 1))
     ));
 }
 
@@ -680,6 +687,7 @@ function schedulesMatch(current, expected) {
       && (fixture.leagueFixtureId ?? null) === (target.leagueFixtureId ?? null)
       && fixture.round === target.round
       && (fixture.scheduledAt ?? null) === (target.scheduledAt ?? null)
+      && (fixture.status ?? null) === (target.status ?? null)
       && fixture.competition === target.competition
       && clubKey(fixture.leagueId) === clubKey(target.leagueId)
       && clubIdsEqual(fixture.homeClubId, target.homeClubId)
@@ -771,14 +779,13 @@ function mergePreservedSchedule(room, leagueSchedule, competitionFixtures) {
     ...sortUnifiedFixtureSchedule([
       ...preserved.filter((fixture) => !completedIds.has(fixtureKey(fixture.fixtureId))),
       ...competitionFixtures,
+      ...missing,
     ]),
-    ...missing,
   ];
 }
 
 function nextUncompletedFixtureId(schedule, completedFixtureIds) {
-  const completed = new Set((completedFixtureIds ?? []).map(fixtureKey));
-  return schedule.find((fixture) => !completed.has(fixtureKey(fixture.fixtureId)))?.fixtureId ?? null;
+  return pendingManagedFixtures({ fixtureSchedule: schedule, completedFixtureIds })[0]?.fixtureId ?? null;
 }
 
 function backfillPreservedLeagueResults(room, schedule) {
@@ -816,6 +823,7 @@ export function ensureFixtureSchedule(room) {
       && clubIdsEqual(stored.awayClubId, fixture.awayClubId);
     return samePair && validDate(stored.scheduledAt)
       ? {
+        ...stored,
         ...fixture,
         scheduledAt: stored.scheduledAt,
         originalScheduledAt: stored.originalScheduledAt ?? fixture.scheduledAt,
@@ -972,6 +980,7 @@ export function resolveServerFixture(room, requestedFixtureId) {
 }
 
 export function nextFixtureId(room, fixtureId) {
+  if (room.fixtureSchedule?.length) return pendingManagedFixtures(room, fixtureId)[0]?.fixtureId ?? null;
   const order = room.fixtureSchedule?.length
     ? room.fixtureSchedule.map((fixture) => fixture.fixtureId)
     : FIXTURE_ORDER;

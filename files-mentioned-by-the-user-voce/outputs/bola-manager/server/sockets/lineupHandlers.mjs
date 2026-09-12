@@ -154,12 +154,12 @@ export function registerLineupHandlers(io, socket, {
       );
       const lineup = room.lineups.find((candidate) => candidate.managerId === user.uid);
       rememberMembership(socket, data.code);
-      await emitRoomForViewers(io, room);
       return {
         room: roomForViewer(room, user.uid),
         lineup,
         warnings: validation.warnings,
         source: roster.source,
+        afterAcknowledgement: () => emitRoomForViewers(io, room, "room:state"),
       };
     } finally {
       if (matchSessions.get(data.code) === reservation) matchSessions.delete(data.code);

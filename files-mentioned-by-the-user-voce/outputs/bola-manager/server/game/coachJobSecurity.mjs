@@ -1121,7 +1121,7 @@ export function evaluateCoachJobSecurity(input = {}) {
       type: 'COACH_SECURITY_FAN_PROTEST',
       operationId: evaluationId + ':fan-protest',
       title: 'Protesto da torcida',
-      message: 'A rejeiÃ§Ã£o chegou a um nÃ­vel insustentÃ¡vel e aumentou a pressÃ£o sobre a diretoria.',
+      message: 'A rejeição chegou a um nível insustentável e aumentou a pressão sobre a diretoria.',
     });
   }
   let ultimatumOutcome = null;
@@ -1279,8 +1279,8 @@ export function evaluateCoachJobSecurity(input = {}) {
   if (declarationSignal.impact !== 0) factors.push(factor(
     declarationSignal.impact > 0 ? 'public_declarations_support' : 'public_declarations_pressure',
     declarationSignal.impact,
-    declarationSignal.impact > 0 ? 'Boa repercussÃ£o das declaraÃ§Ãµes' : 'DeclaraÃ§Ãµes aumentaram a pressÃ£o',
-    declarationSignal.count + ' coletiva(s) desde a Ãºltima avaliaÃ§Ã£o.',
+    declarationSignal.impact > 0 ? 'Boa repercussão das declarações' : 'Declarações aumentaram a pressão',
+    declarationSignal.count + ' coletiva(s) desde a última avaliação.',
   ));
   factors.push(factor(
     board.privateValue >= 50 ? 'board_support' : 'board_confidence_low',

@@ -77,6 +77,7 @@ import {
   type RankingManagerType,
 } from '../../utils/rankings';
 import { getSeasonProgress } from '../../utils/seasonProgress';
+import { parseRankingQuery } from '../../../shared/rankingQuery.mjs';
 import { CompetitionClubPage, type CompetitionClubTab } from './CompetitionClubPage';
 
 type RankingsTab = 'overview' | 'players' | 'clubs' | 'managers' | 'competitions' | 'history';
@@ -164,7 +165,7 @@ const managerStatusFilterIds = new Set<PersistedRankingsState['managerStatusFilt
 const managerPeriodIds = new Set<RankingManagerPeriod>(['current', 'last5', 'career']);
 
 function storedString(value: unknown, fallback = '') {
-  return typeof value === 'string' ? value : fallback;
+  return typeof value === 'string' ? value.slice(0, 160) : fallback;
 }
 
 function storedPage(value: unknown) {
@@ -172,9 +173,10 @@ function storedPage(value: unknown) {
   return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : 1;
 }
 
-function storedSort(value: unknown, fallback: PersistedRankingsState['playerSort']) {
+function storedSort(value: unknown, fallback: PersistedRankingsState['playerSort'], field: 'playerColumn' | 'clubColumn' | 'managerColumn') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
   const candidate = value as Partial<PersistedRankingsState['playerSort']>;
+  try { parseRankingQuery({ [field]: candidate.column }); } catch { return fallback; }
   return typeof candidate.column === 'string' && (candidate.direction === 'asc' || candidate.direction === 'desc')
     ? { column: candidate.column, direction: candidate.direction }
     : fallback;
@@ -221,9 +223,9 @@ function initialState(roomCode?: string | null): PersistedRankingsState {
       clubCategory: clubCategoryIds.has(parsed.clubCategory as ClubCategory) ? parsed.clubCategory as ClubCategory : fallback.clubCategory,
       managerCategory: managerCategoryIds.has(parsed.managerCategory as ManagerRankingCategory) ? parsed.managerCategory as ManagerRankingCategory : fallback.managerCategory,
       competitionId: storedString(parsed.competitionId),
-      season: season === 'current' || /^\d+$/.test(season) ? season : fallback.season,
+      season: season === 'current' || /^\d{1,4}$/.test(season) ? season : fallback.season,
       historyRound: historyRound === 'all' || /^[1-9]\d*$/.test(historyRound) ? historyRound : fallback.historyRound,
-      search: storedString(parsed.search),
+      search: storedString(parsed.search).slice(0, 120),
       clubFilter: storedString(parsed.clubFilter),
       nationalityFilter: storedString(parsed.nationalityFilter),
       positionFilter: storedString(parsed.positionFilter),
@@ -236,9 +238,9 @@ function initialState(roomCode?: string | null): PersistedRankingsState {
       managerNationalityFilter: storedString(parsed.managerNationalityFilter),
       managerStatusFilter: managerStatusFilterIds.has(parsed.managerStatusFilter as PersistedRankingsState['managerStatusFilter']) ? parsed.managerStatusFilter as PersistedRankingsState['managerStatusFilter'] : fallback.managerStatusFilter,
       managerPeriod: managerPeriodIds.has(parsed.managerPeriod as RankingManagerPeriod) ? parsed.managerPeriod as RankingManagerPeriod : fallback.managerPeriod,
-      playerSort: storedSort(parsed.playerSort, fallback.playerSort),
-      clubSort: storedSort(parsed.clubSort, fallback.clubSort),
-      managerSort: storedSort(parsed.managerSort, fallback.managerSort),
+      playerSort: storedSort(parsed.playerSort, fallback.playerSort, 'playerColumn'),
+      clubSort: storedSort(parsed.clubSort, fallback.clubSort, 'clubColumn'),
+      managerSort: storedSort(parsed.managerSort, fallback.managerSort, 'managerColumn'),
       scrollY: Number.isFinite(Number(parsed.scrollY)) ? Math.max(0, Number(parsed.scrollY)) : 0,
     };
   } catch {
@@ -413,7 +415,7 @@ function historyMetrics(entry: RankingHistoryEntry): Array<{ label: string; valu
 }
 
 function timelinePosition(value: number | null | undefined) {
-  return value === null || value === undefined || !Number.isFinite(value) ? 'â€”' : `${value}Âº`;
+  return value === null || value === undefined || !Number.isFinite(value) ? '—' : `${value}º`;
 }
 
 function TimelineEvolution({
@@ -465,9 +467,9 @@ function TimelineEvolution({
   return <section className="rankings-history-timeline" aria-labelledby="rankings-history-title">
     <header className="rankings-history-timeline__header">
       <div>
-        <span className="eyebrow">EVOLUÃ‡ÃƒO REAL POR RODADA</span>
+        <span className="eyebrow">EVOLUÇÃO REAL POR RODADA</span>
         <h2 id="rankings-history-title">{clubName}</h2>
-        <p>{competitionName} Â· {seasonLabel} Â· {entries.length} snapshots preservados</p>
+        <p>{competitionName} · {seasonLabel} · {entries.length} snapshots preservados</p>
       </div>
       <label className="rankings-control rankings-history-timeline__round">
         <span>Rodada</span>
@@ -479,30 +481,30 @@ function TimelineEvolution({
     </header>
 
     <dl className="rankings-history-summary">
-      <div><dt>Melhor posiÃ§Ã£o</dt><dd>{timelinePosition(bestPosition)}</dd></div>
-      <div><dt>Pior posiÃ§Ã£o</dt><dd>{timelinePosition(worstPosition)}</dd></div>
-      <div><dt>Maior subida</dt><dd className={biggestRise ? 'rankings-number--positive' : ''}>{biggestRise ? `+${biggestRise}` : 'â€”'}</dd></div>
-      <div><dt>Maior queda</dt><dd className={biggestDrop ? 'rankings-number--negative' : ''}>{biggestDrop ? `-${biggestDrop}` : 'â€”'}</dd></div>
-      <div><dt>Rodadas lÃ­der</dt><dd>{leaderRounds}</dd></div>
+      <div><dt>Melhor posição</dt><dd>{timelinePosition(bestPosition)}</dd></div>
+      <div><dt>Pior posição</dt><dd>{timelinePosition(worstPosition)}</dd></div>
+      <div><dt>Maior subida</dt><dd className={biggestRise ? 'rankings-number--positive' : ''}>{biggestRise ? `+${biggestRise}` : '—'}</dd></div>
+      <div><dt>Maior queda</dt><dd className={biggestDrop ? 'rankings-number--negative' : ''}>{biggestDrop ? `-${biggestDrop}` : '—'}</dd></div>
+      <div><dt>Rodadas líder</dt><dd>{leaderRounds}</dd></div>
     </dl>
 
     <article className="rankings-history-chart">
-      <header><div><h3>PosiÃ§Ã£o na tabela</h3><p>Quanto mais alto o ponto, melhor a colocaÃ§Ã£o.</p></div><Badge tone="info">{effectiveRound === 'all' ? 'Temporada' : `Rodada ${effectiveRound}`}</Badge></header>
+      <header><div><h3>Posição na tabela</h3><p>Quanto mais alto o ponto, melhor a colocação.</p></div><Badge tone="info">{effectiveRound === 'all' ? 'Temporada' : `Rodada ${effectiveRound}`}</Badge></header>
       <div className="rankings-history-chart__viewport">
-        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} style={{ minWidth: `${chartWidth}px` }} role="img" aria-label={`EvoluÃ§Ã£o de ${clubName} na tabela`}>
-          <title>{`EvoluÃ§Ã£o de ${clubName}: ${visibleEntries.map((entry) => `rodada ${entry.round}, ${entry.position}Âº`).join('; ')}`}</title>
+        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} style={{ minWidth: `${chartWidth}px` }} role="img" aria-label={`Evolução de ${clubName} na tabela`}>
+          <title>{`Evolução de ${clubName}: ${visibleEntries.map((entry) => `rodada ${entry.round}, ${entry.position}º`).join('; ')}`}</title>
           {positionTicks.map((position) => {
             const y = maxPosition <= 1 ? chartTop + plotHeight / 2 : chartTop + (position - 1) * plotHeight / (maxPosition - 1);
             return <g key={position}>
               <line className="rankings-history-chart__grid" x1={chartLeft} x2={chartWidth - chartRight} y1={y} y2={y} />
-              <text className="rankings-history-chart__axis" x={chartLeft - 9} y={y + 4} textAnchor="end">{position}Âº</text>
+              <text className="rankings-history-chart__axis" x={chartLeft - 9} y={y + 4} textAnchor="end">{position}º</text>
             </g>;
           })}
           {chartPoints.length > 1 && <polyline className="rankings-history-chart__line" points={chartPoints.map((point) => `${point.x},${point.y}`).join(' ')} />}
           {visibleEntries.map((entry, index) => {
             const point = chartPoints[index];
             return <g className="rankings-history-chart__marker" key={entry.id}>
-              <circle cx={point.x} cy={point.y} r="5"><title>{`Rodada ${entry.round}: ${entry.position}Âº, ${entry.points} pontos`}</title></circle>
+              <circle cx={point.x} cy={point.y} r="5"><title>{`Rodada ${entry.round}: ${entry.position}º, ${entry.points} pontos`}</title></circle>
               <text x={point.x} y={chartHeight - 14} textAnchor="middle">R{entry.round}</text>
             </g>;
           })}
@@ -514,12 +516,12 @@ function TimelineEvolution({
       <header><div><h3>Campanha por rodada</h3><p>{effectiveRound === 'all' ? 'Todos os snapshots preservados no save.' : `Dados após a rodada ${effectiveRound}.`}</p></div></header>
       <div className="rankings-history-table-wrap">
         <table className="rankings-history-table">
-          <caption>HistÃ³rico de posiÃ§Ãµes e campanha de {clubName}</caption>
-          <thead><tr><th scope="col">Rodada</th><th scope="col">Pos.</th><th scope="col">VariaÃ§Ã£o</th><th scope="col">J</th><th scope="col">V</th><th scope="col">E</th><th scope="col">D</th><th scope="col">SG</th><th scope="col">Pts</th></tr></thead>
+          <caption>Histórico de posições e campanha de {clubName}</caption>
+          <thead><tr><th scope="col">Rodada</th><th scope="col">Pos.</th><th scope="col">Variação</th><th scope="col">J</th><th scope="col">V</th><th scope="col">E</th><th scope="col">D</th><th scope="col">SG</th><th scope="col">Pts</th></tr></thead>
           <tbody>{visibleEntries.map((entry) => <tr key={entry.id}>
             <th scope="row">{entry.round}</th>
             <td><strong>{timelinePosition(entry.position)}</strong></td>
-            <td className={entry.positionChange && entry.positionChange > 0 ? 'rankings-number--positive' : entry.positionChange && entry.positionChange < 0 ? 'rankings-number--negative' : ''}>{entry.positionChange === null ? 'â€”' : signed(entry.positionChange)}</td>
+            <td className={entry.positionChange && entry.positionChange > 0 ? 'rankings-number--positive' : entry.positionChange && entry.positionChange < 0 ? 'rankings-number--negative' : ''}>{entry.positionChange === null ? '—' : signed(entry.positionChange)}</td>
             <td>{entry.played}</td><td>{entry.wins}</td><td>{entry.draws}</td><td>{entry.losses}</td><td>{signed(entry.goalDifference)}</td><td><strong>{entry.points}</strong></td>
           </tr>)}</tbody>
         </table>
@@ -793,6 +795,20 @@ function playerDefaultSort(category: PlayerRankingCategory) {
     saves: 'saves', cleanSheets: 'cleanSheets', cards: 'yellowCards',
   };
   return { column: columns[category], direction: 'desc' as RankingSortDirection };
+}
+
+function clubDefaultSort(category: ClubCategory) {
+  const column: Record<ClubCategory, string> = {
+    points: 'points', squadValue: 'squadValue', averagePlayerValue: 'averagePlayerValue', payroll: 'payroll',
+    reputation: 'reputation', form: 'form', possession: 'possession', attendance: 'attendance',
+    wins: 'wins', attack: 'goalsFor', defense: 'goalsAgainst',
+  };
+  return { column: column[category], direction: (category === 'defense' ? 'asc' : 'desc') as RankingSortDirection };
+}
+
+function selectedRows<T extends { id: string }>(rows: T[], ids: string[]) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.flatMap((id) => { const row = byId.get(id); return row ? [row] : []; });
 }
 
 function availablePlayerMetric(
@@ -1091,7 +1107,7 @@ function ManagerHistorySection({ managers, seasonNumber, competitionId, onSelect
         <article><small>Títulos preservados</small><strong>{titleCount || '—'}</strong></article>
         <article><small>Premiações preservadas</small><strong>{awardCount || '—'}</strong></article>
       </div>
-      <article className="rankings-card"><RankingTable caption={`Ranking de treinadores da temporada ${seasonNumber}`} columns={managerColumns()} items={ranked} rowKey={(manager) => manager.id} sort={{ column: 'rankingPoints', direction: 'desc' }} onSortChange={() => undefined} onRowClick={onSelect} rowClassName={(manager, index) => `${medalClass(index)}${manager.isViewer ? ' is-managed' : ''}`} /></article>
+      <article className="rankings-card"><RankingTable caption={`Ranking de treinadores da temporada ${seasonNumber}`} columns={managerColumns()} items={ranked} rowKey={(manager) => manager.id} sort={{ column: 'rankingPoints', direction: 'desc' }} onRowClick={onSelect} rowClassName={(manager, index) => `${medalClass(index)}${manager.isViewer ? ' is-managed' : ''}`} /></article>
     </> : <div className="rankings-empty-state" role="status"><strong>Histórico de treinadores indisponível</strong><span>Este save não preservou estatísticas por treinador nesta temporada. Nenhum valor foi inventado.</span></div>}
   </section>;
 }
@@ -1119,20 +1135,27 @@ export function RankingsView({
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [clubDetailTab, setClubDetailTab] = useState<CompetitionClubTab>('overview');
   const [methodologyOpen, setMethodologyOpen] = useState(false);
-  const [playerSort, setPlayerSort] = useState(() => saved.playerSort);
-  const [clubSort, setClubSort] = useState(() => saved.clubSort);
-  const [managerSort, setManagerSort] = useState(() => saved.managerSort);
+  const { playerSort, clubSort, managerSort } = saved;
   const returnScrollRef = useRef(saved.scrollY);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const previousPlayerCategory = useRef(saved.playerCategory);
-  const previousClubCategory = useRef(saved.clubCategory);
-  const previousManagerCategory = useRef(saved.managerCategory);
   const season = getSeasonProgress(room);
-  const remote = useRankings(room?.code, club.id, room?.revision ?? 0, saved.competitionId || null);
+  const query = parseRankingQuery({
+    season: saved.season, search: saved.search.slice(0, 120),
+    clubFilter: saved.clubFilter, nationalityFilter: saved.nationalityFilter, positionFilter: saved.positionFilter,
+    ageFilter: saved.ageFilter, playerCategory: saved.playerCategory, playerColumn: playerSort.column, playerDirection: playerSort.direction,
+    clubCategory: saved.clubCategory, clubColumn: clubSort.column, clubDirection: clubSort.direction,
+    managerPeriod: saved.managerPeriod, managerTypeFilter: saved.managerTypeFilter,
+    managerClubFilter: saved.managerClubFilter, managerNationalityFilter: saved.managerNationalityFilter,
+    managerStatusFilter: saved.managerStatusFilter, managerCategory: saved.managerCategory,
+    managerColumn: managerSort.column, managerDirection: managerSort.direction,
+  });
+  const remote = useRankings(room?.code, club.id, room?.revision ?? 0, saved.competitionId || null, query);
+  const useRemote = Boolean(room?.code);
   const rankings = remote.rankings;
-  const rawPlayers = rankings ? rankings.players : localPlayerRanking(players, club);
-  const rawClubs = rankings ? rankings.clubs : localClubRanking(room, club, players);
-  const rawManagers = rankings ? rankings.managers : localManagerRanking(room, managerId);
+  const selection = rankings?.selection;
+  const rawPlayers = rankings ? rankings.players : useRemote ? [] : localPlayerRanking(players, club);
+  const rawClubs = rankings ? rankings.clubs : useRemote ? [] : localClubRanking(room, club, players);
+  const rawManagers = rankings ? rankings.managers : useRemote ? [] : localManagerRanking(room, managerId);
   const profilePlayers = useMemo(() => enrichRankingPlayers(rawPlayers, players), [players, rawPlayers]);
   const competitionName = rankings?.scope.competitionName ?? rankings?.scope.leagueName ?? club.leagueName ?? 'Competição atual';
   const currentRound = rankings?.meta.updatedRound ?? rankings?.meta.completedRounds ?? rankings?.meta.currentRound ?? rankings?.scope.round ?? season.completedRounds;
@@ -1141,51 +1164,55 @@ export function RankingsView({
   const selectedSeasonNumber = saved.season === 'current'
     ? Math.max(1, Number(room?.currentSeason) || 1)
     : Math.max(1, Number(saved.season) || 1);
-  const managerScope = useMemo(() => isArchivedSeason
+  const managerScope = useMemo(() => useRemote ? selection?.managerScope ?? [] : isArchivedSeason
     ? rawManagers.flatMap((manager) => {
       const archived = historicalManager(manager, selectedSeasonNumber, saved.competitionId || '');
       return archived ? [archived] : [];
     })
-    : rawManagers, [isArchivedSeason, rawManagers, saved.competitionId, selectedSeasonNumber]);
+    : rawManagers, [useRemote, selection, isArchivedSeason, rawManagers, saved.competitionId, selectedSeasonNumber]);
 
   const playerFilter = ageRange(saved.ageFilter);
-  const filteredPlayers = useMemo(() => filterRankingPlayers(profilePlayers, {
+  const filteredPlayers = useMemo(() => useRemote
+    ? selectedRows(profilePlayers, selection?.playerIds ?? [])
+    : filterRankingPlayers(profilePlayers, {
     search: saved.search,
     clubId: saved.clubFilter || null,
     nationality: saved.nationalityFilter || null,
     position: saved.positionFilter || null,
     ...playerFilter,
-  }), [profilePlayers, saved.ageFilter, saved.clubFilter, saved.nationalityFilter, saved.positionFilter, saved.search]);
-  const rankedPlayers = useMemo(() => sortedForTable(
+  }), [useRemote, selection, profilePlayers, saved.ageFilter, saved.clubFilter, saved.nationalityFilter, saved.positionFilter, saved.search]);
+  const rankedPlayers = useMemo(() => useRemote ? filteredPlayers : sortedForTable(
     sortRankingPlayersByCategory(filteredPlayers, saved.playerCategory) as RankingProfilePlayer[],
     playerColumns(saved.playerCategory),
     playerSort,
-  ), [filteredPlayers, playerSort, saved.playerCategory]);
+  ), [useRemote, filteredPlayers, playerSort, saved.playerCategory]);
   const playerPages = Math.max(1, Math.ceil(rankedPlayers.length / PAGE_SIZE));
   const playerPage = Math.min(saved.playerPage, playerPages);
   const visiblePlayers = rankedPlayers.slice((playerPage - 1) * PAGE_SIZE, playerPage * PAGE_SIZE);
 
   const searchKey = normalizedKey(saved.search);
-  const filteredClubs = useMemo(() => rawClubs.filter((candidate) => !searchKey || normalizedKey(`${candidate.name} ${candidate.code} ${candidate.leagueName}`).includes(searchKey)), [rawClubs, searchKey]);
-  const rankedClubs = useMemo(() => sortedForTable(sortClubs(filteredClubs, saved.clubCategory), clubColumns(), clubSort), [clubSort, filteredClubs, saved.clubCategory]);
+  const filteredClubs = useMemo(() => useRemote
+    ? selectedRows(rawClubs, selection?.clubIds ?? [])
+    : rawClubs.filter((candidate) => !searchKey || normalizedKey(`${candidate.name} ${candidate.code} ${candidate.leagueName}`).includes(searchKey)), [useRemote, selection, rawClubs, searchKey]);
+  const rankedClubs = useMemo(() => useRemote ? filteredClubs : sortedForTable(sortClubs(filteredClubs, saved.clubCategory), clubColumns(), clubSort), [useRemote, clubSort, filteredClubs, saved.clubCategory]);
   const clubPages = Math.max(1, Math.ceil(rankedClubs.length / PAGE_SIZE));
   const clubPage = Math.min(saved.clubPage, clubPages);
   const visibleClubs = rankedClubs.slice((clubPage - 1) * PAGE_SIZE, clubPage * PAGE_SIZE);
 
-  const periodManagers = useMemo(() => managerScope.flatMap((manager) => {
+  const periodManagers = useMemo(() => useRemote ? managerScope : managerScope.flatMap((manager) => {
     if (isArchivedSeason) return [manager];
     const periodManager = managerForPeriod(manager, saved.managerPeriod);
     return periodManager ? [periodManager] : [];
-  }), [isArchivedSeason, managerScope, saved.managerPeriod]);
-  const filteredManagers = useMemo(() => periodManagers.filter((candidate) => {
+  }), [useRemote, isArchivedSeason, managerScope, saved.managerPeriod]);
+  const filteredManagers = useMemo(() => useRemote ? selection?.managers ?? [] : periodManagers.filter((candidate) => {
     if (searchKey && !normalizedKey(`${candidate.name} ${candidate.clubName} ${candidate.nationality}`).includes(searchKey)) return false;
     if (saved.managerTypeFilter !== 'all' && candidate.managerType !== saved.managerTypeFilter) return false;
     if (saved.managerClubFilter && ![candidate.clubId, candidate.clubCode, candidate.clubName].some((value) => normalizedKey(value) === normalizedKey(saved.managerClubFilter))) return false;
     if (saved.managerNationalityFilter && normalizedKey(candidate.nationality) !== normalizedKey(saved.managerNationalityFilter)) return false;
     if (saved.managerStatusFilter && candidate.status !== saved.managerStatusFilter) return false;
     return true;
-  }), [periodManagers, saved.managerClubFilter, saved.managerNationalityFilter, saved.managerStatusFilter, saved.managerTypeFilter, searchKey]);
-  const rankedManagers = useMemo(() => sortedForTable(sortRankingManagers(filteredManagers, saved.managerCategory), managerColumns(), managerSort), [filteredManagers, managerSort, saved.managerCategory]);
+  }), [useRemote, selection, periodManagers, saved.managerClubFilter, saved.managerNationalityFilter, saved.managerStatusFilter, saved.managerTypeFilter, searchKey]);
+  const rankedManagers = useMemo(() => useRemote ? filteredManagers : sortedForTable(sortRankingManagers(filteredManagers, saved.managerCategory), managerColumns(), managerSort), [useRemote, filteredManagers, managerSort, saved.managerCategory]);
   const managerPages = Math.max(1, Math.ceil(rankedManagers.length / PAGE_SIZE));
   const managerPage = Math.min(saved.managerPage, managerPages);
   const visibleManagers = rankedManagers.slice((managerPage - 1) * PAGE_SIZE, managerPage * PAGE_SIZE);
@@ -1205,16 +1232,16 @@ export function RankingsView({
     normalizedKey(player.position).includes('gol') && player.saves !== null
   )).sort((left, right) => (right.saves ?? -1) - (left.saves ?? -1) || (right.cleanSheets ?? -1) - (left.cleanSheets ?? -1)), [playersWithMatchStats]);
   const valuableClubs = useMemo(() => sortClubs(rawClubs, 'squadValue'), [rawClubs]);
-  const bestManagers = useMemo(() => sortRankingManagers(managerScope, 'rankingPoints'), [managerScope]);
-  const bestSeasonManager = useMemo(() => sortRankingManagers(managerScope.filter((manager) => manager.rankingPoints !== null || manager.played > 0), 'rankingPoints')[0] ?? null, [managerScope]);
-  const bestHumanManager = useMemo(() => sortRankingManagers(managerScope.filter((manager) => manager.managerType === 'human' && (manager.rankingPoints !== null || manager.played > 0)), 'rankingPoints')[0] ?? null, [managerScope]);
-  const bestAIManager = useMemo(() => sortRankingManagers(managerScope.filter((manager) => manager.managerType === 'ai' && (manager.rankingPoints !== null || manager.played > 0)), 'rankingPoints')[0] ?? null, [managerScope]);
-  const biggestManagerRise = useMemo(() => [...managerScope].filter((manager) => (manager.positionChange ?? manager.rankChange) !== null).sort((left, right) => (right.positionChange ?? right.rankChange ?? -Infinity) - (left.positionChange ?? left.rankChange ?? -Infinity))[0] ?? null, [managerScope]);
-  const bestManagerPerformance = useMemo(() => sortRankingManagers(managerScope.filter((manager) => manager.played > 0), 'performance')[0] ?? null, [managerScope]);
-  const mostTitledManager = useMemo(() => sortRankingManagers(managerScope.filter((manager) => (manager.titles ?? 0) > 0), 'titles')[0] ?? null, [managerScope]);
-  const bestManagerStreak = useMemo(() => [...managerScope]
+  const bestManagers = useMemo(() => sortRankingManagers(filteredManagers, 'rankingPoints'), [filteredManagers]);
+  const bestSeasonManager = useMemo(() => sortRankingManagers(filteredManagers.filter((manager) => manager.rankingPoints !== null || manager.played > 0), 'rankingPoints')[0] ?? null, [filteredManagers]);
+  const bestHumanManager = useMemo(() => sortRankingManagers(filteredManagers.filter((manager) => manager.managerType === 'human' && (manager.rankingPoints !== null || manager.played > 0)), 'rankingPoints')[0] ?? null, [filteredManagers]);
+  const bestAIManager = useMemo(() => sortRankingManagers(filteredManagers.filter((manager) => manager.managerType === 'ai' && (manager.rankingPoints !== null || manager.played > 0)), 'rankingPoints')[0] ?? null, [filteredManagers]);
+  const biggestManagerRise = useMemo(() => [...filteredManagers].filter((manager) => (manager.positionChange ?? manager.rankChange) !== null).sort((left, right) => (right.positionChange ?? right.rankChange ?? -Infinity) - (left.positionChange ?? left.rankChange ?? -Infinity))[0] ?? null, [filteredManagers]);
+  const bestManagerPerformance = useMemo(() => sortRankingManagers(filteredManagers.filter((manager) => manager.played > 0), 'performance')[0] ?? null, [filteredManagers]);
+  const mostTitledManager = useMemo(() => sortRankingManagers(filteredManagers.filter((manager) => (manager.titles ?? 0) > 0), 'titles')[0] ?? null, [filteredManagers]);
+  const bestManagerStreak = useMemo(() => [...filteredManagers]
     .filter((manager) => consecutiveWins(manager) > 0)
-    .sort((left, right) => consecutiveWins(right) - consecutiveWins(left))[0] ?? null, [managerScope]);
+    .sort((left, right) => consecutiveWins(right) - consecutiveWins(left))[0] ?? null, [filteredManagers]);
 
   const competitionOptions = useMemo(() => {
     if (rankings?.options.competitions.length) return rankings.options.competitions;
@@ -1389,36 +1416,6 @@ export function RankingsView({
   }, []);
 
   useEffect(() => {
-    if (previousPlayerCategory.current === saved.playerCategory) return;
-    previousPlayerCategory.current = saved.playerCategory;
-    const nextSort = playerDefaultSort(saved.playerCategory);
-    setPlayerSort(nextSort);
-    setSaved((current) => ({ ...current, playerPage: 1, playerSort: nextSort }));
-  }, [saved.playerCategory]);
-
-  useEffect(() => {
-    if (previousClubCategory.current === saved.clubCategory) return;
-    previousClubCategory.current = saved.clubCategory;
-    const column: Record<ClubCategory, string> = {
-      points: 'points', squadValue: 'squadValue', averagePlayerValue: 'averagePlayerValue', payroll: 'payroll',
-      reputation: 'reputation', form: 'form', possession: 'possession', attendance: 'attendance',
-      wins: 'wins', attack: 'goalsFor', defense: 'goalsAgainst',
-    };
-    const nextSort = { column: column[saved.clubCategory], direction: (saved.clubCategory === 'defense' ? 'asc' : 'desc') as RankingSortDirection };
-    setClubSort(nextSort);
-    setSaved((current) => ({ ...current, clubPage: 1, clubSort: nextSort }));
-  }, [saved.clubCategory]);
-
-  useEffect(() => {
-    if (previousManagerCategory.current === saved.managerCategory) return;
-    previousManagerCategory.current = saved.managerCategory;
-    const column: Record<ManagerRankingCategory, string> = { points: 'points', wins: 'wins', performance: 'performance', rankingPoints: 'rankingPoints', titles: 'titles', reputation: 'reputation' };
-    const nextSort = { column: column[saved.managerCategory], direction: 'desc' as RankingSortDirection };
-    setManagerSort(nextSort);
-    setSaved((current) => ({ ...current, managerPage: 1, managerSort: nextSort }));
-  }, [saved.managerCategory]);
-
-  useEffect(() => {
     setSaved((current) => ({ ...current, playerPage: 1, clubPage: 1, managerPage: 1 }));
   }, [saved.ageFilter, saved.clubFilter, saved.managerClubFilter, saved.managerNationalityFilter, saved.managerPeriod, saved.managerStatusFilter, saved.managerTypeFilter, saved.nationalityFilter, saved.positionFilter, saved.search]);
 
@@ -1429,18 +1426,15 @@ export function RankingsView({
   }, [controlledClubTimeline, saved.historyRound]);
 
   function updatePlayerSort(sort: { column: string; direction: RankingSortDirection }) {
-    setPlayerSort(sort);
-    setSaved((current) => ({ ...current, playerSort: sort }));
+    setSaved((current) => ({ ...current, playerPage: 1, playerSort: sort }));
   }
 
   function updateClubSort(sort: { column: string; direction: RankingSortDirection }) {
-    setClubSort(sort);
-    setSaved((current) => ({ ...current, clubSort: sort }));
+    setSaved((current) => ({ ...current, clubPage: 1, clubSort: sort }));
   }
 
   function updateManagerSort(sort: { column: string; direction: RankingSortDirection }) {
-    setManagerSort(sort);
-    setSaved((current) => ({ ...current, managerSort: sort }));
+    setSaved((current) => ({ ...current, managerPage: 1, managerSort: sort }));
   }
 
   function toggleManagerComparison(manager: RankingManager) {
@@ -1497,6 +1491,7 @@ export function RankingsView({
         club={selectedClubIdentity}
         managerClubId={club.id}
         roomCode={room?.code}
+        revision={room?.revision ?? 0}
         currentSeason={room?.currentSeason ?? 1}
         competitionName={competitionName}
         position={selectedClub.position}
@@ -1549,7 +1544,7 @@ export function RankingsView({
     <section className="rankings-toolbar" aria-label="Escopo dos rankings">
       <label className="rankings-control"><span>Competição</span><select value={saved.competitionId} onChange={(event) => setSaved((current) => ({ ...current, competitionId: event.target.value, historyRound: 'all' }))}><option value="">Competição do meu clube</option>{competitionOptions.map((option) => <option value={option.id} key={option.id}>{option.label}{option.count !== null ? ` · ${option.count}` : ''}</option>)}</select></label>
       <label className="rankings-control"><span>Temporada</span><select value={saved.season} onChange={(event) => setSaved((current) => ({ ...current, season: event.target.value, historyRound: 'all', managerPeriod: 'current', tab: event.target.value === 'current' || current.tab === 'managers' ? current.tab : 'history' }))}>{seasonOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
-      <label className="rankings-control rankings-search"><span>Buscar</span><Search size={14} /><input value={saved.search} onChange={(event) => setSaved((current) => ({ ...current, search: event.target.value }))} placeholder="Jogador, clube ou treinador" /></label>
+      <label className="rankings-control rankings-search"><span>Buscar</span><Search size={14} /><input maxLength={120} value={saved.search} onChange={(event) => setSaved((current) => ({ ...current, search: event.target.value }))} placeholder="Jogador, clube ou treinador" /></label>
       <Button variant="ghost" icon={<CircleHelp size={15} />} onClick={() => setMethodologyOpen(true)}>Metodologia</Button>
     </section>
 
@@ -1557,7 +1552,9 @@ export function RankingsView({
       {tabs.map((tab, index) => { const Icon = tab.icon; return <button type="button" role="tab" aria-selected={saved.tab === tab.id} tabIndex={saved.tab === tab.id ? 0 : -1} ref={(element) => { tabRefs.current[index] = element; }} onKeyDown={(event) => onTabKeyDown(event, index)} onClick={() => setTab(tab.id)} key={tab.id}><Icon size={14} />{tab.label}</button>; })}
     </nav>
 
-    {remote.loading && !rankings ? <Skeleton /> : isArchivedSeason && saved.tab !== 'history' && saved.tab !== 'managers' ? (
+    {remote.loading && !rankings ? <Skeleton /> : useRemote && !rankings ? (
+      <div className="rankings-empty-state" role="alert"><strong>Rankings indisponíveis</strong><span>{remote.error ?? 'Não foi possível carregar os rankings.'}</span><Button onClick={remote.refresh}>Tentar novamente</Button></div>
+    ) : isArchivedSeason && saved.tab !== 'history' && saved.tab !== 'managers' ? (
       <section className="rankings-state"><div><History size={28} /><strong>{selectedSeasonLabel}</strong><p>O save preserva o resumo dessa temporada, mas não possui snapshots completos por rodada. Nenhum gráfico ou valor foi inventado.</p><Button onClick={() => setSaved((current) => ({ ...current, season: 'current', tab: 'overview' }))}>Voltar à temporada atual</Button></div></section>
     ) : <section className="rankings-panel" role="tabpanel">
       {remote.error && <div className="rankings-inline-status" role="status"><span>{remote.error}</span><button type="button" onClick={remote.refresh}>Tentar novamente</button></div>}
@@ -1579,17 +1576,17 @@ export function RankingsView({
         </div>
 
         <div className="rankings-overview-grid">
-          <article className="rankings-card rankings-card--wide"><header className="rankings-card__header"><div><h2>Artilharia</h2><p>Gols registrados na competição.</p></div><Badge tone="warning">Top 5</Badge></header><RankingTable caption="Resumo da artilharia" columns={playerColumns('goals')} items={scorers.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('goals')} onSortChange={() => undefined} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Desempate: gols, minutos por gol, pênaltis, assistências e nota.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'goals' }))}>Ver ranking completo</Button></footer></article>
-          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Líderes de assistências</h2><p>Criação registrada na temporada.</p></div><Badge tone="info">Top 5</Badge></header><RankingTable caption="Resumo de assistências" columns={playerColumns('assists')} items={assistants.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('assists')} onSortChange={() => undefined} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Traços indisponíveis aparecem como —.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'assists' }))}>Ver ranking completo</Button></footer></article>
-          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Participações em gols</h2><p>Gols e assistências combinados.</p></div><Badge tone="positive">Top 5</Badge></header><RankingTable caption="Resumo de participações em gols" columns={playerColumns('contributions')} items={contributors.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('contributions')} onSortChange={() => undefined} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Percentual depende de estatística persistida.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'contributions' }))}>Ver ranking completo</Button></footer></article>
-          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Clubes mais valiosos</h2><p>Valor real dos jogadores cadastrados.</p></div><Badge tone="info">Top 5</Badge></header><RankingTable caption="Resumo dos clubes mais valiosos" columns={clubColumns()} items={valuableClubs.slice(0, 5)} rowKey={(item) => item.id} sort={{ column: 'squadValue', direction: 'desc' }} onSortChange={() => undefined} onRowClick={(item) => openClub(item)} rowClassName={(_, index) => medalClass(index)} /><footer className="rankings-card__footer"><p>Variação só aparece quando o save preservar rodada anterior.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'clubs', clubCategory: 'squadValue' }))}>Ver ranking completo</Button></footer></article>
-          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de treinadores</h2><p>Treinadores jogadores e IA da carreira.</p></div><Badge tone="positive">Top 5</Badge></header><RankingTable caption="Resumo dos treinadores" columns={managerColumns()} items={bestManagers.slice(0, 5)} rowKey={(item) => item.id} sort={{ column: 'rankingPoints', direction: 'desc' }} onSortChange={() => undefined} onRowClick={(item) => openManagerProfile(item)} rowClassName={(item, index) => `${medalClass(index)}${item.isViewer ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Somente dados preservados no save.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'managers' }))}>Ver ranking completo</Button></footer></article>
+          <article className="rankings-card rankings-card--wide"><header className="rankings-card__header"><div><h2>Artilharia</h2><p>Gols registrados na competição.</p></div><Badge tone="warning">Top 5</Badge></header><RankingTable caption="Resumo da artilharia" columns={playerColumns('goals')} items={scorers.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('goals')} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Desempate: gols, minutos por gol, pênaltis, assistências e nota.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'goals', playerSort: playerDefaultSort('goals'), playerPage: 1 }))}>Ver ranking completo</Button></footer></article>
+          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Líderes de assistências</h2><p>Criação registrada na temporada.</p></div><Badge tone="info">Top 5</Badge></header><RankingTable caption="Resumo de assistências" columns={playerColumns('assists')} items={assistants.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('assists')} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Traços indisponíveis aparecem como —.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'assists', playerSort: playerDefaultSort('assists'), playerPage: 1 }))}>Ver ranking completo</Button></footer></article>
+          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Participações em gols</h2><p>Gols e assistências combinados.</p></div><Badge tone="positive">Top 5</Badge></header><RankingTable caption="Resumo de participações em gols" columns={playerColumns('contributions')} items={contributors.slice(0, 5)} rowKey={(item) => item.id} sort={playerDefaultSort('contributions')} onRowClick={(item) => setSelectedPlayerId(item.id)} rowClassName={(item, index) => `${medalClass(index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Percentual depende de estatística persistida.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'players', playerCategory: 'contributions', playerSort: playerDefaultSort('contributions'), playerPage: 1 }))}>Ver ranking completo</Button></footer></article>
+          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Clubes mais valiosos</h2><p>Valor real dos jogadores cadastrados.</p></div><Badge tone="info">Top 5</Badge></header><RankingTable caption="Resumo dos clubes mais valiosos" columns={clubColumns()} items={valuableClubs.slice(0, 5)} rowKey={(item) => item.id} sort={{ column: 'squadValue', direction: 'desc' }} onRowClick={(item) => openClub(item)} rowClassName={(_, index) => medalClass(index)} /><footer className="rankings-card__footer"><p>Variação só aparece quando o save preservar rodada anterior.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'clubs', clubCategory: 'squadValue', clubSort: clubDefaultSort('squadValue'), clubPage: 1 }))}>Ver ranking completo</Button></footer></article>
+          <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de treinadores</h2><p>Treinadores jogadores e IA da carreira.</p></div><Badge tone="positive">Top 5</Badge></header><RankingTable caption="Resumo dos treinadores" columns={managerColumns()} items={bestManagers.slice(0, 5)} rowKey={(item) => item.id} sort={{ column: 'rankingPoints', direction: 'desc' }} onRowClick={(item) => openManagerProfile(item)} rowClassName={(item, index) => `${medalClass(index)}${item.isViewer ? ' is-managed' : ''}`} /><footer className="rankings-card__footer"><p>Somente dados preservados no save.</p><Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, tab: 'managers' }))}>Ver ranking completo</Button></footer></article>
         </div>
       </>}
 
       {saved.tab === 'players' && <>
-        <CategoryBar label="Categorias de jogadores" items={playerRankingCategories} value={saved.playerCategory} onChange={(playerCategory) => setSaved((current) => ({ ...current, playerCategory }))} />
-        <details className="rankings-filters-shell">
+        <CategoryBar label="Categorias de jogadores" items={playerRankingCategories} value={saved.playerCategory} onChange={(playerCategory) => setSaved((current) => ({ ...current, playerCategory, playerSort: playerDefaultSort(playerCategory), playerPage: 1 }))} />
+        <details className="rankings-filters-shell" open>
           <summary><span>Filtros de jogadores</span><small>Clube, nacionalidade, posição e idade</small><ChevronRight size={16} /></summary>
           <div className="rankings-filters">
             <label className="rankings-control"><span>Clube</span><select value={saved.clubFilter} onChange={(event) => setSaved((current) => ({ ...current, clubFilter: event.target.value }))}><option value="">Todos</option>{clubFilterOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
@@ -1600,17 +1597,17 @@ export function RankingsView({
             <Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, clubFilter: '', nationalityFilter: '', positionFilter: '', ageFilter: 'all', search: '' }))}>Limpar filtros</Button>
           </div>
         </details>
-        <article className="rankings-card"><header className="rankings-card__header"><div><h2>{playerRankingCategories.find((item) => item.id === saved.playerCategory)?.label}</h2><p>{rankedPlayers.length} jogadores no escopo atual.</p></div><Badge tone="info">Dados da temporada</Badge></header><RankingTable caption={`Ranking de ${saved.playerCategory}`} columns={playerColumns(saved.playerCategory)} items={visiblePlayers} rowKey={(item) => item.id} sort={playerSort} onSortChange={updatePlayerSort} onRowClick={(item) => setSelectedPlayerId(item.id)} rankOffset={(playerPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((playerPage - 1) * PAGE_SIZE + index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} emptyTitle="Nenhum jogador encontrado" emptyMessage="Ajuste os filtros ou aguarde estatísticas da competição." /><footer className="rankings-card__footer"><p>— significa que a métrica não é registrada pelo save atual.</p><Pagination page={playerPage} total={rankedPlayers.length} onChange={(page) => setSaved((current) => ({ ...current, playerPage: page }))} /></footer></article>
+        <article className="rankings-card"><header className="rankings-card__header"><div><h2>{playerRankingCategories.find((item) => item.id === saved.playerCategory)?.label}</h2><p>{rankedPlayers.length} jogadores no escopo atual.</p></div><Badge tone="info">Dados da temporada</Badge></header><RankingTable caption={`Ranking de ${saved.playerCategory}`} columns={playerColumns(saved.playerCategory)} serverSorted={useRemote} items={visiblePlayers} rowKey={(item) => item.id} sort={playerSort} onSortChange={updatePlayerSort} onRowClick={(item) => setSelectedPlayerId(item.id)} rankOffset={(playerPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((playerPage - 1) * PAGE_SIZE + index)}${sameClub(item.clubId, club.id) ? ' is-managed' : ''}`} emptyTitle="Nenhum jogador encontrado" emptyMessage="Ajuste os filtros ou aguarde estatísticas da competição." /><footer className="rankings-card__footer"><p>— significa que a métrica não é registrada pelo save atual.</p><Pagination page={playerPage} total={rankedPlayers.length} onChange={(page) => setSaved((current) => ({ ...current, playerPage: page }))} /></footer></article>
       </>}
 
       {saved.tab === 'clubs' && <>
-        <CategoryBar label="Categorias de clubes" items={clubCategories} value={saved.clubCategory} onChange={(clubCategory) => setSaved((current) => ({ ...current, clubCategory }))} />
-        <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de clubes</h2><p>{rankedClubs.length} clubes · {competitionName}</p></div><Badge tone="info">Clique para abrir o clube</Badge></header><RankingTable caption="Ranking completo de clubes" columns={clubColumns()} items={visibleClubs} rowKey={(item) => item.id} sort={clubSort} onSortChange={updateClubSort} onRowClick={(item) => openClub(item)} rankOffset={(clubPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((clubPage - 1) * PAGE_SIZE + index)}${sameClub(item.id, club.id) || sameClub(item.code, club.code) ? ' is-managed' : ''}`} emptyTitle="Nenhum clube encontrado" emptyMessage="A competição selecionada não possui clubes disponíveis." /><footer className="rankings-card__footer"><p>Posse e público aparecem apenas quando registrados pelo motor da competição.</p><Pagination page={clubPage} total={rankedClubs.length} onChange={(page) => setSaved((current) => ({ ...current, clubPage: page }))} /></footer></article>
+        <CategoryBar label="Categorias de clubes" items={clubCategories} value={saved.clubCategory} onChange={(clubCategory) => setSaved((current) => ({ ...current, clubCategory, clubSort: clubDefaultSort(clubCategory), clubPage: 1 }))} />
+        <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de clubes</h2><p>{rankedClubs.length} clubes · {competitionName}</p></div><Badge tone="info">Clique para abrir o clube</Badge></header><RankingTable caption="Ranking completo de clubes" columns={clubColumns()} serverSorted={useRemote} items={visibleClubs} rowKey={(item) => item.id} sort={clubSort} onSortChange={updateClubSort} onRowClick={(item) => openClub(item)} rankOffset={(clubPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((clubPage - 1) * PAGE_SIZE + index)}${sameClub(item.id, club.id) || sameClub(item.code, club.code) ? ' is-managed' : ''}`} emptyTitle="Nenhum clube encontrado" emptyMessage="A competição selecionada não possui clubes disponíveis." /><footer className="rankings-card__footer"><p>Posse e público aparecem apenas quando registrados pelo motor da competição.</p><Pagination page={clubPage} total={rankedClubs.length} onChange={(page) => setSaved((current) => ({ ...current, clubPage: page }))} /></footer></article>
       </>}
 
       {saved.tab === 'managers' && <>
         <section className="rankings-manager-overview" aria-label="Visão geral dos treinadores">
-          <ManagerSummaryCard label="Melhor treinador da temporada" manager={bestSeasonManager} value={bestSeasonManager?.rankingPoints !== null ? `${bestSeasonManager?.rankingPoints ?? '—'} pts ranking` : `${bestSeasonManager?.points ?? 0} pts`} onClick={bestSeasonManager ? () => openManagerProfile(bestSeasonManager) : undefined} />
+          <ManagerSummaryCard label="Melhor treinador no período" manager={bestSeasonManager} value={bestSeasonManager?.rankingPoints !== null ? `${bestSeasonManager?.rankingPoints ?? '—'} pts ranking` : `${bestSeasonManager?.points ?? 0} pts`} onClick={bestSeasonManager ? () => openManagerProfile(bestSeasonManager) : undefined} />
           <ManagerSummaryCard label="Melhor treinador jogador" manager={bestHumanManager} value={bestHumanManager?.rankingPoints !== null ? `${bestHumanManager?.rankingPoints ?? '—'} pts ranking` : `${bestHumanManager?.points ?? 0} pts`} onClick={bestHumanManager ? () => openManagerProfile(bestHumanManager) : undefined} />
           <ManagerSummaryCard label="Melhor treinador da IA" manager={bestAIManager} value={bestAIManager?.rankingPoints !== null ? `${bestAIManager?.rankingPoints ?? '—'} pts ranking` : `${bestAIManager?.points ?? 0} pts`} onClick={bestAIManager ? () => openManagerProfile(bestAIManager) : undefined} />
           <ManagerSummaryCard label="Maior evolução no ranking" manager={biggestManagerRise} value={biggestManagerRise ? signed(biggestManagerRise.positionChange ?? biggestManagerRise.rankChange) : '—'} onClick={biggestManagerRise ? () => openManagerProfile(biggestManagerRise) : undefined} />
@@ -1621,7 +1618,7 @@ export function RankingsView({
         <div className="rankings-manager-type-tabs" role="group" aria-label="Tipo de treinador">
           {([['all', 'Todos'], ['human', 'Jogadores'], ['ai', 'IA']] as const).map(([id, label]) => <button type="button" className={saved.managerTypeFilter === id ? 'is-active' : ''} aria-pressed={saved.managerTypeFilter === id} onClick={() => setSaved((current) => ({ ...current, managerTypeFilter: id }))} key={id}>{label}</button>)}
         </div>
-        <CategoryBar label="Categorias de treinadores" items={managerCategories} value={saved.managerCategory} onChange={(managerCategory) => setSaved((current) => ({ ...current, managerCategory }))} />
+        <CategoryBar label="Categorias de treinadores" items={managerCategories} value={saved.managerCategory} onChange={(managerCategory) => setSaved((current) => ({ ...current, managerCategory, managerSort: { column: managerCategory, direction: 'desc' }, managerPage: 1 }))} />
         <details className="rankings-filters-shell" open>
           <summary><span>Filtros de treinadores</span><small>Clube, nacionalidade, situação e período</small><ChevronRight size={16} /></summary>
           <div className="rankings-filters rankings-manager-filters">
@@ -1632,7 +1629,7 @@ export function RankingsView({
             <Button size="sm" variant="ghost" onClick={() => setSaved((current) => ({ ...current, managerTypeFilter: 'all', managerClubFilter: '', managerNationalityFilter: '', managerStatusFilter: '', managerPeriod: 'current', search: '' }))}>Limpar filtros</Button>
           </div>
         </details>
-        <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de treinadores</h2><p>{rankedManagers.length} treinadores · {managerPeriodLabel(saved.managerPeriod)} · {competitionName}</p></div><Badge tone="info">Dados reais do save</Badge></header><RankingTable caption="Ranking completo de treinadores" columns={managerColumns(compareManagerIds, toggleManagerComparison)} items={visibleManagers} rowKey={(item) => item.id} sort={managerSort} onSortChange={updateManagerSort} onRowClick={(item) => openManagerProfile(item)} rankOffset={(managerPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((managerPage - 1) * PAGE_SIZE + index)}${item.isViewer || sameClub(item.id, managerId) ? ' is-managed' : ''}`} emptyTitle={saved.managerPeriod !== 'current' ? 'Ainda não existem partidas suficientes para calcular o ranking' : 'Nenhum treinador encontrado'} emptyMessage={saved.managerTypeFilter === 'human' ? 'Nenhum treinador controlado por jogador nesta competição.' : saved.managerTypeFilter === 'ai' ? 'Nenhum treinador da IA encontrado.' : saved.managerPeriod === 'career' ? 'Este save ainda não preserva histórico completo dos treinadores.' : saved.managerPeriod === 'last5' ? 'Não há cinco jogos recentes preservados no snapshot selecionado.' : 'Ajuste os filtros ou selecione outra competição.'} />{currentManagerOutsidePage && filteredCurrentManager && <section className="rankings-own-position"><span>Sua posição</span><button type="button" onClick={() => openManagerProfile(filteredCurrentManager)}><ManagerEntity manager={filteredCurrentManager} rank={filteredCurrentManager.position} /><strong>{filteredCurrentManager.points} pts</strong></button></section>}<footer className="rankings-card__footer"><p>— significa que o dado não foi preservado no save.</p><Pagination page={managerPage} total={rankedManagers.length} onChange={(page) => setSaved((current) => ({ ...current, managerPage: page }))} /></footer></article>
+        <article className="rankings-card"><header className="rankings-card__header"><div><h2>Ranking de treinadores</h2><p>{rankedManagers.length} treinadores · {isArchivedSeason ? 'Temporada selecionada' : managerPeriodLabel(saved.managerPeriod)} · {competitionName}</p></div><Badge tone="info">Dados reais do save</Badge></header><RankingTable caption="Ranking completo de treinadores" columns={managerColumns(compareManagerIds, toggleManagerComparison)} serverSorted={useRemote} items={visibleManagers} rowKey={(item) => item.id} sort={managerSort} onSortChange={updateManagerSort} onRowClick={(item) => openManagerProfile(item)} rankOffset={(managerPage - 1) * PAGE_SIZE} rowClassName={(item, index) => `${medalClass((managerPage - 1) * PAGE_SIZE + index)}${item.isViewer || sameClub(item.id, managerId) ? ' is-managed' : ''}`} emptyTitle={saved.managerPeriod !== 'current' ? 'Ainda não existem partidas suficientes para calcular o ranking' : 'Nenhum treinador encontrado'} emptyMessage={saved.managerTypeFilter === 'human' ? 'Nenhum treinador controlado por jogador nesta competição.' : saved.managerTypeFilter === 'ai' ? 'Nenhum treinador da IA encontrado.' : saved.managerPeriod === 'career' ? 'Este save ainda não preserva histórico completo dos treinadores.' : saved.managerPeriod === 'last5' ? 'Nenhum jogo recente preservado neste período e competição.' : 'Ajuste os filtros ou selecione outra competição.'} />{currentManagerOutsidePage && filteredCurrentManager && <section className="rankings-own-position"><span>Sua posição</span><button type="button" onClick={() => openManagerProfile(filteredCurrentManager)}><ManagerEntity manager={filteredCurrentManager} rank={filteredCurrentManager.position} /><strong>{filteredCurrentManager.points} pts</strong></button></section>}<footer className="rankings-card__footer"><p>— significa que o dado não foi preservado no save.</p><Pagination page={managerPage} total={rankedManagers.length} onChange={(page) => setSaved((current) => ({ ...current, managerPage: page }))} /></footer></article>
         {compareManagerIds.length > 0 && <aside className="rankings-compare-dock" aria-live="polite"><span><Scale size={16} /><strong>{compareManagerIds.length}/2 treinadores selecionados</strong><small>{comparedManagers.map((manager) => manager.name).join(' × ') || 'Selecione na tabela'}</small></span><div><button type="button" onClick={() => setCompareManagerIds([])}>Limpar</button><Button size="sm" disabled={comparedManagers.length !== 2} onClick={() => setComparisonOpen(true)}>Comparar treinadores</Button></div></aside>}
       </>}
 

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20.9"
   },
   "scripts": {
     "dev": "concurrently -n WEB,SERVER -c green,cyan \"npm:dev:client\" \"npm:server:dev\"",
@@ -12,9 +12,15 @@
     "server": "node server/index.mjs",
     "server:dev": "node --watch server/index.mjs",
     "build": "tsc -b && vite build --configLoader runner",
+    "prebuild": "npm run check:encoding",
     "typecheck": "tsc -b --pretty false",
+    "pretypecheck": "npm run check:encoding",
+    "check:encoding": "node scripts/check-encoding.mjs",
     "preview": "vite preview",
     "test:server": "node --test --test-concurrency=1 server/tests/*.test.mjs",
+    "test:frontend": "node scripts/test-frontend.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json",
     "seed:builtin": "node scripts/seed-builtin-catalog.mjs --dry-run"
   },
@@ -28,11 +34,13 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "redis": "^5.8.2",
+    "sharp": "^0.35.4",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "zod": "^3.25.67"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.3",
     "@types/node": "^22.15.32",

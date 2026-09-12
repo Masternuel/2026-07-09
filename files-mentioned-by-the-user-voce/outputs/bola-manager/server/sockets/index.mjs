@@ -19,10 +19,17 @@ export function registerSocketHandlers(io, options) {
     deletedRooms,
   };
 
-  function clusterSocket(user) {
+  function clusterSocket(credentials) {
     const handlers = new Map();
     return {
-      data: { user, roomCodes: [] },
+      data: {
+        roomCodes: [],
+        logger: options.logger,
+        metrics: options.metrics,
+        slowOperationMs: options.socketSlowMs,
+      },
+      handshake: { auth: credentials },
+      disconnect() { this.data.disposeAuthSession?.(); },
       on(eventName, handler) {
         handlers.set(eventName, handler);
       },
@@ -45,19 +52,31 @@ export function registerSocketHandlers(io, options) {
         acknowledgement?.({ handled: false });
         return;
       }
+      const proxy = clusterSocket(request?.auth);
       try {
-        const proxy = clusterSocket(request.user);
+        await new Promise((resolve, reject) => options.authenticateSocket(proxy, (error) => error ? reject(error) : resolve()));
         registerMatchHandlers(io, proxy, matchOptions);
         const response = await proxy.dispatch(eventName, request.payload);
         acknowledgement?.({ handled: Boolean(response), response });
       } catch (error) {
         options.logger?.error?.("socket.cluster_command_error", { eventName, code, error });
-        acknowledgement?.({ handled: false });
+        acknowledgement?.({ handled: true, response: { ok: false, error: {
+          code: error.data?.code ?? error.code ?? "AUTH_REQUIRED", message: error.message,
+        } } });
+      } finally {
+        proxy.data.disposeAuthSession?.();
       }
     });
   }
 
   io.on("connection", (socket) => {
+    socket.data.logger = options.logger;
+    socket.data.metrics = options.metrics;
+    socket.data.slowOperationMs = options.socketSlowMs;
+    socket.data.startAuthSession?.();
+    socket.onAnyOutgoing?.((eventName) => {
+      options.logger?.debug?.("socket.event_sent", { eventName, socketId: socket.id });
+    });
     if (options.rateLimiter) {
       socket.data.consumeRateLimit = async (eventName) => {
         try {
@@ -79,16 +98,11 @@ export function registerSocketHandlers(io, options) {
     if (options.distributedLocks && typeof io.serverSideEmitWithAck === "function") {
       socket.data.forwardEvent = async (eventName, payload) => {
         if (!eventName.startsWith("match:")) return null;
+        await socket.data.authorize(eventName);
         const responses = await io.serverSideEmitWithAck("cluster:match-command", {
           event: eventName,
           payload,
-          user: {
-            uid: socket.data.user.uid,
-            name: socket.data.user.name,
-            email: socket.data.user.email,
-            editor: socket.data.user.editor,
-            authType: socket.data.user.authType,
-          },
+          auth: socket.data.authCredentials(),
         });
         return responses.find((response) => response?.handled)?.response ?? null;
       };

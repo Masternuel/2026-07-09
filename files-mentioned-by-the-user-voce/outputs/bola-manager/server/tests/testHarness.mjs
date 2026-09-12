@@ -22,7 +22,7 @@ export function fakeFirebase({ firestore = null, bucket = null } = {}) {
       async verifyIdToken(token) {
         const decoded = USERS[token];
         if (!decoded) throw new Error("invalid token");
-        return decoded;
+        return { ...decoded, exp: Math.floor(Date.now() / 1000) + 3600 };
       },
     },
   };
@@ -86,7 +86,14 @@ export async function startTestServer({
     socketAdapterFactory,
     logger: { error() {} },
   });
-  const address = await server.listen(0);
+  await new Promise((resolve, reject) => {
+    server.httpServer.once("error", reject);
+    server.httpServer.listen(0, "127.0.0.1", () => {
+      server.httpServer.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.httpServer.address();
   return { server, store, url: `http://127.0.0.1:${address.port}` };
 }
 
