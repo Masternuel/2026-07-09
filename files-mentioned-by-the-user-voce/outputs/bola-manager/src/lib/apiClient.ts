@@ -31,7 +31,8 @@ interface ApiRequestOptions {
   timeoutMs?: number;
 }
 
-const serverUrl = (import.meta.env.VITE_SERVER_URL || window.location.origin).replace(/\/$/, '');
+const serverUrl = (import.meta.env.VITE_SERVER_URL
+  || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const BINARY_REQUEST_TIMEOUT_MS = 120_000;
 const AUTH_TIMEOUT_MS = 15_000;

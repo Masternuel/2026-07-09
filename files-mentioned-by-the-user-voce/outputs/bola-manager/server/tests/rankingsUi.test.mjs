@@ -25,7 +25,7 @@ let sortRankingPlayersByCategory;
 before(async () => {
   vite = await createServer({
     root: projectRoot,
-    configFile: false,
+    configFile: false, envFile: false,
     plugins: [{
       name: 'expose-ranking-timeline-for-tests',
       transform(source, id) {
