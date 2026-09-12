@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { cloudinaryConfigFromEnv } from "../services/cloudinaryMedia.mjs";
 import { createMediaService } from "../services/mediaService.mjs";
 
 import { png } from "./helpers/imageFixtures.mjs";
+import { pendingJsonResponse } from "./fixtures/cloudinaryPendingBody.mjs";
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -174,26 +177,33 @@ test("erro do Cloudinary vira falha tipada sem vazar o segredo", async () => {
 });
 
 test("timeout continua ativo enquanto o corpo da resposta nao termina", async () => {
+  let signal;
   const service = createMediaService({
     env: {
       MEDIA_STORAGE_PROVIDER: "cloudinary",
       CLOUDINARY_URL: "cloudinary://key:secret@cloud",
     },
     requestTimeoutMs: 10,
-    fetchImpl: async (_url, options) => ({
-      ok: true,
-      status: 200,
-      json: () => new Promise((_resolve, reject) => {
-        options.signal.addEventListener("abort", () => {
-          const error = new Error("aborted");
-          error.name = "AbortError";
-          reject(error);
-        }, { once: true });
-      }),
-    }),
+    fetchImpl: async (_url, options) => {
+      signal = options.signal;
+      return pendingJsonResponse(signal);
+    },
   });
   await assert.rejects(
     service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png }),
     (error) => error.code === "EDITOR_MEDIA_UPLOAD_FAILED" && error.details?.cause === "timeout",
   );
+  assert.equal(signal.aborted, true);
+});
+
+test("timeout do corpo rejeita antes do processo sem outros handles encerrar", async () => {
+  const fixtureUrl = new URL("./fixtures/cloudinaryPendingBody.mjs", import.meta.url).href;
+  const script = `import { checkPendingBodyTimeout } from ${JSON.stringify(fixtureUrl)};
+    await checkPendingBodyTimeout();
+    process.stdout.write('timeout-observed');`;
+  // O watchdog pertence ao pai; não mantém o event loop do filho vivo.
+  const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "--eval", script], {
+    timeout: 5_000, windowsHide: true, maxBuffer: 64 * 1024,
+  });
+  assert.equal(stdout, "timeout-observed");
 });
