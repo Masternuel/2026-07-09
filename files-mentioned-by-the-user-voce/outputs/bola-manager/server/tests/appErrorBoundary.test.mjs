@@ -17,7 +17,7 @@ let AppErrorFallback;
 before(async () => {
   vite = await createServer({
     root: projectRoot,
-    configFile: false,
+    configFile: false, envFile: false,
     plugins: [reactPlugin()],
     appType: "custom",
     logLevel: "silent",

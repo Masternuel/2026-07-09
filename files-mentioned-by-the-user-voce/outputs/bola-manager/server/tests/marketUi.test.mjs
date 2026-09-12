@@ -299,7 +299,7 @@ let FinanceView;
 before(async () => {
   vite = await createServer({
     root: projectRoot,
-    configFile: false,
+    configFile: false, envFile: false,
     plugins: [marketTestPlugin],
     esbuild: { jsx: 'automatic' },
     optimizeDeps: { noDiscovery: true, include: [] },

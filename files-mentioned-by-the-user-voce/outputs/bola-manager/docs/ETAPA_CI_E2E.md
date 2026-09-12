@@ -70,3 +70,14 @@ Todos os smokes falham diante de exceção não tratada da página ou resposta H
 - Alterações de etapas anteriores foram preservadas. Nenhuma refatoração da etapa 20 foi iniciada.
 
 Referência do harness e CI: [Playwright — CI](https://playwright.dev/docs/ci-intro).
+
+## Correção posterior — CI sem `.env.local`
+
+O primeiro resultado local não reproduzia integralmente o ambiente do CI: testes SSR ainda carregavam `.env.local`. Sem `VITE_SERVER_URL`, `src/lib/apiClient.ts` avaliava `window.location.origin` durante a importação em Node e lançava `ReferenceError`. Essa falha não depende de Firebase ou Redis.
+
+- Fallback protegido com `typeof window`; conserva a URL configurada e a mesma origem no navegador. Importação SSR sem configuração não precisa de DOM.
+- Vinte configurações SSR passaram a usar `envFile: false`; nenhum segredo foi adicionado e o `.env.local` não foi removido nem modificado.
+- `apiEnvironmentClient.test.mjs` cobre Node sem DOM/configuração, URL explícita em Node, mesma origem no navegador e prioridade da URL explícita. Antes da correção: um erro reproduzido; depois: quatro testes aprovados, incluindo requisição JSON e download.
+- A descoberta de dependências foi desativada no harness SSR do calendário após uma falha independente de acesso a diretórios no Windows. As sete verificações do calendário continuam aprovadas.
+- Suíte completa reexecutada após os ajustes: 1.250 testes aprovados, zero falhas e um ignorado por exigir Redis real. O teste ignorado não é a causa do erro de importação.
+- Typecheck e build Vite com `envFile: false` aprovados. A confirmação no GitHub depende de publicar esta correção e executar novamente o workflow; não foram adicionadas credenciais como contorno.

@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const root = fileURLToPath(new URL('../..', import.meta.url));
 let vite, bindSearchShortcut, RankingTable, Header;
 before(async () => {
-  vite = await createServer({ root, configFile: false, appType: 'custom', logLevel: 'silent',
+  vite = await createServer({ root, configFile: false, envFile: false, appType: 'custom', logLevel: 'silent',
     esbuild: { jsx: 'automatic' }, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true } });
   ({ bindSearchShortcut } = await vite.ssrLoadModule('/src/utils/searchShortcut.ts'));
   ({ RankingTable } = await vite.ssrLoadModule('/src/components/rankings/RankingTable.tsx'));

@@ -60,7 +60,7 @@ function renderLobby(leagueChoices) {
 before(async () => {
   vite = await createServer({
     root: projectRoot,
-    configFile: false,
+    configFile: false, envFile: false,
     esbuild: { jsx: 'automatic' },
     optimizeDeps: { noDiscovery: true, include: [] },
     appType: "custom",

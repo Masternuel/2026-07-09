@@ -83,7 +83,7 @@ function detailInput(overrides = {}) {
 before(async () => {
   vite = await createServer({
     root: projectRoot,
-    configFile: false,
+    configFile: false, envFile: false,
     appType: 'custom',
     logLevel: 'silent',
     server: { middlewareMode: true },

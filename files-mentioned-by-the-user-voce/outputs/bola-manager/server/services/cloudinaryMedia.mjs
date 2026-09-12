@@ -96,8 +96,8 @@ export class CloudinaryMediaService {
     if (file) form.append("file", new Blob([file.bytes], { type: file.mimeType }), `imagem.${file.extension}`);
 
     const controller = new AbortController();
+    // Um corpo pendente pode não ter socket ativo; o prazo precisa manter a operação viva.
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    timeout.unref?.();
     let response;
     let payload = null;
     try {
