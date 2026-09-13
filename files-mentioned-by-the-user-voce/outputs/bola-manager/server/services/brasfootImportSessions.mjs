@@ -764,6 +764,7 @@ export class BrasfootImportSessionService {
           }
           const parsedSource = { report: structuredClone(artifact.report), assetRoot: directory };
           const result = await this.commitImport({
+            ownerId: String(ownerId),
             database: targetDatabase,
             catalogStore,
             data: structuredClone(artifact.data),
@@ -1000,6 +1001,7 @@ export class BrasfootImportSessionService {
           assetRoot: preview.parsedSource.assetRoot,
         };
         const result = await this.commitImport({
+          ownerId: String(ownerId),
           database: targetDatabase,
           catalogStore,
           data,

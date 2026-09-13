@@ -1,4 +1,5 @@
 import { withTimeout } from "./readiness.mjs";
+import { coordinationUnavailable } from "./coordinationAvailability.mjs";
 
 export const FIXED_WINDOW_SCRIPT = `
 -- bola-manager:rate-limit:fixed-window
@@ -84,9 +85,7 @@ export function createRateLimitMiddleware(limiter, {
       }
       next();
     } catch (error) {
-      error.code ??= "RATE_LIMIT_UNAVAILABLE";
-      error.status ??= 503;
-      next(error);
+      next(coordinationUnavailable(error));
     }
   };
 }

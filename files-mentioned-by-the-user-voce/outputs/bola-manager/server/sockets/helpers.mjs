@@ -67,6 +67,7 @@ export function registerSafe(socket, eventName, handler) {
     };
 
     try {
+      if (eventName !== "auth:logout") socket.data.assertCoordinationAvailable?.();
       const rate = eventName === "auth:logout" ? null : await socket.data.consumeRateLimit?.(eventName);
       if (rate && !rate.allowed) {
         const error = new Error("Muitos eventos em tempo real. Tente novamente em instantes.");
@@ -77,6 +78,7 @@ export function registerSafe(socket, eventName, handler) {
       }
       await socket.data.authorize?.(eventName);
       socket.data.assertAuthActive?.(eventName);
+      if (eventName !== "auth:logout") socket.data.assertCoordinationAvailable?.();
       const result = await handler(handlerPayload);
       const { afterAcknowledgement, ...data } = result ?? {};
       if (typeof acknowledgement === "function") acknowledgement({ ok: true, ...data });

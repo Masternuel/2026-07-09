@@ -294,7 +294,7 @@ export async function secureAssetPath(assetRoot, relativePath) {
   return realTarget;
 }
 
-export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, report, concurrency = 6 }) {
+export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, report, ownerId = "brasfoot-import", concurrency = 6 }) {
   const withCrest = clubs.filter((club) => club.assets?.shield);
   report.assets.uploaded ??= 0;
   report.assets.failed ??= 0;
@@ -313,11 +313,11 @@ export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, rep
           kind: "crest",
           mimeType: "image/png",
           bytes,
-          uploadedBy: "brasfoot-import",
+          uploadedBy: ownerId,
         });
         club.crestImageUrl = media.url;
         club.crestImagePath = media.path;
-        uploadedMedia.push({ ...media, recordId: String(club.id) });
+        uploadedMedia.push({ ...media, entity: "clubs", recordId: String(club.id), ownerId });
         report.assets.uploaded += 1;
       } catch (error) {
         report.assets.failed += 1;
@@ -338,7 +338,7 @@ async function cleanupUploadedAssets(mediaService, uploadedMedia, report) {
   if (!mediaService || typeof mediaService.remove !== "function") return;
   await Promise.all(uploadedMedia.map(async (media) => {
     try {
-      await mediaService.remove(media.path);
+      await mediaService.remove(media.path, media);
       report.assets.cleanedUp += 1;
     } catch (error) {
       report.assets.cleanupFailed += 1;
@@ -390,6 +390,7 @@ function compactReport(report) {
 export async function executeImportCommit({
   database,
   catalogStore = null,
+  ownerId = catalogStore?.ownerId ?? "brasfoot-import",
   data,
   summary,
   parsedSource,
@@ -455,6 +456,7 @@ export async function executeImportCommit({
       } else {
         await persistProgress("uploading-assets");
         const upload = await uploadBrasfootCrests({
+          ownerId,
           clubs: data.clubs,
           assetRoot: parsedSource.assetRoot,
           mediaService,

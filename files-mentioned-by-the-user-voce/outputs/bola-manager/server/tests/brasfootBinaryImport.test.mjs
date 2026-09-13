@@ -327,6 +327,7 @@ test("envia escudo detectado e associa URL/path ao clube", async () => {
   const report = { warnings: [], assets: {} };
   try {
     await uploadBrasfootCrests({
+      ownerId: "owner-asset",
       clubs,
       assetRoot: root,
       report,
@@ -343,6 +344,7 @@ test("envia escudo detectado e associa URL/path ao clube", async () => {
 
   assert.equal(uploaded.length, 1);
   assert.equal(uploaded[0].mimeType, "image/png");
+  assert.equal(uploaded[0].uploadedBy, "owner-asset");
   assert.equal(clubs[0].crestImageUrl, "https://storage.example/clube.png");
   assert.equal(clubs[0].crestImagePath, "editor-media/clubs/hash/crest.png");
   assert.equal(report.assets.uploaded, 1);
@@ -448,9 +450,18 @@ test("falha no inicio nao altera a base e remove assets enviados", async () => {
       parsedSource: { report, assetRoot: root },
       options: { batchSize: 2, skipAssets: false },
       mediaService: {
-        async upload() { return { url: "https://storage/club.png", path: "editor-media/clubs/run/club.png" }; },
-        async remove(path) { removed.push(path); },
+        async upload(input) {
+          assert.equal(input.uploadedBy, "owner-rollback");
+          return { url: "https://storage/club.png", path: "editor-media/clubs/run/club.png" };
+        },
+        async remove(path, scope) {
+          assert.equal(scope.ownerId, "owner-rollback");
+          assert.equal(scope.entity, "clubs");
+          assert.equal(scope.recordId, "club");
+          removed.push(path);
+        },
       },
+      ownerId: "owner-rollback",
       runId: "run-falho",
       now: () => "2026-07-13T00:00:00.000Z",
     }), /falha em brasfootClubs/);

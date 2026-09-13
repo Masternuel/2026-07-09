@@ -41,7 +41,7 @@ class RoutedMediaService {
     return this.primary.upload(input);
   }
 
-  remove(path) {
+  remove(path, ownership) {
     if (isCloudinaryMediaNamespace(path)) {
       if (!isCloudinaryMediaPath(path)) {
         return Promise.reject(new CatalogMediaError(
@@ -50,14 +50,14 @@ class RoutedMediaService {
           400,
         ));
       }
-      if (this.cloudinary) return this.cloudinary.remove(path);
+      if (this.cloudinary) return this.cloudinary.remove(path, ownership);
       return Promise.reject(new CatalogMediaError(
         "Cloudinary nao esta configurado para remover esta imagem",
         "EDITOR_MEDIA_STORAGE_UNAVAILABLE",
         503,
       ));
     }
-    return this.firebase.remove(path);
+    return this.firebase.remove(path, ownership);
   }
 }
 

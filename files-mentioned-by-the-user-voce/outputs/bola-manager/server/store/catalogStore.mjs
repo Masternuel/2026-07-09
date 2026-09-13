@@ -16,6 +16,7 @@ import {
   createScopedCatalogFirestore,
 } from "./catalogScope.mjs";
 import { commitCatalogGeneration } from "./catalogImportTransaction.mjs";
+import { withoutClientMediaPaths } from "../services/mediaOwnership.mjs";
 
 const COLLECTIONS = Object.freeze({
   leagues: "brasfootLeagues",
@@ -832,12 +833,14 @@ export class CatalogStore {
   }
 
   async create(entity, input, updatedBy) {
+    input = withoutClientMediaPaths(input);
     const collection = this.#collection(entity);
     const id = this.#validId(input?.id);
     const reference = collection.doc(id);
     const timestamp = this.now().toISOString();
     let record = {
       ...input,
+      ...(MEDIA_FIELDS[entity] ? { [MEDIA_FIELDS[entity].path]: null } : {}),
       ...(entity === "players" ? { isStar: input?.isStar === true } : {}),
       id,
       createdAt: timestamp,
@@ -897,6 +900,7 @@ export class CatalogStore {
   }
 
   async update(entity, idValue, changes, updatedBy) {
+    changes = withoutClientMediaPaths(changes);
     const collection = this.#collection(entity);
     const id = this.#validId(idValue);
     if (Object.hasOwn(changes ?? {}, "id")) {
@@ -1047,8 +1051,11 @@ export class CatalogStore {
     const ids = idValues.map((value) => this.#validId(value));
     const references = ids.map((id) => collection.doc(id));
     const previousPaths = [];
+    const previousMedia = [];
 
     await this.#runCatalogMutation(async (transaction) => {
+      previousPaths.length = 0;
+      previousMedia.length = 0;
       const documents = typeof transaction.getAll === "function"
         ? await transaction.getAll(...references)
         : await Promise.all(references.map((reference) => transaction.get(reference)));
@@ -1092,12 +1099,15 @@ export class CatalogStore {
       const mediaFields = MEDIA_FIELDS[entity];
       documents.forEach((document, index) => {
         const previousPath = mediaFields ? document.data()?.[mediaFields.path] ?? null : null;
-        if (previousPath) previousPaths.push(previousPath);
+        if (previousPath) {
+          previousPaths.push(previousPath);
+          previousMedia.push({ path: previousPath, entity, recordId: ids[index] });
+        }
         transaction.delete(references[index]);
       });
     });
 
-    return { deleted: true, ids, count: ids.length, previousPaths };
+    return { deleted: true, ids, count: ids.length, previousPaths, previousMedia };
   }
 
   #assertAvailable() {

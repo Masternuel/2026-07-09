@@ -5,6 +5,7 @@ import { registerRoomHandlers } from "./roomHandlers.mjs";
 import { registerLineupHandlers } from "./lineupHandlers.mjs";
 import { registerClubCareerHandlers } from "./clubCareerHandlers.mjs";
 import { channelForManager } from "./helpers.mjs";
+import { coordinationUnavailable } from "../infrastructure/coordinationAvailability.mjs";
 
 export function registerSocketHandlers(io, options) {
   const matchSessions = new Map();
@@ -27,6 +28,7 @@ export function registerSocketHandlers(io, options) {
         logger: options.logger,
         metrics: options.metrics,
         slowOperationMs: options.socketSlowMs,
+        assertCoordinationAvailable: options.assertCoordinationAvailable,
       },
       handshake: { auth: credentials },
       disconnect() { this.data.disposeAuthSession?.(); },
@@ -54,6 +56,7 @@ export function registerSocketHandlers(io, options) {
       }
       const proxy = clusterSocket(request?.auth);
       try {
+        options.assertCoordinationAvailable?.();
         await new Promise((resolve, reject) => options.authenticateSocket(proxy, (error) => error ? reject(error) : resolve()));
         registerMatchHandlers(io, proxy, matchOptions);
         const response = await proxy.dispatch(eventName, request.payload);
@@ -73,6 +76,7 @@ export function registerSocketHandlers(io, options) {
     socket.data.logger = options.logger;
     socket.data.metrics = options.metrics;
     socket.data.slowOperationMs = options.socketSlowMs;
+    socket.data.assertCoordinationAvailable = options.assertCoordinationAvailable;
     socket.data.startAuthSession?.();
     socket.onAnyOutgoing?.((eventName) => {
       options.logger?.debug?.("socket.event_sent", { eventName, socketId: socket.id });
@@ -89,9 +93,8 @@ export function registerSocketHandlers(io, options) {
             },
           );
         } catch (error) {
-          error.code ??= "RATE_LIMIT_UNAVAILABLE";
-          error.status ??= 503;
-          throw error;
+          options.logger?.warn?.("socket.coordination_unavailable", { error });
+          throw coordinationUnavailable(error);
         }
       };
     }
@@ -99,6 +102,7 @@ export function registerSocketHandlers(io, options) {
       socket.data.forwardEvent = async (eventName, payload) => {
         if (!eventName.startsWith("match:")) return null;
         await socket.data.authorize(eventName);
+        options.assertCoordinationAvailable?.();
         const responses = await io.serverSideEmitWithAck("cluster:match-command", {
           event: eventName,
           payload,

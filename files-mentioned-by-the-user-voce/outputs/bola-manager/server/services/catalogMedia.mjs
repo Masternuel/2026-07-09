@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { mediaHash, mediaScope, mediaOwnershipError } from "./mediaOwnership.mjs";
 import sharp from "sharp";
 import { MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from "../../shared/imagePolicy.mjs";
 
@@ -117,9 +118,8 @@ function downloadUrl(bucketName, path, token) {
   return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(path)}?alt=media&token=${encodeURIComponent(token)}`;
 }
 
-function storagePath(entity, recordId, objectId, extension) {
-  const recordHash = createHash("sha256").update(String(recordId)).digest("hex").slice(0, 24);
-  return `editor-media/${entity}/${recordHash}/${objectId}.${extension}`;
+function storagePath(scope, objectId, extension) {
+  return `editor-media/${scope.entity}/v2/${mediaHash(scope.ownerId)}/${mediaHash(scope.recordId)}/${objectId}.${extension}`;
 }
 
 export class CatalogMediaService {
@@ -142,9 +142,10 @@ export class CatalogMediaService {
     const { mimeType, mediaType } = prepared;
     bytes = prepared.bytes;
 
+    const scope = mediaScope({ ownerId: uploadedBy, entity, recordId: String(recordId) });
     const objectId = this.idFactory();
     const token = this.idFactory();
-    const path = storagePath(entity, recordId, objectId, mediaType.extension);
+    const path = storagePath(scope, objectId, mediaType.extension);
     const file = this.bucket.file(path);
     try {
       await file.save(bytes, {
@@ -158,20 +159,22 @@ export class CatalogMediaService {
             uploadedBy: String(uploadedBy),
             mediaEntity: entity,
             mediaKind: kind,
+            recordId: scope.recordId,
           },
         },
       });
     } catch (error) {
+      let mediaCleanupFailed = false;
       try {
-        await file.delete({ ignoreNotFound: true });
+        await this.remove(path, scope);
       } catch {
-        // Best effort: o erro original de upload continua sendo o mais util para o cliente.
+        mediaCleanupFailed = true;
       }
       throw new CatalogMediaError(
         "Firebase Storage nao conseguiu salvar a imagem",
         "EDITOR_MEDIA_UPLOAD_FAILED",
         502,
-        { cause: error?.code ? String(error.code) : undefined },
+        { cause: error?.code ? String(error.code) : undefined, mediaCleanupFailed },
       );
     }
 
@@ -186,7 +189,7 @@ export class CatalogMediaService {
     };
   }
 
-  async remove(path) {
+  async remove(path, ownership) {
     if (!this.bucket || typeof this.bucket.file !== "function") {
       throw new CatalogMediaError(
         "Firebase Storage nao esta configurado no servidor",
@@ -200,7 +203,26 @@ export class CatalogMediaService {
       || /[\u0000-\u001f\u007f]/.test(normalizedPath)) {
       throw new CatalogMediaError("Caminho de midia invalido", "EDITOR_MEDIA_PATH_INVALID", 400);
     }
-    await this.bucket.file(normalizedPath).delete({ ignoreNotFound: true });
+    const scope = mediaScope(ownership);
+    const recordHash = mediaHash(scope.recordId);
+    const scopedPrefix = `editor-media/${scope.entity}/v2/${mediaHash(scope.ownerId)}/${recordHash}/`;
+    const legacyPrefix = `editor-media/${scope.entity}/${recordHash}/`;
+    const scoped = normalizedPath.startsWith(scopedPrefix);
+    if (!scoped && !normalizedPath.startsWith(legacyPrefix)) throw mediaOwnershipError();
+    const file = this.bucket.file(normalizedPath);
+    let metadata;
+    try {
+      [metadata] = await file.getMetadata();
+    } catch (error) {
+      if (Number(error.code) === 404) return;
+      throw error;
+    }
+    const binding = metadata?.metadata;
+    if (binding?.uploadedBy !== scope.ownerId || binding?.mediaEntity !== scope.entity
+      || binding?.mediaKind !== scope.kind
+      || (scoped ? binding?.recordId !== scope.recordId : binding?.recordId != null && binding.recordId !== scope.recordId)
+      || !metadata.generation) throw mediaOwnershipError();
+    await file.delete({ ignoreNotFound: true, ifGenerationMatch: metadata.generation });
   }
 }
 

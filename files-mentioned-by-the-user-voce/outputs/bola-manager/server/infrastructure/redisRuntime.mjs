@@ -1,4 +1,5 @@
 import { withTimeout } from "./readiness.mjs";
+import { redisCoordinationAvailable } from "./coordinationAvailability.mjs";
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -103,6 +104,7 @@ export async function createRedisRuntime({
     async ping(timeout = timeoutMs) {
       const startedAt = Date.now();
       try {
+        if (!redisCoordinationAvailable(this)) return { ok: false, status: "unavailable" };
         await withTimeout(client.ping(), positiveInteger(timeout, timeoutMs), "redis-ping");
         return { ok: true, status: "ready", latencyMs: Date.now() - startedAt };
       } catch {

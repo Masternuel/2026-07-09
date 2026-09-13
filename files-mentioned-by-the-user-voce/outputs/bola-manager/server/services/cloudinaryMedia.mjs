@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { CatalogMediaError, prepareCatalogMedia } from "./catalogMedia.mjs";
 import { allowedExternalImage } from "../../shared/imagePolicy.mjs";
+import { mediaHash, mediaScope, mediaBinding, verifyMediaBinding, mediaOwnershipError } from "./mediaOwnership.mjs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-const CLOUDINARY_PATH_PATTERN = /^editor-media\/(clubs|players|tournaments)\/cloudinary\/[a-f0-9]{24}\/[a-zA-Z0-9_-]{1,128}$/;
+const CLOUDINARY_PATH_PATTERN = /^editor-media\/(clubs|players|tournaments)\/cloudinary\/(?:[a-f0-9]{24}\/[a-zA-Z0-9_-]{1,128}|v2\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-zA-Z0-9_-]{1,128}\.[a-f0-9]{64})$/;
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -47,9 +48,8 @@ export function cloudinarySignature(parameters, apiSecret) {
   return createHash("sha1").update(`${serialized}${apiSecret}`).digest("hex");
 }
 
-function cloudinaryPublicId(entity, recordId, objectId) {
-  const recordHash = createHash("sha256").update(String(recordId)).digest("hex").slice(0, 24);
-  return `editor-media/${entity}/cloudinary/${recordHash}/${objectId}`;
+function cloudinaryPublicId(scope, objectId, secret) {
+  return `editor-media/${scope.entity}/cloudinary/v2/${mediaHash(scope.ownerId)}/${mediaHash(scope.recordId)}/${objectId}.${mediaBinding(scope, objectId, secret)}`;
 }
 
 function validCloudinaryPath(value) {
@@ -133,7 +133,7 @@ export class CloudinaryMediaService {
     return payload;
   }
 
-  async upload({ entity, recordId, kind, mimeType: suppliedMimeType, bytes }) {
+  async upload({ entity, recordId, kind, mimeType: suppliedMimeType, bytes, uploadedBy }) {
     if (!this.configured) {
       throw providerFailure(
         "Cloudinary nao esta configurado no servidor",
@@ -144,7 +144,8 @@ export class CloudinaryMediaService {
     const prepared = await prepareCatalogMedia(suppliedMimeType, bytes);
     const { mimeType, mediaType } = prepared;
     bytes = prepared.bytes;
-    const path = cloudinaryPublicId(entity, recordId, this.idFactory());
+    const scope = mediaScope({ ownerId: uploadedBy, entity, recordId: String(recordId) });
+    const path = cloudinaryPublicId(scope, this.idFactory(), this.apiSecret);
     const timestamp = Math.floor(this.now() / 1000);
     const payload = await this.#post("upload", { public_id: path, timestamp }, {
       bytes,
@@ -155,11 +156,17 @@ export class CloudinaryMediaService {
     if (!allowedExternalImage(url) || new URL(url).hostname !== "res.cloudinary.com"
       || !new URL(url).pathname.startsWith(`/${this.cloudName}/image/upload/`)
       || clean(payload.public_id) !== path) {
-      await this.remove(path).catch(() => {});
+      let mediaCleanupFailed = false;
+      try {
+        await this.remove(path, scope);
+      } catch {
+        mediaCleanupFailed = true;
+      }
       throw providerFailure(
         "Cloudinary devolveu uma resposta de imagem invalida",
         "EDITOR_MEDIA_UPLOAD_FAILED",
         502,
+        { mediaCleanupFailed },
       );
     }
     return {
@@ -173,11 +180,17 @@ export class CloudinaryMediaService {
     };
   }
 
-  async remove(path) {
+  async remove(path, ownership) {
     const normalizedPath = clean(path);
     if (!validCloudinaryPath(normalizedPath)) {
       throw providerFailure("Caminho de midia invalido", "EDITOR_MEDIA_PATH_INVALID", 400);
     }
+    const scope = mediaScope(ownership);
+    const prefix = `editor-media/${scope.entity}/cloudinary/v2/${mediaHash(scope.ownerId)}/${mediaHash(scope.recordId)}/`;
+    if (!normalizedPath.startsWith(prefix)) throw mediaOwnershipError();
+    const [objectId, signature] = normalizedPath.slice(prefix.length).split(".");
+    // Prova emitida pelo servidor; caminhos legados sem vinculo verificavel nao sao excluidos.
+    verifyMediaBinding(scope, objectId, signature, this.apiSecret);
     const timestamp = Math.floor(this.now() / 1000);
     const payload = await this.#post("destroy", {
       invalidate: "true",

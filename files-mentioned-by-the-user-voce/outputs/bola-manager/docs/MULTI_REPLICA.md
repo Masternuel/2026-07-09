@@ -16,7 +16,7 @@
 3. Mantenha `/ready` como health check. `railway.json` inicia duas réplicas.
 4. Use bucket com lifecycle removendo `brasfoot-import-sessions/` após `IMPORT_OBJECT_TTL_DAYS` dias.
 
-Sem Redis, produção permanece viva em `/health`, mas `/ready` e APIs retornam indisponibilidade. Isso impede tráfego sem coordenação distribuída.
+Sem Redis, produção permanece viva em `/health`, mas `/ready` e APIs retornam indisponibilidade. Handshakes Socket.IO são rejeitados com `REDIS_REQUIRED`; conexões existentes também rejeitam comandos de negócio enquanto command/publisher/subscriber não estiverem prontos. Comandos encaminhados entre réplicas são revalidados no destino. Falhas de rate-limit e comandos de lock retornam erro genérico, sem detalhes da conexão. Não existe fallback local quando Redis é obrigatório; desenvolvimento/testes locais sem `REDIS_URL` continuam permitidos.
 
 ## Variáveis
 

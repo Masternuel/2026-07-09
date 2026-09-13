@@ -162,6 +162,10 @@ function fakeBucket() {
     failNextDelete: false,
     file(path) {
       return {
+        async getMetadata() {
+          if (!saved.has(path)) throw Object.assign(new Error("not found"), { code: 404 });
+          return [{ ...saved.get(path).options.metadata, generation: "1" }];
+        },
         async save(bytes, options) {
           if (bucket.failNextSave) {
             bucket.failNextSave = false;
@@ -617,6 +621,9 @@ test("exporta, compartilha e importa bases sem misturar donos nem transferir pos
     crestImageUrl: "https://cdn.example.com/real-madrid.png",
     crestImagePath: "editor-media/clubs/real-madrid/owner.png",
   } });
+  await firestore.collection("catalogDatabases/uid-editor/brasfootClubs").doc("RMA").update({
+    crestImagePath: "editor-media/clubs/real-madrid/owner.png",
+  });
   await jsonRequest(`${url}/api/editor/players`, "editor-token", { method: "POST", body: {
     ...player("RMA-10", "RMA"), name: "Craque Espanhol", nationality: "Espanha", isStar: true,
   } });
@@ -997,7 +1004,7 @@ test("upload de midia valida, associa ao registro e substitui o objeto anterior"
   const firstResponse = await uploadEntity();
   assert.equal(firstResponse.status, 201);
   const first = await firstResponse.json();
-  assert.match(first.media.path, /^editor-media\/clubs\/[a-f0-9]{24}\/[a-f0-9-]+\.png$/);
+  assert.match(first.media.path, /^editor-media\/clubs\/v2\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-f0-9-]+\.png$/);
   assert.equal(first.record.crestImagePath, first.media.path);
   assert.equal(first.record.crestImageUrl, first.media.url);
   assert.equal(first.previousMediaRemoved, true);

@@ -50,6 +50,7 @@ import {
 import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure/redisRuntime.mjs";
 import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
 import { createImagesRouter } from "./routes/images.mjs";
+import { createCoordinationGuard, coordinationUnavailable } from "./infrastructure/coordinationAvailability.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -201,6 +202,9 @@ export async function createBolaManagerServer({
   const firestoreRequired = !injectedStore && config.roomStoreMode === "firestore";
   const productionCoordinationRequired = config.nodeEnv === "production" && !injectedStore;
   const redisRequired = productionCoordinationRequired || Boolean(config.redisUrl);
+  const assertCoordinationAvailable = createCoordinationGuard({
+    required: redisRequired, runtime: redisRuntime, locks: distributedLocks, rateLimiter,
+  });
   const readinessCheck = injectedReadinessCheck ?? createReadinessChecker({
     checks: {
       ...(firestoreRequired || firebase.firestore
@@ -287,19 +291,19 @@ export async function createBolaManagerServer({
     });
   });
 
+  app.use((_request, _response, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
   if (rateLimiter) {
     app.use(createRateLimitMiddleware(rateLimiter, {
       keyResolver: (request) => `http:${request.ip || request.socket?.remoteAddress || "unknown"}`,
       limit: config.rateLimitHttpMax,
       windowMs: config.rateLimitWindowMs,
     }));
-  } else if (productionCoordinationRequired) {
-    app.use((_request, response) => {
-      response.status(503).json({
-        error: { code: "REDIS_REQUIRED", message: "Coordenacao distribuida indisponivel" },
-      });
-    });
   }
+  app.use((_request, _response, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
 
   app.use("/api/media", createImagesRouter());
 
@@ -331,6 +335,7 @@ export async function createBolaManagerServer({
     },
   }));
   app.use("/api/editor", expressAuth, createEditorRouter(catalogStore, mediaService, {
+    logger: structuredLogger,
     nodeEnv: config.nodeEnv,
     allowLocalEditor: config.allowLocalEditor,
     editorAdminUids: config.editorAdminUids,
@@ -360,6 +365,9 @@ export async function createBolaManagerServer({
     });
   });
 
+  io.use((_socket, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
   if (rateLimiter) {
     io.use(async (socket, next) => {
       try {
@@ -375,8 +383,8 @@ export async function createBolaManagerServer({
         }
         next();
       } catch (error) {
-        error.data ??= { code: "RATE_LIMIT_UNAVAILABLE" };
-        next(error);
+        structuredLogger.warn("socket.coordination_unavailable", { error });
+        next(coordinationUnavailable(error));
       }
     });
   }
@@ -388,7 +396,11 @@ export async function createBolaManagerServer({
     recheckMs: config.socketAuthRecheckMs,
   });
   io.use(authenticateSocket);
+  io.use((_socket, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
   const sockets = registerSocketHandlers(io, {
+    assertCoordinationAvailable,
     authenticateSocket,
     store,
     catalogStore,
