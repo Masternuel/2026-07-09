@@ -45,12 +45,15 @@ import {
   createFirestoreReadinessCheck,
   createLivenessPayload,
   createReadinessChecker,
+  createCachedReadiness,
   createRedisReadinessCheck,
 } from "./infrastructure/readiness.mjs";
 import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure/redisRuntime.mjs";
 import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
 import { createImagesRouter } from "./routes/images.mjs";
 import { createCoordinationGuard, coordinationUnavailable } from "./infrastructure/coordinationAvailability.mjs";
+import { HTTP_CSP } from "../shared/imagePolicy.mjs";
+import { createAiUsage } from "./infrastructure/aiUsage.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -115,6 +118,12 @@ export async function createBolaManagerServer({
     })
     : null);
   const firebase = injectedFirebase ?? await initializeFirebaseAdmin(env);
+  const aiUsage = createAiUsage({
+    runtime: redisRuntime,
+    required: (config.nodeEnv === "production" && !injectedStore) || Boolean(config.redisUrl),
+    commandTimeoutMs: config.dependencyTimeoutMs,
+    limits: config.aiLimits,
+  });
   const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore: firebase.firestore });
   try {
     await catalogStore?.ensureInitialized?.();
@@ -122,6 +131,7 @@ export async function createBolaManagerServer({
     structuredLogger.error("firestore.catalog_startup_unavailable", { error });
   }
   const coachInterviewAi = injectedCoachInterviewAi ?? createCoachInterviewAiService({
+    usage: aiUsage,
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
@@ -175,8 +185,10 @@ export async function createBolaManagerServer({
     mediaService,
     logger: structuredLogger,
     nodeEnv: config.nodeEnv,
+    limits: config.importQuotas,
   });
   const socialAi = injectedSocialAi ?? createSocialAiService({
+    usage: aiUsage,
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
@@ -205,7 +217,7 @@ export async function createBolaManagerServer({
   const assertCoordinationAvailable = createCoordinationGuard({
     required: redisRequired, runtime: redisRuntime, locks: distributedLocks, rateLimiter,
   });
-  const readinessCheck = injectedReadinessCheck ?? createReadinessChecker({
+  const readinessCheck = createCachedReadiness(injectedReadinessCheck ?? createReadinessChecker({
     checks: {
       ...(firestoreRequired || firebase.firestore
         ? { firestore: createFirestoreReadinessCheck(firebase.firestore, { timeoutMs: config.dependencyTimeoutMs }) }
@@ -216,8 +228,13 @@ export async function createBolaManagerServer({
     },
     timeoutMs: config.dependencyTimeoutMs,
     metrics,
-  });
+  }), { cacheMs: config.readinessCacheMs, timeoutMs: config.dependencyTimeoutMs });
 
+  app.use((_request, response, next) => {
+    response.setHeader("Content-Security-Policy", HTTP_CSP);
+    response.setHeader("X-Frame-Options", "DENY");
+    next();
+  });
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(cors(corsOptions));
@@ -279,6 +296,7 @@ export async function createBolaManagerServer({
   });
 
   app.get("/ready", async (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
     if (draining) {
       response.status(503).json({ status: "draining", instanceId: config.instanceId });
       return;

@@ -10,6 +10,9 @@ export const BRASFOOT_IMPORT_LIMITS = Object.freeze({
   maxFileBytes: 32 * 1024 * 1024,
   maxTotalBytes: 256 * 1024 * 1024,
   ttlMs: 30 * 60 * 1000,
+  maxActiveSessionsPerUser: 3,
+  maxReservedBytesPerUser: 2 * 1024 * 1024 * 1024,
+  maxConcurrentProcessesPerUser: 1,
 });
 
 const ALLOWED_EXTENSIONS = new Set([".ban", ".cfg", ".png"]);
@@ -228,6 +231,9 @@ export class BrasfootImportSessionService {
     this.logger = logger;
     this.tempDirectory = resolve(tempDirectory);
     this.limits = Object.freeze({ ...BRASFOOT_IMPORT_LIMITS, ...limits });
+    for (const value of Object.values(this.limits)) {
+      if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Limite de importacao invalido");
+    }
     this.now = now;
     this.idFactory = idFactory;
     this.parseSource = parseSource;
@@ -307,6 +313,30 @@ export class BrasfootImportSessionService {
 
   #lockReference(ownerId) {
     return this.database.collection(this.sessionLockCollection).doc(documentId(ownerId));
+  }
+
+  #reservedBytes() {
+    // Full reservation covers source files, preview replacement and an in-flight upload.
+    return this.limits.maxTotalBytes * 3 + this.limits.maxFileBytes;
+  }
+
+  #checkQuota(sessions, { creating = false, processing = false } = {}) {
+    const reserved = sessions.reduce((sum, session) => sum + Math.max(session.reservedBytes ?? 0, this.#reservedBytes()), 0);
+    const active = sessions.filter((session) => session.busy || (session.busyToken && session.busyUntil > this.#nowMs())).length;
+    if ((creating && (sessions.length >= this.limits.maxActiveSessionsPerUser
+      || reserved + this.#reservedBytes() > this.limits.maxReservedBytesPerUser))
+      || (processing && active >= this.limits.maxConcurrentProcessesPerUser)) {
+      throw sessionError("Limite de importacoes simultaneas ou armazenamento reservado atingido", "BRASFOOT_IMPORT_QUOTA_EXCEEDED", 429);
+    }
+  }
+
+  async #reserveQuota(transaction, ownerId, options) {
+    const guard = this.database.collection(`${this.sessionCollection}Quotas`).doc(documentId(ownerId));
+    await transaction.get(guard);
+    const snapshot = await transaction.get(this.database.collection(this.sessionCollection).where("ownerId", "==", String(ownerId)));
+    // Count expired sessions until their blobs are actually removed; cleanup can retry safely.
+    this.#checkQuota(snapshot.docs.map((doc) => doc.data()), options);
+    transaction.set(guard, { updatedAt: this.#nowMs() });
   }
 
   async #saveStorage(path, bytes) {
@@ -397,6 +427,7 @@ export class BrasfootImportSessionService {
       if (current.busyToken && current.busyUntil > nowMs) {
         throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
       }
+      if (!["deleting", "cleanup"].includes(status)) await this.#reserveQuota(transaction, ownerId, { processing: true });
       transaction.update(reference, {
         status,
         busyToken: token,
@@ -425,14 +456,64 @@ export class BrasfootImportSessionService {
 
   async #useDistributed(sessionId, ownerId, operation) {
     const lease = await this.#claimDistributed(sessionId, ownerId);
+    const stopHeartbeat = this.#keepLeaseAlive(lease);
     let succeeded = false;
     try {
+      await this.#clearPendingStorage(lease);
       const result = await operation(lease);
       succeeded = true;
       return result;
+    } catch (error) {
+      if (!error?.status || error.status >= 500) {
+        await this.#removeDistributed(lease).catch((cleanupError) => this.#logError(cleanupError));
+      }
+      throw error;
     } finally {
+      stopHeartbeat();
+      await this.#clearPendingStorage(lease).catch((error) => this.#logError(error));
       await this.#releaseDistributed(lease, { touch: succeeded }).catch((error) => this.#logError(error));
     }
+  }
+
+  #keepLeaseAlive(lease) {
+    let pending = false;
+    const timer = setInterval(async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        await this.database.runTransaction(async (transaction) => {
+          const snapshot = await transaction.get(lease.reference);
+          if (!snapshot.exists || snapshot.data().busyToken !== lease.token) return;
+          const expiresAt = this.#nowMs() + this.limits.ttlMs;
+          transaction.update(lease.reference, { busyUntil: expiresAt, expiresAt });
+        });
+      } catch (error) { this.#logError(error); } finally { pending = false; }
+    }, Math.max(10, Math.floor(this.limits.ttlMs / 3)));
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
+  async #savePendingStorage(session, path, bytes) {
+    await this.database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(session.reference);
+      if (!snapshot.exists || snapshot.data().busyToken !== session.token) {
+        throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
+      }
+      transaction.update(session.reference, { pendingPaths: [path] });
+    });
+    await this.#saveStorage(path, bytes);
+  }
+
+  async #clearPendingStorage(session) {
+    const snapshot = await session.reference.get();
+    if (!snapshot.exists || snapshot.data().busyToken !== session.token) return;
+    const paths = snapshot.data().pendingPaths ?? [];
+    if (!paths.length) return;
+    await Promise.all(paths.map((path) => this.#deleteStorage(path)));
+    await this.database.runTransaction(async (transaction) => {
+      const current = await transaction.get(session.reference);
+      if (current.exists && current.data().busyToken === session.token) transaction.update(session.reference, { pendingPaths: [] });
+    });
   }
 
   async #acquireOwnerLock(ownerId) {
@@ -485,34 +566,47 @@ export class BrasfootImportSessionService {
     if (session.busy) {
       throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
     }
+    this.#checkQuota([...this.sessions.values()].filter((entry) => entry.ownerId === String(ownerId)), { processing: true });
     session.busy = true;
     try {
       const result = await operation(session);
       this.#touch(session);
       return result;
+    } catch (error) {
+      if (!error?.status || error.status >= 500) {
+        await this.#remove(session.id).catch((cleanupError) => this.#logError(cleanupError));
+      }
+      throw error;
     } finally {
       session.busy = false;
     }
   }
 
   async #createDistributedSession(ownerId) {
+    await this.#cleanupDistributed();
     const nowMs = this.#nowMs();
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const id = String(this.idFactory());
       const reference = this.#sessionReference(id);
       try {
-        await reference.create({
-          ownerId: String(ownerId),
-          status: "ready",
-          busyToken: null,
-          busyUntil: null,
-          fileCount: 0,
-          totalBytes: 0,
-          revision: 0,
-          preview: null,
-          createdAt: nowMs,
-          updatedAt: nowMs,
-          expiresAt: nowMs + this.limits.ttlMs,
+        await this.database.runTransaction(async (transaction) => {
+          const existing = await transaction.get(reference);
+          if (existing.exists) throw Object.assign(new Error("ID ocupado"), { code: "already-exists" });
+          await this.#reserveQuota(transaction, ownerId, { creating: true });
+          transaction.create(reference, {
+            ownerId: String(ownerId),
+            reservedBytes: this.#reservedBytes(),
+            status: "ready",
+            busyToken: null,
+            busyUntil: null,
+            fileCount: 0,
+            totalBytes: 0,
+            revision: 0,
+            preview: null,
+            createdAt: nowMs,
+            updatedAt: nowMs,
+            expiresAt: nowMs + this.limits.ttlMs,
+          });
         });
         return {
           sessionId: id,
@@ -559,7 +653,7 @@ export class BrasfootImportSessionService {
         sha256: createHash("sha256").update(bytes).digest("hex"),
         storagePath,
       };
-      await this.#saveStorage(storagePath, bytes);
+      await this.#savePendingStorage(session, storagePath, bytes);
       try {
         await this.database.runTransaction(async (transaction) => {
           const snapshot = await transaction.get(session.reference);
@@ -573,6 +667,7 @@ export class BrasfootImportSessionService {
             totalBytes: nextTotalBytes,
             revision: current.revision + 1,
             preview: null,
+            pendingPaths: [previous?.storagePath, session.preview?.storagePath].filter(Boolean),
             updatedAt: this.#nowMs(),
           });
         });
@@ -580,8 +675,7 @@ export class BrasfootImportSessionService {
         await this.#deleteStorage(storagePath).catch((cleanupError) => this.#logError(cleanupError));
         throw error;
       }
-      await this.#deleteStorage(previous?.storagePath).catch((error) => this.#logError(error));
-      await this.#deleteStorage(session.preview?.storagePath).catch((error) => this.#logError(error));
+      await this.#clearPendingStorage(session);
       return {
         sessionId: session.id,
         id: session.id,
@@ -629,7 +723,10 @@ export class BrasfootImportSessionService {
           data,
           report: parsedSource.report,
         }));
-        await this.#saveStorage(storagePath, artifact);
+        if (artifact.length > this.limits.maxTotalBytes) {
+          throw sessionError("Pre-visualizacao excede o armazenamento reservado", "BRASFOOT_IMPORT_TOTAL_TOO_LARGE", 413);
+        }
+        await this.#savePendingStorage(session, storagePath, artifact);
         const persistedPreview = JSON.parse(JSON.stringify({
           revision: session.revision,
           storagePath,
@@ -645,6 +742,7 @@ export class BrasfootImportSessionService {
             }
             transaction.update(session.reference, {
               preview: persistedPreview,
+              pendingPaths: [session.preview?.storagePath].filter(Boolean),
               updatedAt: this.#nowMs(),
             });
           });
@@ -652,16 +750,20 @@ export class BrasfootImportSessionService {
           await this.#deleteStorage(storagePath).catch((cleanupError) => this.#logError(cleanupError));
           throw error;
         }
-        await this.#deleteStorage(session.preview?.storagePath).catch((error) => this.#logError(error));
+        await this.#clearPendingStorage(session);
         return structuredClone(response);
       });
     });
   }
 
   async #removeDistributed(session) {
+    const snapshot = await session.reference.get();
+    if (!snapshot.exists) return;
+    const current = snapshot.data();
+    if (current.busyToken !== session.token) throw sessionError("Sessao de importacao ocupada", "BRASFOOT_IMPORT_SESSION_BUSY", 409);
     const files = await this.#distributedFiles(session.reference);
     await mapConcurrent(
-      [...files.map((file) => file.storagePath), session.preview?.storagePath].filter(Boolean),
+      [...files.map((file) => file.storagePath), current.preview?.storagePath, ...(current.pendingPaths ?? [])].filter(Boolean),
       DOWNLOAD_CONCURRENCY,
       (path) => this.#deleteStorage(path),
     );
@@ -708,8 +810,11 @@ export class BrasfootImportSessionService {
     const ownerLock = await this.#acquireOwnerLock(ownerId);
     let lease;
     let removed = false;
+    let stopHeartbeat = () => {};
     try {
       lease = await this.#claimDistributed(sessionId, ownerId, "committing");
+      stopHeartbeat = this.#keepLeaseAlive(lease);
+      await this.#clearPendingStorage(lease);
       const preview = lease.preview;
       if (!preview || preview.revision !== lease.revision) {
         throw sessionError(
@@ -793,7 +898,13 @@ export class BrasfootImportSessionService {
       await this.#removeDistributed(lease);
       removed = true;
       return response;
+    } catch (error) {
+      if (lease && (!error?.status || error.status >= 500)) {
+        await this.#removeDistributed(lease).catch((cleanupError) => this.#logError(cleanupError));
+      }
+      throw error;
     } finally {
+      stopHeartbeat();
       if (lease && !removed) {
         await this.#releaseDistributed(lease, { touch: false }).catch((error) => this.#logError(error));
       }
@@ -806,15 +917,16 @@ export class BrasfootImportSessionService {
     this.#assertAvailable();
     if (this.storageMode === "firestore-storage") return this.#createDistributedSession(ownerId);
     const root = await this.#ensureRoot();
+    await this.cleanupExpired();
     let id;
     do id = String(this.idFactory()); while (this.sessions.has(id));
     const directory = resolve(root, id);
     if (!pathWithin(root, directory)) throw new Error("ID de sessao gerou caminho inseguro");
-    await mkdir(directory, { recursive: false });
     const nowMs = this.#nowMs();
     const session = {
       id,
       ownerId: String(ownerId),
+      reservedBytes: this.#reservedBytes(),
       directory,
       files: new Map(),
       totalBytes: 0,
@@ -825,7 +937,14 @@ export class BrasfootImportSessionService {
       updatedAt: nowMs,
       expiresAt: nowMs + this.limits.ttlMs,
     };
+    this.#checkQuota([...this.sessions.values()].filter((entry) => entry.ownerId === String(ownerId)), { creating: true });
     this.sessions.set(id, session);
+    try {
+      await mkdir(directory, { recursive: false });
+    } catch (error) {
+      this.sessions.delete(id);
+      throw error;
+    }
     return {
       sessionId: id,
       id,
@@ -928,6 +1047,9 @@ export class BrasfootImportSessionService {
       });
       parsedSource.report.inputPath = `editor-session:${session.id}`;
       const data = this.normalize(parsedSource.dataset);
+      if (Buffer.byteLength(JSON.stringify({ data, report: parsedSource.report })) > this.limits.maxTotalBytes) {
+        throw sessionError("Pre-visualizacao excede o armazenamento reservado", "BRASFOOT_IMPORT_TOTAL_TOO_LARGE", 413);
+      }
       const summary = summarizeDataset(data);
       const response = {
         sessionId: session.id,
@@ -1042,8 +1164,8 @@ export class BrasfootImportSessionService {
   async #remove(sessionId) {
     const session = this.sessions.get(String(sessionId));
     if (!session) return false;
-    this.sessions.delete(session.id);
     await rm(session.directory, { recursive: true, force: true });
+    this.sessions.delete(session.id);
     return true;
   }
 

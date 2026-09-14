@@ -60,6 +60,12 @@ function isTransientAuthFailure(error) {
 }
 
 function authFailure(error) {
+  const codes = {
+    "auth/id-token-expired": "AUTH_TOKEN_EXPIRED",
+    "auth/id-token-revoked": "AUTH_TOKEN_REVOKED",
+    "auth/user-disabled": "AUTH_USER_DISABLED",
+  };
+  if (codes[error?.code]) return new AuthError("Sessao invalida. Entre novamente.", codes[error.code]);
   if (error?.name === "TimeoutError" || error?.code === "DEPENDENCY_TIMEOUT" || isTransientAuthFailure(error)) {
     return new AuthError("Servico de autenticacao indisponivel", "AUTH_UNAVAILABLE", 503);
   }
@@ -68,7 +74,7 @@ function authFailure(error) {
     : new AuthError("Token de autenticacao invalido", "INVALID_AUTH_TOKEN");
 }
 
-async function verifyToken(auth, token, timeoutMs, checkRevoked = false) {
+async function verifyToken(auth, token, timeoutMs, checkRevoked = true) {
   return withTimeout(auth.verifyIdToken(token, checkRevoked), timeoutMs, "firebase-auth");
 }
 
@@ -121,12 +127,6 @@ export function createSocketAuthMiddleware({
       if (!user) throw new AuthError("Informe auth.userId no modo demo");
       return { user, token: null, expiresAt: null };
     } catch (error) {
-      const codes = {
-        "auth/id-token-expired": "AUTH_TOKEN_EXPIRED",
-        "auth/id-token-revoked": "AUTH_TOKEN_REVOKED",
-        "auth/user-disabled": "AUTH_USER_DISABLED",
-      };
-      if (codes[error?.code]) throw new AuthError("Sessao invalida. Entre novamente.", codes[error.code]);
       throw authFailure(error);
     }
   };

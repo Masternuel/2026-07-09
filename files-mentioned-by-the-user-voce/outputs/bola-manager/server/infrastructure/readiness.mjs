@@ -27,14 +27,13 @@ export function createFirestoreReadinessCheck(firestore, {
   timeoutMs = 2_000,
   probePath = "__health__/readiness",
 } = {}) {
+  const probe = singleFlight(() => typeof firestore.doc === "function"
+    ? firestore.doc(probePath).get() : firestore.listCollections());
   return async function checkFirestore() {
     if (!firestore) return { ok: false, status: "disabled" };
     const startedAt = Date.now();
     try {
-      const operation = typeof firestore.doc === "function"
-        ? firestore.doc(probePath).get()
-        : firestore.listCollections();
-      await withTimeout(operation, timeoutMs, "firestore");
+      await withTimeout(probe(), timeoutMs, "firestore");
       return { ok: true, status: "ready", latencyMs: Date.now() - startedAt };
     } catch (error) {
       return {
@@ -47,11 +46,12 @@ export function createFirestoreReadinessCheck(firestore, {
 }
 
 export function createRedisReadinessCheck(redis, { timeoutMs = 1_000 } = {}) {
+  const probe = singleFlight(() => redis.ping());
   return async function checkRedis() {
     if (!redis) return { ok: false, status: "disabled" };
     const startedAt = Date.now();
     try {
-      const result = await withTimeout(redis.ping(), timeoutMs, "redis");
+      const result = await withTimeout(probe(), timeoutMs, "redis");
       if (result?.ok === false) {
         return {
           ok: false,
@@ -76,7 +76,8 @@ export function createReadinessChecker({
   now = Date.now,
   metrics,
 } = {}) {
-  const entries = Object.entries(checks).filter(([, check]) => typeof check === "function");
+  const entries = Object.entries(checks).filter(([, check]) => typeof check === "function")
+    .map(([name, check]) => [name, singleFlight(check)]);
   return async function readiness() {
     const startedAt = now();
     const results = await Promise.all(entries.map(async ([name, check]) => {
@@ -87,7 +88,8 @@ export function createReadinessChecker({
           : { ok: result === true, status: result === true ? "ready" : "unavailable" };
         return [name, {
           ok: normalized.ok === true,
-          status: normalized.status ?? (normalized.ok ? "ready" : "unavailable"),
+          status: ["ready", "unavailable", "disabled", "timeout"].includes(normalized.status)
+            ? normalized.status : (normalized.ok ? "ready" : "unavailable"),
           ...(Number.isFinite(normalized.latencyMs) ? { latencyMs: normalized.latencyMs } : {}),
         }];
       } catch (error) {
@@ -104,6 +106,40 @@ export function createReadinessChecker({
       durationMs: Math.max(0, now() - startedAt),
       timestamp: new Date(now()).toISOString(),
     };
+  };
+}
+
+function singleFlight(check) {
+  let pending;
+  return () => {
+    // Keep the underlying operation shared even after a caller times out.
+    if (!pending) pending = Promise.resolve().then(check).finally(() => { pending = null; });
+    return pending;
+  };
+}
+
+export function createCachedReadiness(check, { cacheMs = 1_000, timeoutMs = 2_500, now = Date.now } = {}) {
+  const duration = Math.min(2_000, positiveInteger(cacheMs, 1_000));
+  const probe = singleFlight(check);
+  let pending;
+  let cached;
+  let expiresAt = 0;
+  return () => {
+    if (cached && now() < expiresAt) return Promise.resolve(cached);
+    if (!pending) {
+      pending = withTimeout(probe(), timeoutMs, "readiness").then((result) => {
+        const dependencies = Object.fromEntries(Object.entries(result?.dependencies ?? {}).map(([name, value]) => [name, {
+          ok: value?.ok === true,
+          status: ["ready", "unavailable", "disabled", "timeout"].includes(value?.status) ? value.status : "unavailable",
+        }]));
+        return { ok: result?.ok === true, status: result?.ok === true ? "ready" : "not-ready", dependencies };
+      }).catch(() => ({ ok: false, status: "not-ready", dependencies: {} })).then((result) => {
+        cached = result;
+        expiresAt = now() + duration;
+        return result;
+      }).finally(() => { pending = null; });
+    }
+    return pending;
   };
 }
 

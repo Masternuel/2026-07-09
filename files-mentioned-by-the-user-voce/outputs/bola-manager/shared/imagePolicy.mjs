@@ -1,4 +1,5 @@
 export const IMAGE_CSP = "img-src 'self' blob:; object-src 'none'; base-uri 'self'";
+export const HTTP_CSP = `${IMAGE_CSP}; frame-ancestors 'none'`;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_IMAGE_DIMENSION = 4096;
 export const MAX_IMAGE_PIXELS = 16_000_000;

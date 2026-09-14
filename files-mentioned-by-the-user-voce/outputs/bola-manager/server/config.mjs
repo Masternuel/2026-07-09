@@ -59,6 +59,7 @@ export function getServerConfig(env = process.env) {
     rateLimitSocketMax: positiveInteger(env.RATE_LIMIT_SOCKET_MAX, 120),
     metricsToken: validateMetricsToken(env.METRICS_TOKEN),
     dependencyTimeoutMs: positiveInteger(env.DEPENDENCY_TIMEOUT_MS, 2_500),
+    readinessCacheMs: Math.min(2_000, positiveInteger(env.READINESS_CACHE_MS, 1_000)),
     authTimeoutMs: positiveInteger(env.AUTH_TIMEOUT_MS, 10_000),
     socketAuthRecheckMs: positiveInteger(env.SOCKET_AUTH_RECHECK_MS, 60_000),
     httpSlowMs: positiveInteger(env.HTTP_SLOW_MS, 5_000),
@@ -67,6 +68,19 @@ export function getServerConfig(env = process.env) {
     matchPersistenceTimeoutMs: positiveInteger(env.MATCH_PERSISTENCE_TIMEOUT_MS, 15_000),
     shutdownTimeoutMs: positiveInteger(env.SHUTDOWN_TIMEOUT_MS, 10_000),
     importObjectTtlDays: positiveInteger(env.IMPORT_OBJECT_TTL_DAYS, 1),
+    importQuotas: {
+      maxActiveSessionsPerUser: positiveInteger(env.IMPORT_MAX_SESSIONS_PER_UID, 3),
+      maxReservedBytesPerUser: positiveInteger(env.IMPORT_MAX_RESERVED_BYTES_PER_UID, 2 * 1024 * 1024 * 1024),
+      maxConcurrentProcessesPerUser: positiveInteger(env.IMPORT_MAX_PROCESSES_PER_UID, 1),
+    },
+    aiLimits: {
+      windowMs: positiveInteger(env.AI_BUDGET_WINDOW_MS, 3_600_000),
+      operationLimit: positiveInteger(env.AI_OPERATION_ATTEMPTS, 60),
+      userLimit: positiveInteger(env.AI_UID_ATTEMPTS, 120),
+      globalLimit: positiveInteger(env.AI_GLOBAL_ATTEMPTS, 1_000),
+      userConcurrent: positiveInteger(env.AI_UID_CONCURRENCY, 1),
+      globalConcurrent: positiveInteger(env.AI_GLOBAL_CONCURRENCY, 8),
+    },
   };
 }
 

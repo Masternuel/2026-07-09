@@ -3029,7 +3029,7 @@ export class RoomStore {
       depth: input.depth,
       context,
       transcript: [],
-    });
+    }, { uid: managerId });
     let outcome;
     const expectedRevision = Number(interview.revision ?? 0);
     const room = await this.#mutate(code, (current) => {
@@ -3080,7 +3080,7 @@ export class RoomStore {
       context,
       transcript: interview.transcript ?? [],
       candidateMessage: input.message,
-    });
+    }, { uid: managerId });
     let outcome;
     const room = await this.#mutate(code, (current) => {
       if (!current.managerIds.includes(managerId)) {

@@ -609,6 +609,7 @@ function enforceTurnPolicy(generated, input) {
 }
 
 export function createCoachInterviewAiService({
+  usage,
   apiKey,
   model = DEFAULT_MODEL,
   fallbackModels = DEFAULT_FALLBACK_MODELS,
@@ -720,16 +721,21 @@ export function createCoachInterviewAiService({
     throw lastError;
   }
 
-  async function generateTurn(rawInput) {
+  async function generateTurn(rawInput, { uid } = {}) {
     const input = normalizeInput(rawInput);
     if (!normalizedKey || typeof fetchImpl !== "function" || activeRequests >= concurrencyLimit) {
       return fallbackResult(input);
     }
     activeRequests += 1;
     try {
-      const { generated, model: usedModel } = await callWithFallback(input);
+      const units = candidateModels.length * (retryLimit + 1);
+      const invoke = () => callWithFallback(input);
+      const { generated, model: usedModel } = await (usage ? usage.run(uid, "interview", {
+        units, leaseMs: Math.ceil(units * (requestTimeout + retryBaseDelay * (2 ** retryLimit) + 1_000) * 2),
+      }, invoke) : invoke());
       return { source: "gemini", model: usedModel, ...generated };
     } catch (error) {
+      if (["AI_USAGE_LIMITED", "AI_IDENTITY_REQUIRED", "REDIS_REQUIRED"].includes(error?.code)) throw error;
       logger.warn?.("Gemini indisponivel; usando fallback de entrevista.", {
         code: safeProviderCode(error?.code),
         status: Number.isInteger(error?.status) && error.status > 0 ? error.status : null,

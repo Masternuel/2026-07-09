@@ -95,6 +95,7 @@ export async function createRedisRuntime({
   }
 
   let closed = false;
+  let pendingPing;
   return {
     enabled: true,
     reason: null,
@@ -105,7 +106,8 @@ export async function createRedisRuntime({
       const startedAt = Date.now();
       try {
         if (!redisCoordinationAvailable(this)) return { ok: false, status: "unavailable" };
-        await withTimeout(client.ping(), positiveInteger(timeout, timeoutMs), "redis-ping");
+        if (!pendingPing) pendingPing = Promise.resolve().then(() => client.ping()).finally(() => { pendingPing = null; });
+        await withTimeout(pendingPing, positiveInteger(timeout, timeoutMs), "redis-ping");
         return { ok: true, status: "ready", latencyMs: Date.now() - startedAt };
       } catch {
         return { ok: false, status: "unavailable", latencyMs: Date.now() - startedAt };

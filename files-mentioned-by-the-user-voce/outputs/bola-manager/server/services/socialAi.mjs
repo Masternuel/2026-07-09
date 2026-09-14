@@ -353,6 +353,7 @@ function shouldTryNextModel(error) {
 }
 
 export function createSocialAiService({
+  usage,
   apiKey,
   model = DEFAULT_MODEL,
   fallbackModels = DEFAULT_FALLBACK_MODELS,
@@ -473,7 +474,7 @@ export function createSocialAiService({
     throw lastError;
   }
 
-  async function generate(input) {
+  async function generate(input, { uid, operation = "feed" } = {}) {
     const fallback = () => ({
       source: "fallback",
       model: null,
@@ -488,7 +489,11 @@ export function createSocialAiService({
     if (inFlight.has(key)) return inFlight.get(key);
     if (inFlight.size >= concurrencyLimit) return fallback();
 
-    const request = callGeminiWithFallback(input).then(({ bundle, model: usedModel }) => {
+    const units = candidateModels.length * (retryLimit + 1);
+    const invoke = () => callGeminiWithFallback(input);
+    const request = (usage ? usage.run(uid, operation, {
+      units, leaseMs: Math.ceil(units * (timeoutMs + retryBaseDelay * (2 ** retryLimit) + 1_000) * 2),
+    }, invoke) : invoke()).then(({ bundle, model: usedModel }) => {
       const value = {
         source: "gemini",
         model: usedModel,
@@ -502,6 +507,7 @@ export function createSocialAiService({
       cache.set(key, { value, expiresAt: now() + cacheTtlMs });
       return value;
     }).catch((error) => {
+      if (["AI_USAGE_LIMITED", "AI_IDENTITY_REQUIRED", "REDIS_REQUIRED"].includes(error?.code)) throw error;
       logger.warn?.("Gemini indisponivel; usando fallback social.", {
         code: safeProviderCode(error?.code),
         status: Number.isInteger(error?.status) && error.status > 0 ? error.status : null,

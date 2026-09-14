@@ -5,6 +5,7 @@ import { RoomStore } from '../server/store/roomStore.mjs';
 import { MemoryRoomPersistence } from '../server/store/roomPersistence.mjs';
 import { createFakeFirestore } from '../server/tests/helpers/fakeFirestore.mjs';
 import { startTestServer } from '../server/tests/testHarness.mjs';
+import { HTTP_CSP } from '../shared/imagePolicy.mjs';
 
 export default async function setup() {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -36,7 +37,10 @@ export default async function setup() {
       define: { 'import.meta.env.VITE_SERVER_URL': JSON.stringify(backend.url) },
       build: { outDir: '.tmp/e2e/app', emptyOutDir: false },
     });
-    web = await preview({ root, configFile: false, envFile: false, build: { outDir: '.tmp/e2e/app' }, preview: { host: '127.0.0.1', port: 5191, strictPort: true } });
+    web = await preview({ root, configFile: false, envFile: false, build: { outDir: '.tmp/e2e/app' }, preview: {
+      host: '127.0.0.1', port: 5191, strictPort: true,
+      headers: { 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY' },
+    } });
   } catch (error) { await backend.server.close(); throw error; }
   let closing = false;
   async function close() {
