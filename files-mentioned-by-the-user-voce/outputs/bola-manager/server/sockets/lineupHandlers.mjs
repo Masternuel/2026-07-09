@@ -22,6 +22,7 @@ function lineupError(message, code, status = 409, details) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   error.details = details;
   return error;
 }

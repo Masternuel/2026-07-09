@@ -7,7 +7,7 @@ const list = (value) => Array.isArray(value) ? value : Object.values(value ?? {}
 const money = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 
 export function scoutingError(message, code, status = 409) {
-  return Object.assign(new Error(message), { code, status });
+  return Object.assign(new Error(message), { code, status, public: true });
 }
 
 export function scoutingClub(room, managerId, expectedClubId = null) {

@@ -915,18 +915,21 @@ export function resolveServerFixture(room, requestedFixtureId) {
     const error = new Error("Nao existem fixtures pendentes nesta sala");
     error.code = "NO_PENDING_FIXTURE";
     error.status = 409;
+    error.public = true;
     throw error;
   }
   if (room.completedFixtureIds?.some((completedId) => fixtureIdsEqual(completedId, fixtureId))) {
     const error = new Error("Esta fixture ja foi concluida");
     error.code = "FIXTURE_ALREADY_COMPLETED";
     error.status = 409;
+    error.public = true;
     throw error;
   }
   if (room.currentFixtureId && !fixtureIdsEqual(fixtureId, room.currentFixtureId)) {
     const error = new Error("Esta fixture ainda nao e a atual");
     error.code = "FIXTURE_NOT_CURRENT";
     error.status = 409;
+    error.public = true;
     throw error;
   }
 
@@ -936,6 +939,7 @@ export function resolveServerFixture(room, requestedFixtureId) {
     const error = new Error("Fixture nao encontrado no calendario do servidor");
     error.code = "FIXTURE_NOT_FOUND";
     error.status = 404;
+    error.public = true;
     throw error;
   }
 
@@ -943,6 +947,7 @@ export function resolveServerFixture(room, requestedFixtureId) {
     const error = new Error("Fixture invalida: um clube nao pode enfrentar a si mesmo");
     error.code = "FIXTURE_SELF_MATCH";
     error.status = 409;
+    error.public = true;
     throw error;
   }
   const context = catalogContext(room);

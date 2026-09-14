@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { HTTP_CSP } from './shared/imagePolicy.mjs';
+import { SECURITY_HEADERS } from './shared/securityHeaders.mjs';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root: projectRoot,
+  envDir: process.env.BOLA_ENV_FILES === 'false' ? false : projectRoot,
   plugins: [react()],
   build: {
     rollupOptions: {
@@ -23,7 +25,7 @@ export default defineConfig({
     },
   },
   server: {
-    headers: { 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' },
+    headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' },
     port: 5173,
     host: true,
     fs: {
@@ -34,5 +36,5 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:3001', ws: true },
     },
   },
-  preview: { headers: { 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' } },
+  preview: { headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' } },
 });

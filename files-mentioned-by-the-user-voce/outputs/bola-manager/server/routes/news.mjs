@@ -23,6 +23,7 @@ function routeError(message, code, status = 404) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   return error;
 }
 
@@ -160,6 +161,7 @@ function enforceCooldown(entries, key, cooldownMs, timestamp, code, message, req
     const error = new Error(message);
     error.code = code;
     error.status = 429;
+    error.public = true;
     throw error;
   }
   entries.set(key, requestId ? { timestamp, requestId } : timestamp);

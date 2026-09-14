@@ -1,5 +1,4 @@
 import { createServer as createHttpServer } from "node:http";
-import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
@@ -53,6 +52,10 @@ import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
 import { createImagesRouter } from "./routes/images.mjs";
 import { createCoordinationGuard, coordinationUnavailable } from "./infrastructure/coordinationAvailability.mjs";
 import { HTTP_CSP } from "../shared/imagePolicy.mjs";
+import { SECURITY_HEADERS } from "../shared/securityHeaders.mjs";
+import { createOriginPolicy } from "./infrastructure/networkPolicy.mjs";
+import { correlationId, publicError, publicConnectionError } from "./infrastructure/publicErrors.mjs";
+import { httpMetricRoute } from "./infrastructure/metricPolicy.mjs";
 import { createAiUsage } from "./infrastructure/aiUsage.mjs";
 
 export async function createBolaManagerServer({
@@ -159,17 +162,19 @@ export async function createBolaManagerServer({
 
   const app = express();
   const httpServer = createHttpServer(app);
-  const allowedOrigins = config.clientOrigin.split(",").map((origin) => origin.trim()).filter(Boolean);
-  const corsOptions = {
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) callback(null, true);
-      else callback(new Error("Origem nao permitida pelo CORS"));
-    },
-    credentials: true,
-  };
+  const originPolicy = createOriginPolicy(config.clientOrigin, config.nodeEnv);
+  const corsOptions = originPolicy.cors;
   const io = new SocketIOServer(httpServer, {
     cors: corsOptions,
+    allowRequest: originPolicy.allowRequest,
     ...(config.nodeEnv === "production" ? { transports: ["websocket"] } : {}),
+  });
+  // Engine.IO bypasses Express for polling and upgrade requests.
+  io.engine.use((_request, response, next) => {
+    for (const [name, value] of Object.entries({
+      ...SECURITY_HEADERS, "Content-Security-Policy": HTTP_CSP, "X-Frame-Options": "DENY",
+    })) response.setHeader(name, value);
+    next();
   });
   if (redisRuntime.enabled) {
     io.adapter(socketAdapterFactory(redisRuntime.publisher, redisRuntime.subscriber, {
@@ -230,22 +235,23 @@ export async function createBolaManagerServer({
     metrics,
   }), { cacheMs: config.readinessCacheMs, timeoutMs: config.dependencyTimeoutMs });
 
-  app.use((_request, response, next) => {
+  app.use((request, response, next) => {
     response.setHeader("Content-Security-Policy", HTTP_CSP);
     response.setHeader("X-Frame-Options", "DENY");
+    response.set(SECURITY_HEADERS);
+    if (config.enableHsts && request.secure) response.setHeader("Strict-Transport-Security", "max-age=31536000");
     next();
   });
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
-  app.use(cors(corsOptions));
+  app.set("trust proxy", config.trustProxy);
   app.use((request, response, next) => {
     const startedAt = Date.now();
-    request.requestId = String(request.headers["x-request-id"] ?? randomUUID()).slice(0, 128);
+    request.requestId = correlationId(request.headers["x-request-id"]);
     response.setHeader("X-Request-Id", request.requestId);
     const context = {
       requestId: request.requestId,
       method: request.method,
-      path: request.path,
+      path: httpMetricRoute(request.path),
     };
     structuredLogger.info("http.request_start", context);
     let finished = false;
@@ -279,6 +285,7 @@ export async function createBolaManagerServer({
     }
     next();
   });
+  app.use(cors(corsOptions));
   app.use(createHttpMetricsMiddleware(metrics));
   app.all("/metrics", createMetricsHandler({ token: config.metricsToken, metrics, instanceId: config.instanceId }));
   app.use(express.json({ limit: "256kb" }));
@@ -362,29 +369,25 @@ export async function createBolaManagerServer({
 
   app.use((request, response) => {
     response.status(404).json({
-      error: { code: "NOT_FOUND", message: `Rota nao encontrada: ${request.method} ${request.path}` },
+      error: { code: "NOT_FOUND", message: "Rota nao encontrada", requestId: request.requestId },
     });
   });
   app.use((error, request, response, _next) => {
-    const status = Number.isInteger(error.status) ? error.status : 500;
+    const { status, error: serialized } = publicError(error, request.requestId);
     if (status >= 500) structuredLogger.error("http.request_error", {
       requestId: request.requestId,
       method: request.method,
-      path: request.path,
+      path: httpMetricRoute(request.path),
       status,
       error,
     });
     response.status(status).json({
-      error: {
-        code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
-        message: status >= 500 && error.expose !== true ? "Erro interno do servidor" : error.message,
-        details: error.details,
-      },
+      error: serialized,
     });
   });
 
   io.use((_socket, next) => {
-    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(publicConnectionError(error)); }
   });
   if (rateLimiter) {
     io.use(async (socket, next) => {
@@ -396,13 +399,13 @@ export async function createBolaManagerServer({
         if (!result.allowed) {
           const error = new Error("Muitas conexoes em tempo real");
           error.data = { code: "RATE_LIMITED", retryAfterMs: result.retryAfterMs };
-          next(error);
+          next(publicConnectionError(error));
           return;
         }
         next();
       } catch (error) {
         structuredLogger.warn("socket.coordination_unavailable", { error });
-        next(coordinationUnavailable(error));
+        next(publicConnectionError(coordinationUnavailable(error)));
       }
     });
   }
@@ -528,7 +531,7 @@ function isDirectExecution() {
   return Boolean(process.argv[1]) && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 }
 
-if (isDirectExecution()) {
+async function main() {
   loadLocalEnvironment();
   const server = await createBolaManagerServer();
   await server.listen();
@@ -540,10 +543,17 @@ if (isDirectExecution()) {
       await server.close();
       process.exitCode = 0;
     } catch (error) {
-      console.error(error);
+      createStructuredLogger().error("server.shutdown_failed", { error });
       process.exitCode = 1;
     }
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+if (isDirectExecution()) {
+  main().catch((error) => {
+    createStructuredLogger().error("server.startup_failed", { error });
+    process.exitCode = 1;
+  });
 }

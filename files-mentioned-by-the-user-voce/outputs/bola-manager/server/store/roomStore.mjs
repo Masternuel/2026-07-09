@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { redactLogValue } from "../infrastructure/redaction.mjs";
 import { applyScoutingAction, scoutingClub, scoutingError, scoutingNeedsPlayer, scoutingPlayer, scoutingSnapshot, SCOUTING_READ_PATHS, SCOUTING_WRITE_PATHS } from "../game/scouting.mjs";
 import { buildClubTacticalStudy, startTacticalStudy, studyKnowledge, tacticalStudyContext, TACTICAL_STUDY_PATHS } from "../game/clubTacticalStudy.mjs";
 import { assertHistoryId, assertMatchHistoryCapacity, enqueueMatchHistory, flushMatchHistory, historyPage, historyPageOptions, initializeMatchHistory, MATCH_HISTORY_PATHS } from "./matchHistory.mjs";
@@ -848,6 +849,7 @@ function careerRosterLoadFailure(message, code, status, transient = false) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   error.transient = transient;
   return error;
 }
@@ -1219,7 +1221,7 @@ function createRoomCompetitionSeason(room) {
     });
   } catch (error) {
     throw new RoomError(
-      `Torneio invalido: ${error?.message ?? "configuracao nao suportada"}`,
+      "Configuracao do torneio invalida",
       error?.code ?? "INVALID_TOURNAMENT_CONFIGURATION",
       409,
     );
@@ -1826,8 +1828,8 @@ export class RoomStore {
       // The match and durable outbox already committed. Never report it as
       // failed or discard its events just because the archive needs a retry.
       const context = { code: room.code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED", pending: room.matchHistoryPending?.length ?? 0 };
-      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.archive_pending", context); } catch { /* Logging cannot undo a committed match. */ }
-      return { code: context.errorCode, message: "Arquivamento pendente; detalhes preservados no save para nova tentativa" };
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.archive_pending", redactLogValue(context)); } catch { /* Logging cannot undo a committed match. */ }
+      return { code: "MATCH_HISTORY_WRITE_FAILED", message: "Arquivamento pendente; detalhes preservados no save para nova tentativa" };
     }
   }
 
@@ -1843,7 +1845,7 @@ export class RoomStore {
       }
     };
     const job = drain().catch((error) => {
-      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.drain_failed", { code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED" }); } catch { /* Durable queue remains the source of truth. */ }
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.drain_failed", redactLogValue({ code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED" })); } catch { /* Durable queue remains the source of truth. */ }
     }).finally(() => this.#historyArchiveDrains.delete(code));
     this.#historyArchiveDrains.set(code, job);
   }
@@ -3357,7 +3359,7 @@ export class RoomStore {
           payload: { clubId: manager.clubId, playerId: player.id },
         });
       } catch (error) {
-        throw new RoomError(error.message, "ACADEMY_PROMOTION_INVALID", 409);
+        throw Object.assign(new RoomError("Nao foi possivel promover este jogador", "ACADEMY_PROMOTION_INVALID", 409), { cause: error });
       }
       return room;
     });
@@ -4345,9 +4347,9 @@ export class RoomStore {
       } catch (error) {
         lastError = error;
         if (!transientCareerRosterFailure(error)) {
-          throw error instanceof RoomError
+          throw error instanceof RoomError || error.public === true
             ? error
-            : new RoomError(error.message, error.code ?? "CAREER_ROSTER_LOAD_FAILED", error.status ?? 409);
+            : Object.assign(new RoomError("Nao foi possivel carregar o elenco", "CAREER_ROSTER_LOAD_FAILED", 503), { cause: error });
         }
         if (attempt < this.#careerRosterPolicy.maxAttempts) {
           await waitFor(this.#careerRosterPolicy.retryDelayMs * attempt);

@@ -1,4 +1,5 @@
 import { validateMetricsToken } from "./infrastructure/metricsEndpoint.mjs";
+import { createOriginPolicy, parseTrustedProxies } from "./infrastructure/networkPolicy.mjs";
 
 function nonNegativeInteger(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -37,9 +38,13 @@ export function getServerConfig(env = process.env) {
     throw new Error("ALLOW_DEMO_AUTH nunca pode ser ativado em producao");
   }
 
+  const clientOrigin = env.CLIENT_ORIGIN?.trim() || (nodeEnv === "production" ? "" : DEFAULT_LOCAL_ORIGINS);
+  createOriginPolicy(clientOrigin, nodeEnv);
   return {
     port: nonNegativeInteger(env.PORT, 3001),
-    clientOrigin: env.CLIENT_ORIGIN?.trim() || DEFAULT_LOCAL_ORIGINS,
+    clientOrigin,
+    trustProxy: parseTrustedProxies(env.TRUST_PROXY?.trim()),
+    enableHsts: nodeEnv === "production" && enabled(env.ENABLE_HSTS),
     matchEventDelayMs: nonNegativeInteger(env.MATCH_EVENT_DELAY_MS, 800),
     nodeEnv,
     allowDemoAuth: requestedDemoAuth,

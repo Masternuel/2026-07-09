@@ -4,7 +4,7 @@ const digest = (value) => createHash("sha256").update(JSON.stringify(value)).dig
 const validId = (value) => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value);
 
 export function roomCreationError(message, code, status = 409) {
-  return Object.assign(new Error(message), { code, status });
+  return Object.assign(new Error(message), { code, status, public: true });
 }
 
 export function roomCreationOperation(input) {

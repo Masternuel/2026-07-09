@@ -45,6 +45,7 @@ function mediaBody(request, response, next) {
       error.code = "EDITOR_MEDIA_TOO_LARGE";
       error.message = "A imagem excede o limite de 5 MB";
       error.status = 413;
+      error.public = true;
       error.details = { maximumBytes: MAX_EDITOR_MEDIA_BYTES };
     }
     next(error);
@@ -57,6 +58,7 @@ function brasfootFileBody(request, response, next) {
       error.code = "BRASFOOT_IMPORT_FILE_TOO_LARGE";
       error.message = "O arquivo excede o limite de 32 MB";
       error.status = 413;
+      error.public = true;
       error.details = { maximumBytes: BRASFOOT_IMPORT_LIMITS.maxFileBytes };
     }
     next(error);
@@ -69,6 +71,7 @@ function catalogDatabaseBody(request, response, next) {
       error.code = "CATALOG_DATABASE_TOO_LARGE";
       error.message = "A base excede o limite de 24 MB";
       error.status = 413;
+      error.public = true;
       error.details = { maximumBytes: MAX_CATALOG_DATABASE_BYTES };
     }
     next(error);
@@ -98,6 +101,7 @@ function requireEditor(options) {
     const error = new Error("Acesso ao Editor da Base nao autorizado");
     error.code = "EDITOR_FORBIDDEN";
     error.status = 403;
+    error.public = true;
     next(error);
   };
 }
@@ -129,12 +133,14 @@ export function createEditorRouter(catalogStore, mediaService, options = {}) {
       const error = new Error("Modo de importacao nao suportado; use merge");
       error.code = "CATALOG_DATABASE_MODE_UNSUPPORTED";
       error.status = 400;
+      error.public = true;
       throw error;
     }
     if (!Buffer.isBuffer(request.body) || request.body.length === 0) {
       const error = new Error("Envie a base como arquivo JSON");
       error.code = "CATALOG_DATABASE_BODY_INVALID";
       error.status = 415;
+      error.public = true;
       throw error;
     }
     let database;
@@ -145,6 +151,7 @@ export function createEditorRouter(catalogStore, mediaService, options = {}) {
       const error = new Error("O arquivo da base nao contem um JSON valido");
       error.code = "CATALOG_DATABASE_JSON_INVALID";
       error.status = 400;
+      error.public = true;
       throw error;
     }
     const { previousMediaPaths = [], previousMedia = [], ...result } = await request.catalogStore.importDatabase(
@@ -220,6 +227,7 @@ export function createEditorRouter(catalogStore, mediaService, options = {}) {
       const error = new Error("clubId so pode filtrar jogadores");
       error.code = "EDITOR_FILTER_INVALID";
       error.status = 400;
+      error.public = true;
       throw error;
     }
     response.json(await request.catalogStore.listPage(entity, query));

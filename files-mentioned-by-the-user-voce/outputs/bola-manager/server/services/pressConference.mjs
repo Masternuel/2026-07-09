@@ -112,6 +112,7 @@ function pressError(message, code = "PRESS_CONFERENCE_INVALID", status = 400) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   return error;
 }
 

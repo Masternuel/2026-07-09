@@ -4,7 +4,7 @@ import { registerMarketHandlers } from "./marketHandlers.mjs";
 import { registerRoomHandlers } from "./roomHandlers.mjs";
 import { registerLineupHandlers } from "./lineupHandlers.mjs";
 import { registerClubCareerHandlers } from "./clubCareerHandlers.mjs";
-import { channelForManager } from "./helpers.mjs";
+import { channelForManager, clientError } from "./helpers.mjs";
 import { coordinationUnavailable } from "../infrastructure/coordinationAvailability.mjs";
 
 export function registerSocketHandlers(io, options) {
@@ -62,10 +62,9 @@ export function registerSocketHandlers(io, options) {
         const response = await proxy.dispatch(eventName, request.payload);
         acknowledgement?.({ handled: Boolean(response), response });
       } catch (error) {
-        options.logger?.error?.("socket.cluster_command_error", { eventName, code, error });
-        acknowledgement?.({ handled: true, response: { ok: false, error: {
-          code: error.data?.code ?? error.code ?? "AUTH_REQUIRED", message: error.message,
-        } } });
+        const serialized = clientError(error, request?.payload?._requestId);
+        options.logger?.error?.("socket.cluster_command_error", { eventName, code, requestId: serialized.requestId, error });
+        acknowledgement?.({ handled: true, response: { ok: false, error: serialized } });
       } finally {
         proxy.data.disposeAuthSession?.();
       }

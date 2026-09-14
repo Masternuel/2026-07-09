@@ -13,6 +13,7 @@ function roomError(message, code, status = 409) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   return error;
 }
 

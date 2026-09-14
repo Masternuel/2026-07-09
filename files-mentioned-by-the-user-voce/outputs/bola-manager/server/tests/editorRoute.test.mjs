@@ -1129,7 +1129,7 @@ test("upload de midia valida, associa ao registro e substitui o objeto anterior"
   assert.equal(storageFailure.status, 502);
   const storageFailureBody = await storageFailure.json();
   assert.equal(storageFailureBody.error.code, "EDITOR_MEDIA_UPLOAD_FAILED");
-  assert.equal(storageFailureBody.error.message, "Firebase Storage nao conseguiu salvar a imagem");
+  assert.equal(storageFailureBody.error.message, "Nao foi possivel salvar a imagem");
 
   const withoutStorage = await startTestServer({
     firebase: fakeFirebase({ firestore }),
@@ -1148,7 +1148,7 @@ test("upload de midia valida, associa ao registro e substitui o objeto anterior"
   assert.equal(unavailable.status, 503);
   const unavailableBody = await unavailable.json();
   assert.equal(unavailableBody.error.code, "EDITOR_MEDIA_STORAGE_UNAVAILABLE");
-  assert.equal(unavailableBody.error.message, "Firebase Storage nao esta configurado no servidor");
+  assert.equal(unavailableBody.error.message, "Armazenamento de imagens temporariamente indisponivel");
 });
 
 test("valida campos e retorna 503 tipado quando Firestore nao esta configurado", async (context) => {

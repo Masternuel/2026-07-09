@@ -33,6 +33,7 @@ export function registerChatHandlers(io, socket, { store, now = () => new Date()
       const error = new Error("Destinatario nao pertence a sala");
       error.code = "RECIPIENT_NOT_FOUND";
       error.status = 404;
+      error.public = true;
       throw error;
     }
     const message = {
@@ -50,4 +51,3 @@ export function registerChatHandlers(io, socket, { store, now = () => new Date()
     return { message };
   });
 }
-

@@ -114,6 +114,7 @@ Imagens externas passam por `/api/media/image`: somente HTTPS de Cloudinary (`im
 - Start command: `npm run server`.
 - Health check: `/health`.
 - Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
+- Antes do deploy, valide origens exatas, IPs/CIDRs de `TRUST_PROXY` e HTTPS/HSTS conforme [hardening de configuração](docs/SECURITY_HARDENING.md). Wildcard em produção é recusado; sem proxy configurado, clientes atrás do mesmo proxy compartilham limite por IP. Backup/restore exige [homologação isolada](docs/BACKUP_RESTORE.md).
 - Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). `GEMINI_FALLBACK_MODELS` aceita modelos reserva separados por vírgula e usa `gemini-3.1-flash-lite` por padrão. Nunca use prefixo `VITE_` nessas chaves.
 - O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
 - Adicione Redis/Valkey compartilhado, configure `REDIS_URL` e use duas ou mais réplicas. O health check é `/ready`; detalhes em [docs/MULTI_REPLICA.md](./docs/MULTI_REPLICA.md).

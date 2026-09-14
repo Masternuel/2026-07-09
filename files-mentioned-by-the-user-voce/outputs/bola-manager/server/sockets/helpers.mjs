@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { correlationId, publicError } from "../infrastructure/publicErrors.mjs";
 
 export function channelForRoom(code) {
   return `room:${code}`;
@@ -8,17 +8,13 @@ export function channelForManager(managerId) {
   return `manager:${managerId}`;
 }
 
-export function clientError(error) {
-  return {
-    code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
-    message: error.message || "Erro interno do servidor",
-    details: error.details,
-  };
+export function clientError(error, requestId) {
+  return publicError(error, requestId).error;
 }
 
 export function registerSafe(socket, eventName, handler) {
   socket.on(eventName, async (payload = {}, acknowledgement) => {
-    const requestId = String(payload?._requestId || payload?.requestId || randomUUID()).slice(0, 128);
+    const requestId = correlationId(payload?._requestId || payload?.requestId);
     const handlerPayload = payload && typeof payload === "object" && !Array.isArray(payload)
       ? { ...payload }
       : payload;
@@ -92,19 +88,23 @@ export function registerSafe(socket, eventName, handler) {
             _requestId: requestId,
           });
           if (forwarded) {
-            if (typeof acknowledgement === "function") acknowledgement(forwarded);
-            else if (forwarded.ok === false) socket.emit("server:error", { event: eventName, error: forwarded.error });
-            finish(forwarded.ok === false ? "error" : "ok", forwarded.ok === false ? forwarded.error : null);
+            // Older replicas may still return raw exceptions; only controlled codes cross this boundary.
+            const response = forwarded.ok === false
+              ? { ok: false, error: clientError({ code: forwarded.error?.code }, requestId) }
+              : forwarded;
+            if (typeof acknowledgement === "function") acknowledgement(response);
+            else if (response.ok === false) socket.emit("server:error", { event: eventName, error: response.error });
+            finish(response.ok === false ? "error" : "ok", response.ok === false ? forwarded.error : null);
             return;
           }
         } catch (forwardError) {
           logger?.warn?.("socket.forward_failed", { requestId, eventName, socketId: socket.id, error: forwardError });
         }
       }
-      const serialized = clientError(error);
+      const serialized = clientError(error, requestId);
       if (typeof acknowledgement === "function") acknowledgement({ ok: false, error: serialized });
       else socket.emit("server:error", { event: eventName, error: serialized });
-      finish("error", serialized);
+      finish("error", error);
     }
   });
 }

@@ -65,7 +65,7 @@ export async function startTestServer({
   const server = await createBolaManagerServer({
     env: {
       NODE_ENV: "test",
-      CLIENT_ORIGIN: "*",
+      CLIENT_ORIGIN: "http://localhost:5191,http://127.0.0.1:5191",
       MATCH_EVENT_DELAY_MS: String(matchDelayMs),
       ...env,
     },

@@ -1,4 +1,4 @@
-import { registerSafe } from "./helpers.mjs";
+import { clientError, registerSafe } from "./helpers.mjs";
 
 const sessionError = (code, message, status = 401) => Object.assign(new Error(message), { code, status });
 
@@ -26,7 +26,7 @@ export function installSocketAuthSession(socket, initial, verify, {
   function invalidate(error) {
     if (closed) return;
     stop();
-    socket.emit("auth:error", { code: error.code, message: error.message });
+    socket.emit("auth:error", clientError(error));
     // Let the request ACK leave before closing the transport.
     setImmediate(() => socket.disconnect(true));
   }
@@ -113,7 +113,7 @@ export function installSocketAuthSession(socket, initial, verify, {
     if (closed) return;
     recheckTimer = setTimeout(async () => {
       try { await authorize(); } catch (error) {
-        if (!closed) socket.emit("auth:error", { code: error.code, message: error.message });
+        if (!closed) socket.emit("auth:error", clientError(error));
       }
       recheck();
     }, recheckMs);

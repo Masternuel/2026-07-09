@@ -1,4 +1,5 @@
 import { installSocketAuthSession } from "./sockets/authSession.mjs";
+import { publicConnectionError } from "./infrastructure/publicErrors.mjs";
 
 export class AuthError extends Error {
   constructor(message, code = "AUTH_REQUIRED", status = 401) {
@@ -137,8 +138,7 @@ export function createSocketAuthMiddleware({
       next();
     } catch (error) {
       const authError = authFailure(error);
-      const connectionError = new Error(authError.message);
-      connectionError.data = { code: authError.code, status: authError.status };
+      const connectionError = publicConnectionError(authError);
       next(connectionError);
     }
   };

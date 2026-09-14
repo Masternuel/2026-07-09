@@ -6,6 +6,7 @@ import { MemoryRoomPersistence } from '../server/store/roomPersistence.mjs';
 import { createFakeFirestore } from '../server/tests/helpers/fakeFirestore.mjs';
 import { startTestServer } from '../server/tests/testHarness.mjs';
 import { HTTP_CSP } from '../shared/imagePolicy.mjs';
+import { SECURITY_HEADERS } from '../shared/securityHeaders.mjs';
 
 export default async function setup() {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -39,7 +40,7 @@ export default async function setup() {
     });
     web = await preview({ root, configFile: false, envFile: false, build: { outDir: '.tmp/e2e/app' }, preview: {
       host: '127.0.0.1', port: 5191, strictPort: true,
-      headers: { 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY' },
+      headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY' },
     } });
   } catch (error) { await backend.server.close(); throw error; }
   let closing = false;

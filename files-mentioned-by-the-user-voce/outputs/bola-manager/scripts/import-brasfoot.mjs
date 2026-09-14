@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stringifyRedacted, redactText } from "../server/infrastructure/redaction.mjs";
 import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { extname, relative, resolve, sep } from "node:path";
@@ -694,11 +695,11 @@ export async function runImport(options, env = process.env) {
   } finally {
     if (options.report) {
       try {
-        await writeFile(resolve(options.report), `${JSON.stringify(finalReport ?? {
+        await writeFile(resolve(options.report), `${stringifyRedacted(finalReport ?? {
           sourceFormat: "unknown",
           inputPath,
           commit: { status: caughtError ? "failed" : "unknown", error: caughtError?.message },
-        }, null, 2)}\n`, "utf8");
+        }, 2)}\n`, "utf8");
       } catch (reportError) {
         if (!caughtError) throw reportError;
       }
@@ -714,12 +715,12 @@ if (isDirectExecution()) {
   try {
     const options = parseArguments(process.argv.slice(2));
     if (options.help) console.log(helpText());
-    else console.log(JSON.stringify(await runImport(options), null, 2));
+    else console.log(stringifyRedacted(await runImport(options), 2));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error("Dataset inválido:", error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+      console.error("Dataset inválido:", redactText(error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")));
     } else {
-      console.error(error.message);
+      console.error(redactText(error.message));
     }
     process.exitCode = 1;
   }

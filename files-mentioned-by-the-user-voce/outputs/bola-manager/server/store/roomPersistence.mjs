@@ -1,3 +1,4 @@
+import { redactLogValue } from "../infrastructure/redaction.mjs";
 import { createHash } from "node:crypto";
 import { FirestoreMatchHistory, MemoryMatchHistory, MATCH_HISTORY_COLLECTION } from "./matchHistory.mjs";
 import { creationReceipt, validateCreationReceipt } from "./roomCreationOperation.mjs";
@@ -1869,7 +1870,7 @@ export class FirestoreRoomPersistence {
         const latest = await reference.get().catch(() => null);
         if (!latest?.exists || canonicalChecksum(latest.data()) !== canonicalChecksum(recovered)) throw error;
       }
-      console.warn(JSON.stringify({ event: "save_recovered", reason: originalError.code, recoveryId: id }));
+      console.warn(JSON.stringify(redactLogValue({ event: "save_recovered", reason: originalError.code, recoveryId: id })));
     } finally {
       await releaseStorageWriterLease(this.#firestore, writerLease).catch(() => {});
     }
