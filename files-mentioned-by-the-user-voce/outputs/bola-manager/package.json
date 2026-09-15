@@ -21,6 +21,12 @@
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
+    "security:staging:preflight": "node scripts/security-staging-preflight.mjs",
+    "security:staging:redis": "node scripts/security-staging-runner.mjs redis",
+    "security:staging:firebase": "node scripts/security-staging-runner.mjs firebase",
+    "security:staging:media": "node scripts/security-staging-runner.mjs media",
+    "security:staging:ai": "node scripts/security-staging-runner.mjs ai",
+    "security:staging:cleanup": "node scripts/security-staging-runner.mjs cleanup",
     "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json",
     "seed:builtin": "node scripts/seed-builtin-catalog.mjs --dry-run"
   },
