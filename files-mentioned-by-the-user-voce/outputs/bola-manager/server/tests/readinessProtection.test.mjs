@@ -5,6 +5,22 @@ import { createCachedReadiness, createFirestoreReadinessCheck, createReadinessCh
 import { startTestServer } from "./testHarness.mjs";
 import { HTTP_CSP, IMAGE_CSP } from "../../shared/imagePolicy.mjs";
 
+test("probe Firestore usa caminho permitido e aceita documento inexistente sem escrita", async () => {
+  const reads = [];
+  const firestore = {
+    doc(path) {
+      if (path.split("/").some((segment) => /^__.*__$/.test(segment))) {
+        throw Object.assign(new Error("Reserved Firestore resource name"), { code: 3 });
+      }
+      return { get: async () => { reads.push(path); return { exists: false }; } };
+    },
+  };
+  const result = await createFirestoreReadinessCheck(firestore)();
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ready");
+  assert.deepEqual(reads, ["health/readiness"]);
+});
+
 test("readiness coalesce concorrencia, usa cache curto e renova depois da expiracao", async () => {
   let calls = 0;
   let now = 0;

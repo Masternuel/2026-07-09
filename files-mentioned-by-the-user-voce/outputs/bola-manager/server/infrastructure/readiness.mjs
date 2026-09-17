@@ -25,7 +25,7 @@ export function withTimeout(promise, timeoutMs = 2_000, dependency = "dependency
 
 export function createFirestoreReadinessCheck(firestore, {
   timeoutMs = 2_000,
-  probePath = "__health__/readiness",
+  probePath = "health/readiness",
 } = {}) {
   const probe = singleFlight(() => typeof firestore.doc === "function"
     ? firestore.doc(probePath).get() : firestore.listCollections());
