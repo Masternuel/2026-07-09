@@ -51,8 +51,8 @@ import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure
 import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
 import { createImagesRouter } from "./routes/images.mjs";
 import { createCoordinationGuard, coordinationUnavailable } from "./infrastructure/coordinationAvailability.mjs";
-import { HTTP_CSP } from "../shared/imagePolicy.mjs";
-import { SECURITY_HEADERS } from "../shared/securityHeaders.mjs";
+import { applySecurityHeaders, createSecurityHeaders, secureEngineTransport } from "./infrastructure/httpSecurity.mjs";
+import { createStagingProxyDiagnostics } from "./infrastructure/stagingProxyDiagnostics.mjs";
 import { createOriginPolicy } from "./infrastructure/networkPolicy.mjs";
 import { correlationId, publicError, publicConnectionError } from "./infrastructure/publicErrors.mjs";
 import { httpMetricRoute } from "./infrastructure/metricPolicy.mjs";
@@ -164,17 +164,16 @@ export async function createBolaManagerServer({
   const httpServer = createHttpServer(app);
   const originPolicy = createOriginPolicy(config.clientOrigin, config.nodeEnv);
   const corsOptions = originPolicy.cors;
+  const headersForRequest = createSecurityHeaders(config);
+  const existingUpgradeHandlers = new Set(httpServer.listeners("upgrade"));
   const io = new SocketIOServer(httpServer, {
     cors: corsOptions,
     allowRequest: originPolicy.allowRequest,
     ...(config.nodeEnv === "production" ? { transports: ["websocket"] } : {}),
   });
-  // Engine.IO bypasses Express for polling and upgrade requests.
-  io.engine.use((_request, response, next) => {
-    for (const [name, value] of Object.entries({
-      ...SECURITY_HEADERS, "Content-Security-Policy": HTTP_CSP, "X-Frame-Options": "DENY",
-    })) response.setHeader(name, value);
-    next();
+  secureEngineTransport({
+    httpServer, io, originPolicy, headersForRequest,
+    upgradeHandlers: httpServer.listeners("upgrade").filter((handler) => !existingUpgradeHandlers.has(handler)),
   });
   if (redisRuntime.enabled) {
     io.adapter(socketAdapterFactory(redisRuntime.publisher, redisRuntime.subscriber, {
@@ -236,14 +235,12 @@ export async function createBolaManagerServer({
   }), { cacheMs: config.readinessCacheMs, timeoutMs: config.dependencyTimeoutMs });
 
   app.use((request, response, next) => {
-    response.setHeader("Content-Security-Policy", HTTP_CSP);
-    response.setHeader("X-Frame-Options", "DENY");
-    response.set(SECURITY_HEADERS);
-    if (config.enableHsts && request.secure) response.setHeader("Strict-Transport-Security", "max-age=31536000");
+    applySecurityHeaders(response, headersForRequest(request));
     next();
   });
   app.disable("x-powered-by");
   app.set("trust proxy", config.trustProxy);
+  app.use(createStagingProxyDiagnostics({ config: config.stagingProxyDiagnostics, logger: structuredLogger, instanceId: config.instanceId }));
   app.use((request, response, next) => {
     const startedAt = Date.now();
     request.requestId = correlationId(request.headers["x-request-id"]);

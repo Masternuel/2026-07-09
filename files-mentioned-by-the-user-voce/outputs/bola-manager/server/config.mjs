@@ -1,5 +1,6 @@
 import { validateMetricsToken } from "./infrastructure/metricsEndpoint.mjs";
 import { createOriginPolicy, parseTrustedProxies } from "./infrastructure/networkPolicy.mjs";
+import { getStagingDiagnosticsConfig } from "./infrastructure/stagingProxyDiagnostics.mjs";
 
 function nonNegativeInteger(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -40,11 +41,24 @@ export function getServerConfig(env = process.env) {
 
   const clientOrigin = env.CLIENT_ORIGIN?.trim() || (nodeEnv === "production" ? "" : DEFAULT_LOCAL_ORIGINS);
   createOriginPolicy(clientOrigin, nodeEnv);
+  const stagingHttpsOrigin = env.STAGING_HTTPS_ORIGIN?.trim() || "";
+  if (stagingHttpsOrigin) {
+    let valid = false;
+    try {
+      const origin = new URL(stagingHttpsOrigin);
+      valid = origin.protocol === "https:" && origin.origin === stagingHttpsOrigin;
+    } catch { /* Invalid configuration fails before dependencies initialize. */ }
+    if (!valid || env.RAILWAY_ENVIRONMENT_NAME !== "staging" || env.RAILWAY_SERVICE_NAME !== "backend-staging") {
+      throw new Error("STAGING_HTTPS_ORIGIN requires an exact HTTPS origin and backend-staging/staging");
+    }
+  }
   return {
     port: nonNegativeInteger(env.PORT, 3001),
     clientOrigin,
     trustProxy: parseTrustedProxies(env.TRUST_PROXY?.trim()),
     enableHsts: nodeEnv === "production" && enabled(env.ENABLE_HSTS),
+    stagingHttpsOrigin,
+    stagingProxyDiagnostics: getStagingDiagnosticsConfig(env),
     matchEventDelayMs: nonNegativeInteger(env.MATCH_EVENT_DELAY_MS, 800),
     nodeEnv,
     allowDemoAuth: requestedDemoAuth,
