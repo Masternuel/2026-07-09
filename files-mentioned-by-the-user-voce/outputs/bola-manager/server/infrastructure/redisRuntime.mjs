@@ -20,17 +20,30 @@ async function connectClient(client, timeoutMs, label) {
   return client;
 }
 
-async function closeClient(client) {
+function forceCloseClient(client) {
+  try {
+    const closing = typeof client?.destroy === "function" ? client.destroy() : client?.disconnect?.();
+    closing?.catch?.(() => {});
+  } catch {
+    // Cleanup must not replace the original connection error.
+  }
+}
+
+async function closeClient(client, timeoutMs) {
   if (!client) return;
   try {
-    if (typeof client.quit === "function" && client.isOpen !== false) {
-      await client.quit();
-      return;
+    if (client.isOpen !== false && client.isReady !== false) {
+      // node-redis 5.8.2 quit()/close() mark the socket closed before draining,
+      // preventing destroy() from aborting it. Send QUIT while it is abortable.
+      await withTimeout(Promise.resolve().then(() => typeof client.sendCommand === "function"
+        ? client.sendCommand(["QUIT"])
+        : client.quit?.()), timeoutMs, "redis-close");
     }
   } catch {
-    // A conexao pode ter caido antes do shutdown.
+    // A disconnected or unresponsive peer cannot finish a graceful shutdown.
+  } finally {
+    forceCloseClient(client);
   }
-  client.disconnect?.();
 }
 
 function bindClientErrors(client, role, logger) {
@@ -72,25 +85,25 @@ export async function createRedisRuntime({
     disableOfflineQueue: true,
     socket: { connectTimeout: timeoutMs, ...socket },
   };
-  const client = await clientFactory(clientOptions);
-  const publisher = typeof client?.duplicate === "function"
-    ? client.duplicate()
-    : await clientFactory(clientOptions);
-  const subscriber = typeof client?.duplicate === "function"
-    ? client.duplicate()
-    : await clientFactory(clientOptions);
-  bindClientErrors(client, "command", logger);
-  bindClientErrors(publisher, "publisher", logger);
-  bindClientErrors(subscriber, "subscriber", logger);
-
+  let client, publisher, subscriber;
   try {
+    client = await clientFactory(clientOptions);
+    bindClientErrors(client, "command", logger);
+    publisher = typeof client?.duplicate === "function"
+      ? client.duplicate()
+      : await clientFactory(clientOptions);
+    bindClientErrors(publisher, "publisher", logger);
+    subscriber = typeof client?.duplicate === "function"
+      ? client.duplicate()
+      : await clientFactory(clientOptions);
+    bindClientErrors(subscriber, "subscriber", logger);
     await Promise.all([
       connectClient(client, timeoutMs, "command"),
       connectClient(publisher, timeoutMs, "publisher"),
       connectClient(subscriber, timeoutMs, "subscriber"),
     ]);
   } catch (error) {
-    await Promise.allSettled([closeClient(subscriber), closeClient(publisher), closeClient(client)]);
+    [subscriber, publisher, client].forEach(forceCloseClient);
     throw error;
   }
 
@@ -116,7 +129,7 @@ export async function createRedisRuntime({
     async close() {
       if (closed) return;
       closed = true;
-      await Promise.allSettled([closeClient(subscriber), closeClient(publisher), closeClient(client)]);
+      await Promise.allSettled([subscriber, publisher, client].map((entry) => closeClient(entry, timeoutMs)));
     },
   };
 }
