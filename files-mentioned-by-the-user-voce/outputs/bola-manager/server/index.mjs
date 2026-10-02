@@ -153,7 +153,7 @@ export async function createBolaManagerServer({
     metrics,
   });
   const matchSessionStore = injectedMatchSessionStore ?? createMatchSessionPersistence({
-    firestore: firebase.firestore,
+    firestore: firebase.matchFirestore,
     mode: injectedStore && !firebase.firestore ? "memory" : config.roomStoreMode,
     nodeEnv: config.nodeEnv,
     allowDemoAuth: config.allowDemoAuth,
@@ -491,6 +491,7 @@ export async function createBolaManagerServer({
         closePromise = (async () => {
           const graceful = (async () => {
             await sockets.close();
+            await matchSessionStore.close?.();
             await new Promise((resolveClose) => io.close(() => resolveClose()));
             await brasfootImportService.close?.();
             await redisRuntime.close?.();

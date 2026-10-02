@@ -1,4 +1,5 @@
-import { withTimeout } from "../infrastructure/readiness.mjs";
+import { MatchFirestoreRpc } from "./matchFirestoreRpc.mjs";
+import { encodeMatchFields } from "./matchFirestoreValues.mjs";
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 15_000;
 
@@ -78,30 +79,6 @@ function assertSaveSequence(current, requested) {
   }
   if (requestedSequence < currentSequence) {
     throw staleSnapshotError(currentSequence, requestedSequence);
-  }
-}
-
-function persistenceTimeoutError(operation, cause) {
-  const error = new Error(`Persistencia da partida excedeu o tempo limite (${operation})`);
-  error.code = "MATCH_PERSISTENCE_TIMEOUT";
-  error.status = 503;
-  error.expose = true;
-  error.cause = cause;
-  return error;
-}
-
-async function boundedOperation(operation, timeoutMs, label) {
-  try {
-    return await withTimeout(
-      Promise.resolve().then(operation),
-      timeoutMs,
-      `match-persistence:${label}`,
-    );
-  } catch (error) {
-    if (error?.name === "TimeoutError" || error?.code === "DEPENDENCY_TIMEOUT") {
-      throw persistenceTimeoutError(label, error);
-    }
-    throw error;
   }
 }
 
@@ -208,30 +185,17 @@ export class MemoryMatchSessionPersistence {
 }
 
 export class FirestoreMatchSessionPersistence {
-  #collection;
-  #firestore;
-  #operationTimeoutMs;
+  #rpc;
 
   constructor(firestore, {
     collectionName = "activeMatches",
     operationTimeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
   } = {}) {
-    if (!firestore) throw new Error("Firestore e obrigatorio para persistir partidas em andamento");
-    this.#firestore = firestore;
-    this.#collection = firestore.collection(collectionName);
-    this.#operationTimeoutMs = Number.isInteger(Number(operationTimeoutMs))
-      && Number(operationTimeoutMs) > 0
-      ? Number(operationTimeoutMs)
-      : DEFAULT_OPERATION_TIMEOUT_MS;
+    this.#rpc = new MatchFirestoreRpc(firestore, { collectionName, operationTimeoutMs });
   }
 
   async get(code) {
-    const snapshot = await boundedOperation(
-      () => this.#collection.doc(normalizedCode(code)).get(),
-      this.#operationTimeoutMs,
-      "get",
-    );
-    return snapshot.exists ? clone(activeRecord(snapshot.data())) : null;
+    return clone(activeRecord(await this.#rpc.get(normalizedCode(code))));
   }
 
   async has(code) {
@@ -240,41 +204,28 @@ export class FirestoreMatchSessionPersistence {
 
   async save(session, ownershipValue) {
     const ownership = normalizedOwnership(ownershipValue);
+    encodeMatchFields(session);
     const cleaned = withoutUndefined(session);
-    let stored;
-    const reference = this.#collection.doc(normalizedCode(cleaned.code));
-    await boundedOperation(
-      () => this.#firestore.runTransaction(async (transaction) => {
-        const snapshot = await transaction.get(reference);
-        const current = snapshot.exists ? snapshot.data() : null;
-        assertSaveOwnership(current, ownership);
-        assertSaveSequence(current, cleaned);
-        stored = ownedRecord(cleaned, ownership, current);
-        transaction.set(reference, clone(stored));
-      }),
-      this.#operationTimeoutMs,
-      "save",
-    );
-    return clone(stored);
+    return this.#rpc.update(normalizedCode(cleaned.code), "save", (current) => {
+      assertSaveOwnership(current, ownership);
+      assertSaveSequence(current, cleaned);
+      const stored = ownedRecord(cleaned, ownership, current);
+      return { record: stored, result: clone(stored) };
+    });
   }
 
   async remove(code, matchId, ownershipValue) {
     const ownership = normalizedOwnership(ownershipValue);
-    const reference = this.#collection.doc(normalizedCode(code));
-    return boundedOperation(
-      () => this.#firestore.runTransaction(async (transaction) => {
-        const snapshot = await transaction.get(reference);
-        if (!snapshot.exists) return false;
-        const current = snapshot.data();
-        if (current?._matchRemoved === true
-          || (matchId && String(current?.matchId) !== String(matchId))) return false;
-        assertOwnership(current, ownership);
-        transaction.set(reference, removedRecord(code, current, ownership));
-        return true;
-      }),
-      this.#operationTimeoutMs,
-      "remove",
-    );
+    return this.#rpc.update(normalizedCode(code), "remove", (current) => {
+      if (!current || current._matchRemoved === true
+        || (matchId && String(current.matchId) !== String(matchId))) return { result: false };
+      assertOwnership(current, ownership);
+      return { record: removedRecord(code, current, ownership), result: true };
+    });
+  }
+
+  close() {
+    return this.#rpc.close();
   }
 }
 

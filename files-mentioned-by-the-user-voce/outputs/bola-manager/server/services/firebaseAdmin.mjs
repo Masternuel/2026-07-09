@@ -59,7 +59,7 @@ export async function initializeFirebaseAdmin(env = process.env) {
 
   const { applicationDefault, cert, getApps, initializeApp } = await import("firebase-admin/app");
   const { getAuth } = await import("firebase-admin/auth");
-  const { getFirestore } = await import("firebase-admin/firestore");
+  const { getFirestore, v1 } = await import("firebase-admin/firestore");
   const { getStorage } = await import("firebase-admin/storage");
   const credential = serviceAccount ? cert(serviceAccount.account) : applicationDefault();
   const options = { credential };
@@ -71,11 +71,28 @@ export async function initializeFirebaseAdmin(env = process.env) {
   const app = getApps()[0] ?? initializeApp(options);
   const configuredBucket = storageBucket || app.options.storageBucket;
   const storage = getStorage(app);
+  const firestore = getFirestore(app);
+  const account = serviceAccount?.account;
+  const matchClientOptions = {
+    projectId: firestore.projectId,
+    // Official v1 REST transport: cancellation aborts the real HTTP request,
+    // including a silent peer. Other Firestore stores keep their existing SDK.
+    fallback: true,
+    ...(account ? { credentials: {
+      client_email: account.client_email ?? account.clientEmail,
+      private_key: account.private_key ?? account.privateKey,
+    } } : {}),
+  };
   return {
     enabled: true,
     app,
     auth: getAuth(app),
-    firestore: getFirestore(app),
+    firestore,
+    // Separate, short-lived public v1 clients ONLY for active match persistence.
+    matchFirestore: {
+      database: `projects/${firestore.projectId}/databases/${firestore.databaseId}`,
+      createClient: () => new v1.FirestoreClient(matchClientOptions),
+    },
     storage,
     bucket: configuredBucket ? storage.bucket(configuredBucket) : null,
     credentialSource: serviceAccount?.source || "application-default",

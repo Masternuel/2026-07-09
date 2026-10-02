@@ -2,6 +2,7 @@ import { createBolaManagerServer } from "../index.mjs";
 import { MemoryRoomPersistence } from "../store/roomPersistence.mjs";
 import { RoomStore } from "../store/roomStore.mjs";
 import { MemoryMatchSessionPersistence } from "../store/matchSessionPersistence.mjs";
+import { createFakeMatchFirestoreV1 } from "./helpers/fakeMatchFirestoreV1.mjs";
 
 const USERS = {
   "owner-token": { uid: "uid-owner", name: "Dona da Sala", email: "owner@example.com" },
@@ -16,6 +17,7 @@ export function fakeFirebase({ firestore = null, bucket = null } = {}) {
   return {
     enabled: true,
     firestore,
+    matchFirestore: firestore ? createFakeMatchFirestoreV1() : null,
     storage: bucket ? { bucket: () => bucket } : null,
     bucket,
     auth: {

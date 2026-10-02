@@ -1,0 +1,39 @@
+syntax = "proto3";
+package google.firestore.v1;
+service Firestore {
+  rpc GetDocument(GetDocumentRequest) returns (Document);
+  rpc BatchGetDocuments(BatchGetDocumentsRequest) returns (stream BatchGetDocumentsResponse);
+  rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Rollback(RollbackRequest) returns (Empty);
+}
+message Empty {}
+message Timestamp { int64 seconds = 1; int32 nanos = 2; }
+message Value {
+  oneof value_type {
+    bool boolean_value = 1;
+    int64 integer_value = 2;
+    double double_value = 3;
+    string reference_value = 5;
+    MapValue map_value = 6;
+    ArrayValue array_value = 9;
+    Timestamp timestamp_value = 10;
+    int32 null_value = 11;
+    string string_value = 17;
+    bytes bytes_value = 18;
+  }
+}
+message MapValue { map<string, Value> fields = 1; }
+message ArrayValue { repeated Value values = 1; }
+message Document { string name = 1; map<string, Value> fields = 2; Timestamp create_time = 3; Timestamp update_time = 4; }
+message GetDocumentRequest { string name = 1; bytes transaction = 3; }
+message TransactionOptions { message ReadWrite {} ReadWrite read_write = 3; }
+message BeginTransactionRequest { string database = 1; TransactionOptions options = 2; }
+message BeginTransactionResponse { bytes transaction = 1; }
+message Write { Document update = 1; }
+message CommitRequest { string database = 1; repeated Write writes = 2; bytes transaction = 3; }
+message WriteResult { Timestamp update_time = 1; }
+message CommitResponse { repeated WriteResult write_results = 1; Timestamp commit_time = 2; }
+message RollbackRequest { string database = 1; bytes transaction = 2; }
+message BatchGetDocumentsRequest { string database = 1; repeated string documents = 2; bytes transaction = 4; TransactionOptions new_transaction = 5; }
+message BatchGetDocumentsResponse { oneof result { Document found = 1; string missing = 2; } bytes transaction = 3; Timestamp read_time = 4; }

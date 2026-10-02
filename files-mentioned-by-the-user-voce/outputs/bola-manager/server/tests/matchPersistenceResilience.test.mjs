@@ -9,7 +9,7 @@ import {
   FirestoreMatchSessionPersistence,
   MemoryMatchSessionPersistence,
 } from "../store/matchSessionPersistence.mjs";
-import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
+import { createFakeMatchFirestoreV1 } from "./helpers/fakeMatchFirestoreV1.mjs";
 import { startTestServer } from "./testHarness.mjs";
 
 function activeSession(persistenceSequence = 0) {
@@ -48,7 +48,7 @@ test("snapshot preserva sequencia monotonicamente e aceita save legado", () => {
 
 for (const [name, createPersistence] of [
   ["memoria", () => new MemoryMatchSessionPersistence()],
-  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeFirestore())],
+  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeMatchFirestoreV1())],
 ]) {
   test(`${name}: save atrasado nao sobrescreve snapshot mais novo`, async () => {
     const persistence = createPersistence();
@@ -75,7 +75,7 @@ for (const [name, createPersistence] of [
 
 for (const [name, createPersistence] of [
   ["memoria", () => new MemoryMatchSessionPersistence()],
-  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeFirestore())],
+  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeMatchFirestoreV1())],
 ]) {
   test(`${name}: tombstone sem ownership bloqueia geracoes antigas do mesmo jogo`, async () => {
     const persistence = createPersistence();
@@ -126,14 +126,7 @@ for (const [name, createPersistence] of [
 
 test("Firestore interrompe operacao travada com erro tipado", async () => {
   const never = new Promise(() => {});
-  const firestore = {
-    collection() {
-      return { doc: () => ({ get: () => never }) };
-    },
-    runTransaction() {
-      return never;
-    },
-  };
+  const firestore = createFakeMatchFirestoreV1({ intercept: () => never });
   const persistence = new FirestoreMatchSessionPersistence(firestore, {
     operationTimeoutMs: 15,
   });
