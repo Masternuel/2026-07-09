@@ -41,7 +41,7 @@
     "react-dom": "^18.3.1",
     "redis": "^5.8.2",
     "sharp": "^0.35.4",
-    "socket.io": "^4.8.1",
+    "socket.io": "^4.8.4",
     "socket.io-client": "^4.8.1",
     "zod": "^3.25.67"
   },
@@ -66,6 +66,9 @@
     },
     "firebase-admin": {
       "uuid": "11.1.1"
+    },
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.14.5"
     }
   }
 }
