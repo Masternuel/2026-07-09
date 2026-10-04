@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SCOPES } from "../security-staging-preflight.mjs";
 
 const RUN_PATTERN = /^security-validation-\d{13}-[a-f0-9]{24}$/;
 const ROOT = fileURLToPath(new URL("../../.tmp/security-staging/", import.meta.url));
@@ -13,13 +14,15 @@ export function receiptPath(runId) {
 export function readReceipt(runId) {
   const receipt = JSON.parse(readFileSync(receiptPath(runId), "utf8"));
   if (receipt.version !== 1 || receipt.runId !== runId || !["redis", "firebase", "media", "ai"].includes(receipt.group)
+    || (receipt.scope !== undefined && (receipt.group !== "firebase" || !Object.hasOwn(SCOPES, receipt.scope)))
     || !/^[a-f0-9]{48}$/.test(receipt.owner ?? "") || !Array.isArray(receipt.redisKeys)
     || receipt.redisKeys.length > 200 || !receipt.redisKeys.every((key) => typeof key === "string" && key.startsWith(`{${runId}}:`) && key.length < 1024)) throw new Error("INVALID_RECEIPT");
   return receipt;
 }
-export function createReceipt(group, targetHashes) {
+export function createReceipt(group, targetHashes, { scope } = {}) {
+  if (scope !== undefined && (group !== "firebase" || !Object.hasOwn(SCOPES, scope))) throw new Error("INVALID_SCOPE");
   const runId = `security-validation-${Date.now()}-${randomBytes(12).toString("hex")}`;
-  const receipt = { version: 1, runId, group, targetHashes, owner: randomBytes(24).toString("hex"), createdAt: new Date().toISOString(), redisKeys: [], state: "pending" };
+  const receipt = { version: 1, runId, group, ...(scope ? { scope } : {}), targetHashes, owner: randomBytes(24).toString("hex"), createdAt: new Date().toISOString(), redisKeys: [], state: "pending" };
   mkdirSync(dirname(receiptPath(runId)), { recursive: true });
   writeFileSync(receiptPath(runId), `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   return receipt;

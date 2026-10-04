@@ -69,6 +69,31 @@ Substituir o argumento de cleanup pelo run-id efetivamente emitido. O template d
 
 ## Segurança
 
+### Preflight por escopo
+
+O comando sem argumentos continua global: exige todos os provedores, inclusive Storage,
+Cloudinary, Gemini e Redis local. Os grupos anteriores também permanecem inalterados.
+Para homologação parcial explícita:
+
+```powershell
+node --env-file=.env.staging scripts/security-staging-preflight.mjs --scope firestore-match-persistence
+node --env-file=.env.staging scripts/security-staging-preflight.mjs --scope frontend-socketio
+```
+
+Recursos excluídos aparecem como `NOT_APPLICABLE`, nunca `PASS`. Ambos os escopos
+exigem inventário de produção revisado, isolamento/hashes atuais, identidades Firebase
+distintas, backend confirmado e evidência somente-leitura recente (15 minutos), vinculada
+às credenciais e aos alvos pelo helper `createScopeEvidence`. A observação deve comprovar
+projeto/database/identidades via metadata e SSH; não basta atribuir nomes aos recursos.
+`frontend-socketio` exige também duas réplicas saudáveis e Redis privado dedicado,
+observado no Railway, sem exigir URLs Redis locais.
+
+Antes das fixtures, repetir com `--require-writes`. O harness deve chamar
+`authorize(env, "all", { scope })`, registrar recibo com o mesmo scope/targetHashes e
+verificar `sameTargets` antes do cleanup. `STAGING_ALLOW_WRITES=true` é obrigatório
+para essa autorização; voltar a `false` após o cleanup. Os runners antigos de provedores
+não executam esses escopos automaticamente e não aceitam recibos de outro escopo.
+
 - `STAGING_ENVIRONMENT=staging` e provas/evidências por serviço são necessárias; configuração desconhecida retorna `ISOLATION_UNCONFIRMED`.
 - Alvos conhecidos/rotulados como produção bloqueados. Redis compara host/porta, cruzando aplicação/teste: trocar credenciais, esquema ou DB não contorna a denylist.
 - `NODE_ENV=production` bloqueia escrita do harness; o backend remoto deve continuar em modo production. `RAILWAY_ENVIRONMENT_NAME`, `APP_ENV` ou `ENVIRONMENT` explicitamente produtivos também bloqueiam o runner.

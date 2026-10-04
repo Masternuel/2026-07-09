@@ -12,6 +12,11 @@ export const GROUPS = Object.freeze({
   ai: ["redis", "gemini"],
   all: ["backend", "frontend", "proxy", "redis", "redisTest", "firebase", "storage", "cloudinary", "gemini"],
 });
+export const SCOPES = Object.freeze({
+  "firestore-match-persistence": ["backend", "proxy", "firebase"],
+  "frontend-socketio": ["backend", "frontend", "proxy", "firebase"],
+});
+const SCOPE_EVIDENCE_MAX_AGE_MS = 15 * 60 * 1000;
 export const fingerprint = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const present = (value) => typeof value === "string" && Boolean(value.trim());
 const projectId = (value) => /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(value ?? "");
@@ -70,8 +75,54 @@ export function isolationTemplate(env) {
   };
 }
 
-export function evaluatePreflight(env, isolation, { group = "all", destructive = false } = {}) {
+function scopeHashes(env, scope) {
+  const template = isolationTemplate(env);
+  return Object.fromEntries(SCOPES[scope].map((service) => [service, template.services[service]]));
+}
+
+// Observations come from read-only provider metadata, SSH and real /ready probes.
+// This binds them to the current targets/credentials; it never certifies isolation.
+export function createScopeEvidence(env, isolation, scope, observation, now = Date.now()) {
+  if (!Object.hasOwn(SCOPES, scope)) throw new Error("INVALID_SCOPE");
+  const reviewed = isolation?.reviewEvidence?.staging;
+  const production = isolation?.reviewEvidence?.production;
+  const runtime = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  const admin = JSON.parse(env.STAGING_FIREBASE_ADMIN_JSON);
+  const backend = reviewed?.services?.find((service) => service.id === observation.backendServiceId);
+  const valid = isolation.productionInventoryReviewed === true && reviewed && production && backend
+    && present(production.projectId) && present(production.environmentId)
+    && Array.isArray(production.serviceIds) && production.serviceIds.length > 0
+    && observation.projectId === reviewed.projectId && observation.projectId !== production.projectId
+    && observation.environmentId === reviewed.environmentId && observation.environmentId !== production.environmentId
+    && !production.serviceIds?.includes(observation.backendServiceId)
+    && backend.domains?.serviceDomains?.some(({ domain }) => `https://${domain}` === origin(env.STAGING_BACKEND_URL))
+    && observation.firebaseProject === env.FIREBASE_PROJECT_ID && observation.firebaseProject === reviewed.firebaseProject
+    && observation.database === `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)`
+    && observation.database === reviewed.firestoreDatabase && observation.mode === "FIRESTORE_NATIVE"
+    && observation.runtimeIdentity === runtime.client_email && observation.testIdentity === admin.client_email
+    && observation.runtimeIdentity !== observation.testIdentity
+    && observation.runtimeIdentity === reviewed.runtimeIdentity && observation.testIdentity === reviewed.testIdentity
+    && observation.runtimeCredentialHash === fingerprint(env.FIREBASE_SERVICE_ACCOUNT_JSON)
+    && Array.isArray(observation.instances) && observation.instances.length === Number(env.STAGING_REPLICA_COUNT)
+    && observation.instances.length >= 2 && new Set(observation.instances.map((item) => item.id)).size === observation.instances.length
+    && observation.instances.every((item) => /^[a-f0-9-]{36}$/.test(item.id) && item.firestoreReady === true);
+  if (!valid) throw new Error("SCOPE_EVIDENCE_INVALID");
+  if (scope === "frontend-socketio") {
+    const frontend = reviewed.services.find((service) => service.id === observation.frontendServiceId);
+    const redis = reviewed.services.find((service) => service.id === observation.redisServiceId);
+    if (!frontend?.domains?.serviceDomains?.some(({ domain }) => `https://${domain}` === origin(env.STAGING_FRONTEND_ORIGIN))
+      || !redis || production.serviceIds?.includes(observation.redisServiceId)
+      || production.serviceIds?.includes(observation.frontendServiceId)
+      || observation.redisPrivate !== true || observation.redisDedicated !== true
+      || !observation.instances.every((item) => item.redisReady === true)) throw new Error("SCOPE_EVIDENCE_INVALID");
+  }
+  return { observedAt: new Date(now).toISOString(), bindingHash: fingerprint(scopeHashes(env, scope)), observation: structuredClone(observation) };
+}
+
+export function evaluatePreflight(env, isolation, { group = "all", scope, destructive = false, now = Date.now() } = {}) {
   if (!Object.hasOwn(GROUPS, group)) throw new Error("INVALID_GROUP");
+  if (scope !== undefined && (!Object.hasOwn(SCOPES, scope) || group !== "all")) throw new Error("INVALID_SCOPE");
+  const services = scope ? SCOPES[scope] : GROUPS[group];
   const rows = [];
   const targets = serviceTargets(env);
   const add = (name, status, secret = false, configured = false, reason) => rows.push({ name, status, ...(secret ? { configured } : {}), ...(reason ? { reason } : {}) });
@@ -97,7 +148,7 @@ export function evaluatePreflight(env, isolation, { group = "all", destructive =
       && value.client_email?.endsWith(`@${value.project_id}.iam.gserviceaccount.com`)
       && /^-----BEGIN PRIVATE KEY-----[\s\S]+-----END PRIVATE KEY-----\s*$/.test(value.private_key ?? "");
   };
-  for (const service of GROUPS[group]) {
+  for (const service of services) {
     if (service === "backend") {
       check("STAGING_BACKEND_URL", origin);
       check("STAGING_REPLICA_COUNT", (value) => integer(value) && Number(value) >= 2);
@@ -110,7 +161,7 @@ export function evaluatePreflight(env, isolation, { group = "all", destructive =
       check("VITE_SERVER_URL", (value) => origin(value) === targets.backend);
       check("CLIENT_ORIGIN", (value) => value.split(",").every((item) => origin(item.trim()) === targets.frontend));
       check("VITE_FIREBASE_PROJECT_ID", (value) => value === targets.firebase);
-      check("VITE_FIREBASE_STORAGE_BUCKET", (value) => value === targets.storage);
+      if (!scope) check("VITE_FIREBASE_STORAGE_BUCKET", (value) => value === targets.storage);
       check("VITE_FIREBASE_API_KEY", present, { secret: true });
       check("VITE_FIREBASE_AUTH_DOMAIN", (value) => /^[a-z0-9.-]+$/i.test(value));
       check("VITE_FIREBASE_APP_ID");
@@ -167,11 +218,30 @@ export function evaluatePreflight(env, isolation, { group = "all", destructive =
     add(`${service} isolation`, production ? "INVALID" : confirmed ? "PASS" : "NOT CONFIGURED", false, false,
       production ? "PRODUCTION_BLOCKED" : confirmed ? undefined : "ISOLATION_UNCONFIRMED");
   }
-  const targetHashes = Object.fromEntries(GROUPS[group].filter((service) => targets[service] !== undefined).flatMap((service) => [
+  if (scope) {
+    for (const service of GROUPS.all.filter((service) => !services.includes(service))) {
+      const name = scope === "frontend-socketio" && service.startsWith("redis")
+        ? `${service === "redis" ? "REDIS_URL" : "TEST_REDIS_URL"} (local)` : service;
+      add(name, "NOT_APPLICABLE");
+    }
+    if (services.includes("frontend")) add("VITE_FIREBASE_STORAGE_BUCKET", "NOT_APPLICABLE");
+    let valid = false;
+    try {
+      const proof = isolation.scopeEvidence?.[scope];
+      const observedAt = Date.parse(proof?.observedAt);
+      const current = createScopeEvidence(env, isolation, scope, proof.observation, observedAt);
+      valid = Number.isFinite(observedAt) && now >= observedAt && now - observedAt <= SCOPE_EVIDENCE_MAX_AGE_MS
+        && proof.bindingHash === current.bindingHash;
+    } catch { /* Missing, stale or mismatched observations never authorize fixtures. */ }
+    add("Scope live target/identities/database", valid ? "PASS" : "NOT CONFIGURED", false, false,
+      valid ? undefined : "SCOPE_EVIDENCE_UNCONFIRMED");
+    if (scope === "frontend-socketio") add("Redis (Railway private)", valid ? "PASS" : "NOT CONFIGURED");
+  }
+  const targetHashes = Object.fromEntries(services.filter((service) => targets[service] !== undefined).flatMap((service) => [
     [service, fingerprint(targets[service])],
     ...(credentialFingerprint(env, service) ? [[`${service}:credential`, credentialFingerprint(env, service)]] : []),
   ]));
-  return { group, ok: rows.every((row) => row.status === "PASS"), rows, targetHashes };
+  return { group, ...(scope ? { scope } : {}), ok: rows.every((row) => row.status === "PASS" || (scope && row.status === "NOT_APPLICABLE")), rows, targetHashes };
 }
 
 export async function readIsolation(env) {
@@ -196,8 +266,11 @@ async function main() {
     console.log("Isolation template: NOT CONFIGURED; ISOLATION_UNCONFIRMED");
     return;
   }
-  if (args.length) throw new Error("INVALID_ARGUMENTS");
-  const result = evaluatePreflight(process.env, await readIsolation(process.env));
+  let scope, destructive = false;
+  if (args[0] === "--scope" && Object.hasOwn(SCOPES, args[1]) && (args.length === 2 || (args.length === 3 && args[2] === "--require-writes"))) {
+    scope = args[1]; destructive = args.length === 3;
+  } else if (args.length) throw new Error("INVALID_ARGUMENTS");
+  const result = evaluatePreflight(process.env, await readIsolation(process.env), { scope, destructive });
   printPreflight(result);
   process.exitCode = result.ok ? 0 : 2;
 }

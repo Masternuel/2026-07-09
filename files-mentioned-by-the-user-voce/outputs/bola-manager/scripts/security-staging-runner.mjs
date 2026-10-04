@@ -4,8 +4,8 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { GROUPS, evaluatePreflight, readIsolation, printPreflight } from "./security-staging-preflight.mjs";
 import { createReceipt, readReceipt, updateReceipt, openRedis, closeRedis, cleanupRedis } from "./staging/fixtures.mjs";
 
-export async function authorize(env, group) {
-  const result = evaluatePreflight(env, await readIsolation(env), { group, destructive: true });
+export async function authorize(env, group = "all", { scope } = {}) {
+  const result = evaluatePreflight(env, await readIsolation(env), { group, scope, destructive: true });
   if (!result.ok) {
     printPreflight(result);
     throw new Error("STAGING_BLOCKED");
@@ -14,14 +14,15 @@ export async function authorize(env, group) {
 }
 
 export function sameTargets(receipt, result) {
-  return Object.keys(result.targetHashes).length === Object.keys(receipt.targetHashes ?? {}).length
+  return receipt.scope === result.scope
+    && Object.keys(result.targetHashes).length === Object.keys(receipt.targetHashes ?? {}).length
     && Object.entries(result.targetHashes).every(([name, hash]) => receipt.targetHashes[name] === hash);
 }
 
 async function worker(env, group, runId, cleanup) {
   const result = await authorize(env, group);
   const receipt = readReceipt(runId);
-  if (receipt.group !== group || !sameTargets(receipt, result) || receipt.state === "cleaned") throw new Error("RECEIPT_MISMATCH");
+  if (receipt.scope || receipt.group !== group || !sameTargets(receipt, result) || receipt.state === "cleaned") throw new Error("RECEIPT_MISMATCH");
   const providers = await import("./staging/providers.mjs");
   if (cleanup) {
     if (["redis", "ai"].includes(group)) await cleanupRedis(env, receipt);
