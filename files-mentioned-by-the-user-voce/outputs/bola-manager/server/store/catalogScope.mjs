@@ -114,6 +114,34 @@ export async function catalogForRequest(catalogStore, roomStore, request) {
   return catalogForOwner(catalogStore, ownerId);
 }
 
+function freezeReadScope(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freezeReadScope(child);
+  return Object.freeze(value);
+}
+
+export async function rosterScopeForRequest(catalogStore, roomStore, request, clubId) {
+  if (typeof roomStore?.requireRosterReadScope !== "function") {
+    const error = new Error("Estado dos jogadores da sala indisponivel");
+    error.code = "ROOM_PLAYER_STATE_UNAVAILABLE";
+    error.status = 503;
+    throw error;
+  }
+  const uid = request.user?.uid;
+  const roomCode = String(request.query?.roomCode ?? "").trim().toUpperCase();
+  let scope = await roomStore.requireRosterReadScope(roomCode, uid, clubId);
+  let { room } = scope;
+  const ownerId = normalizedOwnerId(room.catalogOwnerId || room.ownerId);
+  const catalog = typeof catalogStore?.forOwner === "function" ? catalogStore.forOwner(ownerId) : catalogStore;
+  await catalog?.readInitialized?.();
+  // Opponents in the same owner's catalog remain visible; another owner's club is never queried.
+  if (typeof catalog?.get === "function") await catalog.get("clubs", clubId);
+  scope = await roomStore.completeRosterReadScope(scope, catalog);
+  ({ room } = scope);
+  return Object.freeze({ uid, roomCode: room.code, saveId: room.id, clubId,
+    room: freezeReadScope(room), runtime: freezeReadScope(scope.runtime), catalog });
+}
+
 export function catalogOwnerId(value) {
   return normalizedOwnerId(value);
 }

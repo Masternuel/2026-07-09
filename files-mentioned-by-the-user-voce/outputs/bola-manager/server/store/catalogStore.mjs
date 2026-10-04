@@ -333,6 +333,37 @@ export class CatalogStore {
     });
   }
 
+  async readInitialized() {
+    if (!this.rootFirestore) return this;
+    if (!this.ownerId) {
+      const current = await this.rootFirestore.collection("brasfootImports").doc("current").get();
+      const generationId = current.data()?.activeGenerationId;
+      this.firestore = generationId
+        ? createGlobalCatalogGenerationFirestore(this.rootFirestore, generationId)
+        : this.scopeFirestore;
+      return this;
+    }
+    const snapshot = await catalogDatabaseDocument(this.rootFirestore, this.ownerId).get();
+    const metadata = snapshot.data();
+    if (metadata?.status === "importing") {
+      throw new CatalogStoreError("A base esta sendo importada. Tente novamente em instantes",
+        "CATALOG_DATABASE_IMPORT_IN_PROGRESS", 409);
+    }
+    if (metadata?.status === "import_failed") {
+      throw new CatalogStoreError("A ultima importacao falhou e a base precisa ser recuperada",
+        "CATALOG_DATABASE_RECOVERY_REQUIRED", 503);
+    }
+    if (metadata?.initialized !== true) {
+      throw new CatalogStoreError("A base precisa ser inicializada antes da leitura",
+        "CATALOG_DATABASE_NOT_INITIALIZED", 503);
+    }
+    this.generationId = metadata.activeGenerationId ?? null;
+    this.firestore = this.generationId
+      ? createScopedCatalogFirestore(this.rootFirestore, this.ownerId, this.generationId)
+      : this.scopeFirestore;
+    return this;
+  }
+
   async ensureInitialized() {
     if (!this.rootFirestore) return this;
     if (!this.ownerId) {

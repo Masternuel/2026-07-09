@@ -193,6 +193,25 @@ function withMetadataCounts(room, metadata) {
   };
 }
 
+function readProjectionPaths(metadata, sections, containers, paths, legacyPaths) {
+  const requested = new Set(paths);
+  const hasCareer = containers.some((container) => container.path === "careerState")
+    || sections.some((section) => section.path === "careerState" || section.path.startsWith("careerState."));
+  if (metadata.status === "active" && !hasCareer && !metadata.completedFixtureCount) {
+    for (const path of legacyPaths) requested.add(path);
+    for (const section of sections) {
+      if (legacyPaths.some((path) => section.path === path || section.path.startsWith(`${path}.`))) requested.add(section.path);
+    }
+  }
+  return requested;
+}
+
+function projectionContainers(containers, paths) {
+  return containers.filter((container) => [...paths].some((path) => (
+    path === container.path || path.startsWith(`${container.path}.`)
+  )));
+}
+
 const DERIVED_COUNT_PATHS = new Map([
   ["completedFixtureCount", "completedFixtureIds"],
   ["completedMatchCount", "completedMatches"],
@@ -267,15 +286,18 @@ export class MemoryRoomPersistence {
     return withMetadataCounts(room, roomMetadataDocument(source));
   }
 
-  async getPaths(code, paths = []) {
+  async getPaths(code, paths = [], { readOnly = false, legacyPaths = [] } = {}) {
     const room = clone(this.#rooms.get(code));
     if (!room) return null;
     const requested = new Set(paths.map((path) => String(path ?? "").trim()).filter(Boolean));
     const split = splitRoomDomains(room);
+    const projected = readOnly
+      ? readProjectionPaths(split.metadata, split.sections, split.containers, requested, legacyPaths)
+      : requested;
     return withMetadataCounts(rebuildRoomFromSections(
       split.metadata,
-      [],
-      split.sections.filter((section) => requested.has(section.path)),
+      readOnly ? projectionContainers(split.containers, projected) : [],
+      split.sections.filter((section) => projected.has(section.path)),
     ), split.metadata);
   }
 
@@ -2699,11 +2721,13 @@ export class FirestoreRoomPersistence {
     throw persistenceError("SAVE_INCOMPLETE", "Nao foi possivel obter uma geracao consistente do save");
   }
 
-  async getPaths(code, paths = []) {
+  async getPaths(code, paths = [], { readOnly = false, legacyPaths = [] } = {}) {
+    // Catalog GETs must not acquire migration/recovery/maintenance leases.
+    if (readOnly) return this.#getPaths(code, paths, { readOnly, legacyPaths });
     return this.#withRecovery(code, () => this.#getPaths(code, paths));
   }
 
-  async #getPaths(code, paths = []) {
+  async #getPaths(code, paths = [], { readOnly = false, legacyPaths = [] } = {}) {
     const reference = this.#collection.doc(code);
     const requestedPaths = [...new Set(paths.map((path) => String(path ?? "").trim()).filter(Boolean))];
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2712,11 +2736,29 @@ export class FirestoreRoomPersistence {
       if (!stored || isDeletedRoom(stored)) return null;
       assertV2DocumentIntegrity(stored);
       if (!isV2Document(stored)) {
+        if (readOnly) {
+          const legacy = await roomFromStoredDocument(stored, {
+            collection: this.#payloadCollection,
+            get: (chunkReference) => chunkReference.get(),
+          });
+          const split = splitRoomDomains(legacy);
+          const projected = readProjectionPaths(split.metadata, split.sections, split.containers, requestedPaths, legacyPaths);
+          return withMetadataCounts(rebuildRoomFromSections(split.metadata,
+            projectionContainers(split.containers, projected),
+            split.sections.filter((section) => projected.has(section.path))), split.metadata);
+        }
         await this.#migrateLegacy(reference, stored);
         continue;
       }
       try {
-        return await loadV2Room(this.#firestore, reference, stored, requestedPaths);
+        const projected = readOnly
+          ? readProjectionPaths(stored, sectionDescriptors(stored), stored.roomContainers ?? [], requestedPaths, legacyPaths)
+          : new Set(requestedPaths);
+        const room = await loadV2Room(this.#firestore, reference, stored, [...projected]);
+        if (!readOnly) return room;
+        // Empty aggregates are meaningful: an existing empty career is not a missing career.
+        return { ...rebuildRoomFromSections(stored,
+          projectionContainers(stored.roomContainers ?? [], projected), []), ...room };
       } catch (error) {
         if (error?.code !== "SAVE_INCOMPLETE" || attempt === 2) throw error;
       }

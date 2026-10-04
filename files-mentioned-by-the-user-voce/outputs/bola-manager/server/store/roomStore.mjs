@@ -1508,6 +1508,27 @@ const VIEWER_EXCLUDED_PATHS = Object.freeze([
   "tacticalStudyState",
 ]);
 
+const ROSTER_READ_PATHS = Object.freeze([
+  "competitionCatalog", "tournamentCatalog", "playerStates", "clubMoraleStates",
+  "marketState.registrations", "careerState.players", "careerState.roster",
+  "careerState.trainingPlans", "careerState.currentSeason",
+]);
+
+function clubRuntimeState(room, clubId) {
+  const state = (room.clubMoraleStates ?? []).find(
+    (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
+  );
+  return {
+    currentSeason: room.currentSeason ?? 1,
+    playerStates: (room.playerStates ?? []).filter(
+      (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
+    ),
+    moraleState: state ?? {
+      clubId, active: false, score: 70, playerDeltas: [], updatedAt: null, sourceMatchId: null,
+    },
+  };
+}
+
 // Private coach career reads use only the aggregates consumed by
 // buildCoachCareerSnapshot. Composite aggregates are persisted one child per
 // section, therefore their child paths must be explicit here. In particular,
@@ -1769,15 +1790,44 @@ export class RoomStore {
     return viewerProjection(room);
   }
 
-  async requireMembershipPaths(code, managerId, paths) {
+  async requireMembershipPaths(code, managerId, paths, options = {}) {
     const normalizedCode = this.#normalizeCode(code);
     const room = typeof this.#persistence.getPaths === "function"
-      ? await this.#persistence.getPaths(normalizedCode, paths)
+      ? await this.#persistence.getPaths(normalizedCode, paths, options)
       : await this.#persistence.get(normalizedCode);
     if (!room || !Array.isArray(room.managerIds) || !room.managerIds.includes(managerId)) {
       throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
     }
     return room;
+  }
+
+  async requireRosterReadScope(code, managerId, clubId) {
+    const room = await this.requireMembershipPaths(code, managerId, ROSTER_READ_PATHS, {
+      readOnly: true, legacyPaths: ["clubCareerState.currentDate", "clubCareerState.clubFacilities",
+        "clubCareerState.staffMembers", "clubCareerState.staffContracts", "clubCareerState.staffCandidates",
+        "clubCareerState.staffInitializedClubIds", "clubCareerState.staffSchemaVersion"],
+    });
+    // Reuse the existing legacy registration interpreter, only on this detached projection.
+    room.currentSeason = Number.isInteger(room.currentSeason) && room.currentSeason > 0
+      ? room.currentSeason : 1;
+    if (room.status === "active") ensureMarketState(room, careerDateFor(room, this.#now()));
+    return { room, runtime: clubRuntimeState(room, clubId) };
+  }
+
+  async completeRosterReadScope(scope, catalog) {
+    const { room } = scope;
+    if (room.status !== "active" || room.careerState || room.completedFixtureCount > 0) return scope;
+    const managerClubIds = (room.managers ?? []).map((manager) => manager.clubId).filter(Boolean);
+    const [competitions, tournaments] = await Promise.all([
+      this.#loadCompetitionCatalog(room.catalogOwnerId || room.ownerId, room.activeLeagues, managerClubIds, catalog),
+      this.#loadTournamentCatalog(room.catalogOwnerId || room.ownerId, managerClubIds, catalog),
+    ]);
+    if (competitions.length === 0 && tournaments.length === 0) return scope;
+    const candidate = { ...room, competitionCatalog: competitions.length ? competitions : room.competitionCatalog,
+      tournamentCatalog: tournaments };
+    const roster = await this.#loadCareerRoster(candidate, catalog);
+    if (roster.length) candidate.careerState = initialCareerState(candidate, roster);
+    return { ...scope, room: candidate };
   }
 
   async requireRoom(code) {
@@ -4067,23 +4117,7 @@ export class RoomStore {
 
   async getClubRuntimeState(code, managerId, clubId) {
     const room = await this.requireMembership(code, managerId);
-    const state = (room.clubMoraleStates ?? []).find(
-      (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
-    );
-    return this.#snapshot({
-      currentSeason: room.currentSeason ?? 1,
-      playerStates: (room.playerStates ?? []).filter(
-        (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
-      ),
-      moraleState: state ?? {
-        clubId,
-        active: false,
-        score: 70,
-        playerDeltas: [],
-        updatedAt: null,
-        sourceMatchId: null,
-      },
-    });
+    return this.#snapshot(clubRuntimeState(room, clubId));
   }
 
   async #marketCatalog(room) {

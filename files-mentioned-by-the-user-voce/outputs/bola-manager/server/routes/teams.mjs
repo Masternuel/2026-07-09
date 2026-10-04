@@ -12,7 +12,7 @@ import {
   moraleLabel,
 } from "../services/pressConference.mjs";
 import { CatalogStore } from "../store/catalogStore.mjs";
-import { catalogForRequest } from "../store/catalogScope.mjs";
+import { catalogForRequest, rosterScopeForRequest } from "../store/catalogScope.mjs";
 
 const querySchema = z.object({
   country: z.string().trim().min(2).max(60).optional(),
@@ -120,31 +120,15 @@ export function createTeamsRouter(firestore, injectedCatalogStore, roomStore = n
   router.get("/:clubId/players", asyncRoute(async (request, response) => {
     const clubId = parseOrThrow(editorRecordIdSchema, request.params.clubId);
     const scope = parseOrThrow(roomScopeSchema, request.query);
-    const activeCatalog = await catalogForRequest(catalogStore, roomStore, request);
     if (!scope.roomCode) {
+      const activeCatalog = await catalogForRequest(catalogStore, roomStore, request);
       const roster = await activeCatalog.listPlayers(clubId);
       response.json(roster);
       return;
     }
-    if (
-      typeof roomStore?.getClubRuntimeState !== "function"
-      && typeof roomStore?.getClubMoraleState !== "function"
-    ) {
-      const error = new Error("Estado dos jogadores da sala indisponivel");
-      error.code = "ROOM_PLAYER_STATE_UNAVAILABLE";
-      error.status = 503;
-      throw error;
-    }
-    const runtime = typeof roomStore.getClubRuntimeState === "function"
-      ? await roomStore.getClubRuntimeState(scope.roomCode, request.user?.uid, clubId)
-      : {
-        currentSeason: 1,
-        playerStates: [],
-        moraleState: await roomStore.getClubMoraleState(scope.roomCode, request.user?.uid, clubId),
-      };
-    const roomSnapshot = runtime.marketState || typeof roomStore?.requireMembership !== "function"
-      ? runtime
-      : await roomStore.requireMembership(scope.roomCode, request.user?.uid);
+    const { catalog: activeCatalog, room: roomSnapshot, runtime } = await rosterScopeForRequest(
+      catalogStore, roomStore, request, clubId,
+    );
     const roster = await listRoomPlayers(activeCatalog, roomSnapshot, clubId);
     const state = runtime.moraleState;
     const playerDeltas = new Map((state.playerDeltas ?? []).map((player) => [player.playerId, player.delta]));
