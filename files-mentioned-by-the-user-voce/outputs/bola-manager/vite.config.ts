@@ -2,6 +2,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { HTTP_CSP } from './shared/imagePolicy.mjs';
 import { SECURITY_HEADERS } from './shared/securityHeaders.mjs';
 
@@ -10,7 +11,7 @@ const projectRoot = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root: projectRoot,
   envDir: process.env.BOLA_ENV_FILES === 'false' ? false : projectRoot,
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {
       output: {

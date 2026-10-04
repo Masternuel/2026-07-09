@@ -1,4 +1,5 @@
 import { build, preview } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 import { CatalogStore } from '../server/store/catalogStore.mjs';
 import { RoomStore } from '../server/store/roomStore.mjs';
@@ -29,7 +30,7 @@ export default async function setup() {
     // Never load .env or production credentials; replace only the entry's auth adapter.
     await build({ root, configFile: false, envFile: false, envPrefix: '__E2E_NO_CLIENT_ENV__', logLevel: 'warn',
       esbuild: { jsx: 'automatic' },
-      plugins: [{ name: 'isolated-e2e-auth', enforce: 'pre', transform(source, id) {
+      plugins: [tailwindcss(), { name: 'isolated-e2e-auth', enforce: 'pre', transform(source, id) {
         if (!id.replaceAll('\\', '/').endsWith('/src/main.tsx')) return;
         const result = source.replace(/from ['"]\.\/auth\/AuthContext['"]/, "from '../e2e/AuthProvider'");
         if (result === source) throw new Error('Não foi possível isolar AuthProvider no build E2E');

@@ -6,6 +6,8 @@ Vertical slice full-stack de um jogo de gerenciamento de futebol brasileiro no n
 
 Requisitos: Node.js 20.9+ e npm (incluindo dependências opcionais nativas do `sharp`).
 
+Frontend: Chrome/Edge 111+, Safari 16.4+ ou Firefox 128+ (mínimos do Tailwind CSS 4). O build usa `@tailwindcss/vite`; `tailwind.config.js` continua carregado explicitamente pelo CSS para preservar o tema existente.
+
 ```bash
 npm install
 npm run dev
