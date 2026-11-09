@@ -1,0 +1,11 @@
+{
+  "format": "BOLASV01/v1",
+  "createdWith": {
+    "electron": "44.10.2",
+    "node": "24.22.2",
+    "v8": "15.2.124.45-electron.0"
+  },
+  "stateSha256": "ce3a61dfc36cd2a7cebd5762869b595ad80bfaaea28667fb9cf88cb84c9f1e79",
+  "fileSha256": "eddb4b1491f36c2968c359452c70c30fedc6c25101062bb94b8fb0cc4db1363a",
+  "profileUid": "local-fixture-0001"
+}
