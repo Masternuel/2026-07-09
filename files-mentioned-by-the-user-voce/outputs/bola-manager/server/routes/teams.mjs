@@ -71,6 +71,10 @@ export function createTeamsRouter(firestore, injectedCatalogStore, roomStore = n
       }
     }
     const activeCatalog = await catalogForRequest(catalogStore, roomStore, request);
+    if (typeof activeCatalog?.listTeams === "function") {
+      response.json(await activeCatalog.listTeams(filters));
+      return;
+    }
     if (!activeCatalog?.firestore) {
       response.json({ teams: [], count: 0, nextCursor: null, source: "brasfoot-not-loaded" });
       return;

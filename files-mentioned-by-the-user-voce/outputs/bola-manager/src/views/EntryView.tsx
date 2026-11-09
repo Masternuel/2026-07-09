@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, BadgeCheck, Eye, EyeOff, Goal, Mail, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Eye, EyeOff, Mail, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { Button } from '../components/shared/Button';
 import { ClubMark } from '../components/shared/ClubMark';
+import { BrandLogo } from '../components/shared/BrandLogo';
 import { useAuth } from '../hooks/useAuth';
 
 interface EntryViewProps {
@@ -52,8 +53,7 @@ export function EntryView({ onAuthenticated }: EntryViewProps) {
       <section className="entry-hero" aria-label="Apresentação do Bola Manager">
         <div className="entry-hero__grid" aria-hidden="true" />
         <header className="entry-brand">
-          <span className="wordmark-glyph"><Goal size={19} /></span>
-          <span>BOLA<span>MANAGER</span></span>
+          <BrandLogo />
           <small>Temporada 2026</small>
         </header>
 
@@ -89,6 +89,13 @@ export function EntryView({ onAuthenticated }: EntryViewProps) {
             <p>{creatingAccount ? 'Cadastre seu e-mail para criar salas persistentes.' : 'Entre para continuar sua carreira ou experimente a temporada do Aurora FC.'}</p>
           </div>
 
+          {auth.desktopAvailable ? <>
+            <p>Modo offline. Perfil e carreiras salvos neste computador.</p>
+            <Button variant="primary" onClick={() => void auth.startLocal().then(onAuthenticated).catch(() => undefined)} icon={<ArrowRight size={16} />}>
+              Jogar offline
+            </Button>
+            {auth.error && <p className="auth-error" role="alert">{auth.error}</p>}
+          </> : <>
           <form onSubmit={handleSubmit} className="auth-form">
             <label>
               <span>E-mail</span>
@@ -126,6 +133,7 @@ export function EntryView({ onAuthenticated }: EntryViewProps) {
             <ArrowRight size={17} />
           </button>
           <p className="auth-terms">Ao continuar, você aceita os <a href="#termos">Termos de uso</a> e a <a href="#privacidade">Política de privacidade</a>.</p>
+          </>}
         </div>
       </section>
     </main>

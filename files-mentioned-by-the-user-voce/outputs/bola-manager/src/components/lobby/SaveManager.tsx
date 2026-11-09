@@ -3,6 +3,7 @@ import { CalendarDays, Gamepad2, Play, Plus, Trash2, Users } from 'lucide-react'
 import type { ManagerIdentity, Room } from '../../types';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
+import { formatMetadataCount, formatSaveDate, roomTimestamp, saveMetadata } from '../menu/mainMenuModel';
 
 interface SaveManagerProps {
   saves: Room[];
@@ -12,30 +13,6 @@ interface SaveManagerProps {
   onDelete: (code: string) => Promise<void>;
   onCreateNew: () => void;
   onToast: (message: string) => void;
-}
-
-const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
-  dateStyle: 'short',
-  timeStyle: 'short',
-});
-
-function roomTimestamp(room: Room) {
-  const timestamp = Date.parse(room.updatedAt ?? room.createdAt);
-  return Number.isNaN(timestamp) ? 0 : timestamp;
-}
-
-function formatRoomDate(room: Room) {
-  const timestamp = roomTimestamp(room);
-  return timestamp ? dateFormatter.format(timestamp) : 'Data indisponível';
-}
-
-function completedGames(room: Room) {
-  return Math.max(
-    room.completedFixtureCount ?? 0,
-    room.completedMatchCount ?? 0,
-    room.completedFixtureIds?.length ?? 0,
-    room.completedMatches?.length ?? 0,
-  );
 }
 
 export function SaveManager({
@@ -48,7 +25,7 @@ export function SaveManager({
   onToast,
 }: SaveManagerProps) {
   const sortedSaves = useMemo(
-    () => [...saves].sort((left, right) => roomTimestamp(right) - roomTimestamp(left)),
+    () => [...saves].sort((left, right) => (roomTimestamp(right) ?? Number.NEGATIVE_INFINITY) - (roomTimestamp(left) ?? Number.NEGATIVE_INFINITY)),
     [saves],
   );
   const [selectedCode, setSelectedCode] = useState<string | null>(sortedSaves[0]?.code ?? null);
@@ -161,7 +138,8 @@ export function SaveManager({
           {sortedSaves.map((room) => {
             const selected = selectedCode === room.code;
             const owner = room.ownerId === identity.uid;
-            const statusLabel = room.status === 'active' ? 'Em andamento' : 'Preparação';
+            const metadata = saveMetadata(room);
+            const statusLabel = metadata.statusLabel;
 
             return (
               <article
@@ -178,13 +156,13 @@ export function SaveManager({
                 >
                   <span className="save-manager__title-row">
                     <span className="save-manager__name">{room.name}</span>
-                    <span className={`save-manager__status save-manager__status--${room.status}`}>{statusLabel}</span>
+                    <span className={`save-manager__status save-manager__status--${metadata.status}`}>{statusLabel}</span>
                   </span>
                   <span className="save-manager__code">{room.code}</span>
                   <span className="save-manager__metrics">
-                    <span><CalendarDays size={14} aria-hidden="true" /> {formatRoomDate(room)}</span>
+                    <span><CalendarDays size={14} aria-hidden="true" /> {formatSaveDate(room)}</span>
                     <span><Users size={14} aria-hidden="true" /> {room.managers.length}/{room.maxManagers} managers</span>
-                    <span><Gamepad2 size={14} aria-hidden="true" /> {completedGames(room)} jogos</span>
+                    <span><Gamepad2 size={14} aria-hidden="true" /> {metadata.completedFixtures === null ? 'Jogos não informados' : `${formatMetadataCount(metadata.completedFixtures)} jogos concluídos`}</span>
                   </span>
                   {selected && <span className="sr-only">Save selecionado</span>}
                 </button>

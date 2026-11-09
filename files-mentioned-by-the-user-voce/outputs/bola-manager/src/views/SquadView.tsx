@@ -178,7 +178,7 @@ export function SquadView({ players, club, room, socket, managerId, careerState 
   return (
     <main className="squad-view view-enter">
       <div className="view-heading">
-        <div><p className="eyebrow">{showAcademy ? 'CATEGORIAS DE BASE' : 'ELENCO PRINCIPAL'} · {rosterPlayers.length} ATLETAS</p><h1>{showAcademy ? 'Sub-20' : 'Elenco'}</h1><p>{showAcademy ? 'Talentos do save, potencial e promoção ao time principal.' : `Condição, contratos e treino antes da rodada ${season.currentRound}.`}</p></div>
+        <div><h1>{showAcademy ? 'Sub-20' : 'Elenco'}</h1><p>{rosterPlayers.length} atletas · {showAcademy ? 'Potencial e promoção ao principal' : `Rodada ${season.currentRound}`}</p></div>
         <div className="view-heading__actions"><Button variant="secondary" disabled title="Relatório do auxiliar ainda não possui serviço persistido" icon={<Filter size={15} />}>Relatório indisponível</Button><Button variant="primary" loading={careerState.loading} icon={<Users size={15} />} onClick={() => { setShowAcademy((current) => !current); setSelectedPlayerId(null); }}>{showAcademy ? 'Ver principal' : `Ver Sub-20 (${enrichedPlayers.filter((player) => player.academy).length})`}</Button></div>
       </div>
 

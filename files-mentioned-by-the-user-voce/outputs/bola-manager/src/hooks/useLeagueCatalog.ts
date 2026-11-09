@@ -43,7 +43,7 @@ export function useLeagueCatalog(roomCode?: string | null) {
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    if (auth.status !== 'authenticated' || !auth.identity || auth.identity.mode !== 'firebase') {
+    if (auth.status !== 'authenticated' || !auth.identity || auth.identity.mode === 'demo') {
       setRemoteLeagues([]);
       setLoaded(false);
       setLoading(false);

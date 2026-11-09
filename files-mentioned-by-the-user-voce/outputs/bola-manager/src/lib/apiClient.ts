@@ -78,7 +78,7 @@ function downloadFilename(contentDisposition: string | null) {
 }
 
 async function firebaseAuthorization(credentials: ApiCredentials, signal?: AbortSignal) {
-  if (credentials.identity.mode !== 'firebase') return null;
+  if (credentials.identity.mode === 'demo') return null;
   const controller = new AbortController();
   let timedOut = false;
   const abort = () => controller.abort();

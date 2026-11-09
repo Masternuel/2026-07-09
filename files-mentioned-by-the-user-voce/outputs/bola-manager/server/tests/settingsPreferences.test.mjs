@@ -56,6 +56,7 @@ test("normaliza preferencias remotas desconhecidas para o schema vigente", () =>
       locale: "pt-BR",
       region: "south-america",
     },
+    audio: { ...preferences.DEFAULT_USER_PREFERENCES.audio },
   });
 });
 

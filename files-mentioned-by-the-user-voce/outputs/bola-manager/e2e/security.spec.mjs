@@ -6,7 +6,7 @@ test('HTTP CSP bloqueia iframe externo e preserva abertura direta', async ({ pag
   const direct = await page.goto('/');
   expect(direct.headers()['content-security-policy']).toBe(HTTP_CSP);
   expect(direct.headers()['x-frame-options']).toBe('DENY');
-  await expect(page.getByRole('tab', { name: 'Criar sala', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Menu principal', exact: true }).getByRole('button', { name: 'Novo Jogo', exact: true })).toBeVisible();
   // Different origin, same network address space: exercise framing, not Chrome's LNA guard.
   const outer = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html' });
@@ -19,7 +19,7 @@ test('HTTP CSP bloqueia iframe externo e preserva abertura direta', async ({ pag
     await blocked;
     expect(page.frames().some((frame) => frame.url() === `${baseURL}/`)).toBe(false);
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Criar sala', exact: true })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Menu principal', exact: true }).getByRole('button', { name: 'Novo Jogo', exact: true })).toBeVisible();
   } finally {
     await new Promise((resolve) => { outer.close(resolve); outer.closeAllConnections(); });
   }

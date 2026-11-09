@@ -1,4 +1,4 @@
-import { Bell, CalendarClock, ChevronDown, Menu, Moon, Search, Sun } from 'lucide-react';
+import { Bell, CalendarClock, ChevronDown, Menu, Moon, Sun } from 'lucide-react';
 import { routeLabels } from '../../constants/navItems';
 import type { ThemePreference } from '../../preferences/userPreferences';
 import type { ClubChoice, ManagerIdentity, RoomFixture, RouteKey } from '../../types';
@@ -37,6 +37,12 @@ export function Header({ route, club, manager, nextFixture, seasonYear, hasClub 
   const safeCommitmentLabel = safeText(commitmentLabel, '');
   const clubName = hasClub ? safeText(club?.name, 'Clube') : 'Carreira do treinador';
   const managerName = safeText(manager?.displayName, 'Manager');
+  const accountLabel = manager.mode === 'firebase' ? 'Conta conectada'
+    : manager.mode === 'local' ? 'Perfil local'
+      : manager.mode === 'peer' ? 'Convidado P2P' : 'Demonstração';
+  const accountDetail = manager.mode === 'firebase' ? 'Conta Firebase'
+    : manager.mode === 'local' ? 'Perfil local · seu computador'
+      : manager.mode === 'peer' ? 'Convidado P2P · save no anfitrião' : 'Modo demonstração';
   const fixtureRound = Number.isFinite(Number(nextFixture?.round)) && Number(nextFixture?.round) > 0
     ? Math.trunc(Number(nextFixture?.round))
     : null;
@@ -66,12 +72,11 @@ export function Header({ route, club, manager, nextFixture, seasonYear, hasClub 
         <Badge tone={hasCommitmentAction ? 'warning' : 'info'}>{safeCommitmentLabel ? 'continuar' : scheduledLabel ?? (nextFixture ? 'data pendente' : 'aguardando')}</Badge>
       </button>
       <div className="topbar__actions">
-        <button className="icon-button search-button" aria-label="Busca global indisponível" title="Busca global ainda não disponível" disabled><Search size={17} /></button>
         <button className="icon-button" onClick={onToggleTheme} disabled={themeBusy} aria-label={lightMode ? 'Ativar tema escuro' : 'Ativar tema claro'} title={`Tema atual: ${themePreference === 'system' ? `sistema (${lightMode ? 'claro' : 'escuro'})` : lightMode ? 'claro' : 'escuro'}`}>{lightMode ? <Moon size={17} /> : <Sun size={17} />}</button>
         <button className="icon-button notification-button" aria-label="Abrir configurações de notificações" onClick={() => onNavigate('settings')}><Bell size={17} /></button>
-        <button className="manager-menu" onClick={() => onNavigate('settings')} aria-label="Abrir configurações da conta">
+        <button className="manager-menu" onClick={() => onNavigate('settings')} aria-label={`Abrir configurações da conta · ${accountDetail}`} title={accountDetail}>
           <span className="avatar">{managerName.slice(0, 2).toLocaleUpperCase('pt-BR')}</span>
-          <span><strong>{managerName}</strong><small>{manager.mode === 'firebase' ? 'Conta Firebase' : 'Modo demonstração'}</small></span>
+          <span><strong>{managerName}</strong><small>{accountLabel}</small></span>
           <ChevronDown size={14} />
         </button>
       </div>

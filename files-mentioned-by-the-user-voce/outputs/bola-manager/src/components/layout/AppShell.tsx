@@ -5,7 +5,7 @@ import { BottomBar } from './BottomBar';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { useUserPreferences } from '../../preferences/UserPreferencesContext';
-import { foregroundForAccent, hoverForAccent, resolveClubThemeColors } from '../../utils/clubThemeColors';
+import { clubIdentitySurfaces, foregroundForAccent, hoverForAccent, resolveClubIdentityColor, resolveClubThemeColors } from '../../utils/clubThemeColors';
 
 interface AppShellProps {
   route: RouteKey;
@@ -23,11 +23,18 @@ interface AppShellProps {
 export function appShellThemeStyle(club: ClubChoice, lightMode: boolean): CSSProperties {
   const themeColors = resolveClubThemeColors(club);
   const accent = lightMode ? themeColors.lightThemeColor : themeColors.darkThemeColor;
+  const identity = resolveClubIdentityColor(club, lightMode);
+  const surfaces = clubIdentitySurfaces(identity, lightMode);
   const onAccent = foregroundForAccent(accent);
   const lineOpacity = lightMode ? 30 : 34;
   const softLineOpacity = lightMode ? 17 : 20;
   const strongLineOpacity = lightMode ? 44 : 48;
   return {
+    '--club-color': identity,
+    '--on-club-color': foregroundForAccent(identity),
+    '--canvas': surfaces.canvas,
+    '--club-menu': surfaces.menu,
+    '--club-menu-inset': surfaces.menuInset,
     '--accent': accent,
     '--on-accent': onAccent,
     '--accent-hover': hoverForAccent(accent, onAccent),

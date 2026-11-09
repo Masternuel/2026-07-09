@@ -19,6 +19,14 @@ export interface ClubThemeColors {
   lightThemeColor: string;
 }
 
+export function clubIdentitySurfaces(identity: string, lightMode: boolean) {
+  return {
+    canvas: mixHexColors(lightMode ? LIGHT_THEME_CANVAS : DARK_THEME_CANVAS, identity, lightMode ? 0.07 : 0.15),
+    menu: mixHexColors(lightMode ? '#f5f7f3' : '#131518', identity, lightMode ? 0.12 : 0.22),
+    menuInset: mixHexColors(lightMode ? '#edf0eb' : '#101214', identity, lightMode ? 0.06 : 0.09),
+  };
+}
+
 export function normalizeHexColor(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
@@ -50,20 +58,51 @@ export function contrastRatio(foreground: unknown, background: unknown): number 
   return (lightest + 0.05) / (darkest + 0.05);
 }
 
+function isChromatic(color: string) {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+  return Math.max(...channels) - Math.min(...channels) >= 12;
+}
+
 function accessibleLegacyAccent(primary: string | null, canvas: string, fallback: string) {
-  return primary && contrastRatio(primary, canvas) >= 4.5 ? primary : fallback;
+  if (!primary) return fallback;
+  if (contrastRatio(primary, canvas) >= 4.5) return primary;
+  if (!isChromatic(primary)) return fallback;
+  // Keep the identity hue while making legacy colors readable on each canvas.
+  const toward = relativeLuminance(canvas)! < 0.5 ? '#ffffff' : '#000000';
+  for (let step = 1; step <= 100; step += 1) {
+    const candidate = mixHexColors(primary, toward, step / 100);
+    if (contrastRatio(candidate, canvas) >= 4.5) return candidate;
+  }
+  return fallback;
 }
 
 export function resolveClubThemeColors(input: ClubThemeColorInput): ClubThemeColors {
   const primary = normalizeHexColor(input.color);
   const explicitDark = normalizeHexColor(input.darkThemeColor);
   const explicitLight = normalizeHexColor(input.lightThemeColor);
+  const legacyCanvas = (lightMode: boolean) => {
+    if (!primary || !isChromatic(primary)) return lightMode ? LIGHT_THEME_CANVAS : DARK_THEME_CANVAS;
+    const surfaces = clubIdentitySurfaces(primary, lightMode);
+    return Object.values(surfaces).reduce((leastContrast, surface) => (
+      (relativeLuminance(surface)! - relativeLuminance(leastContrast)!) * (lightMode ? -1 : 1) > 0
+        ? surface : leastContrast
+    ));
+  };
   return {
     darkThemeColor: explicitDark
-      ?? accessibleLegacyAccent(primary, DARK_THEME_CANVAS, DARK_THEME_FALLBACK),
+      ?? accessibleLegacyAccent(primary, legacyCanvas(false), DARK_THEME_FALLBACK),
     lightThemeColor: explicitLight
-      ?? accessibleLegacyAccent(primary, LIGHT_THEME_CANVAS, LIGHT_THEME_FALLBACK),
+      ?? accessibleLegacyAccent(primary, legacyCanvas(true), LIGHT_THEME_FALLBACK),
   };
+}
+
+export function resolveClubIdentityColor(input: ClubThemeColorInput, lightMode: boolean): string {
+  const explicit = normalizeHexColor(lightMode ? input.lightThemeColor : input.darkThemeColor);
+  if (explicit) return explicit;
+  const primary = normalizeHexColor(input.color);
+  if (primary && isChromatic(primary)) return primary;
+  const colors = resolveClubThemeColors(input);
+  return lightMode ? colors.lightThemeColor : colors.darkThemeColor;
 }
 
 export function foregroundForAccent(accent: unknown): string {

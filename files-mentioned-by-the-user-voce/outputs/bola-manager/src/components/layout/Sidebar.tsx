@@ -1,10 +1,11 @@
-import { CheckCircle2, Goal, LogOut } from 'lucide-react';
+import { CheckCircle2, LogOut } from 'lucide-react';
 import { navItems } from '../../constants/navItems';
 import type { ClubChoice, Room, RouteKey } from '../../types';
 import { cx } from '../../utils/formatters';
 import { findRoomLeagueForClub } from '../../utils/leagueStandings';
 import { getSeasonProgress } from '../../utils/seasonProgress';
 import { ClubMark } from '../shared/ClubMark';
+import { BrandLogo } from '../shared/BrandLogo';
 
 interface SidebarProps {
   activeRoute: RouteKey;
@@ -51,7 +52,7 @@ export function Sidebar({ activeRoute, club, room, hasClub = true, matchAvailabl
     <>
       <button className={cx('sidebar-backdrop', open && 'is-open')} onClick={onClose} aria-label="Fechar menu" />
       <aside className={cx('sidebar', open && 'is-open')}>
-        <div className="sidebar__wordmark"><span className="wordmark-glyph"><Goal size={16} /></span><strong>BOLA<span>MANAGER</span></strong></div>
+        <div className="sidebar__wordmark"><BrandLogo /></div>
         <div className="club-switcher" aria-label={`Clube atual: ${clubName}`}>
           <ClubMark code={clubCode} color={safeText(club?.color, '#6b7280')} darkThemeColor={safeText(club?.darkThemeColor) || null} lightThemeColor={safeText(club?.lightThemeColor) || null} imageUrl={safeText(club?.crestImageUrl) || null} size="sm" />
           <span><strong>{clubName}</strong><small>{hasClub ? leagueLabel : 'Disponível no mercado'}</small></span>

@@ -534,6 +534,8 @@ export function MatchView({
 
   return (
     <main className="match-view view-enter">
+      {finished && <section className="final-whistle"><span className="final-whistle__icon"><Goal size={22} /></span><div><p className="eyebrow">APITO FINAL</p><h2>{homeTeam} {score[0]}–{score[1]} {awayTeam}.</h2><p>{managedClubInFixture ? 'A imprensa já prepara a coletiva pós-jogo.' : 'Partida dos outros managers encerrada.'}</p></div><div className="final-whistle__actions"><Button variant="primary" icon={<Flag size={15} />} onClick={() => { if (onlineMatch && !managedClubInFixture) onlineMatch.reset(); onNavigate(managedClubInFixture ? 'press-conference' : 'home'); }}>{managedClubInFixture ? 'Ir para a coletiva' : 'Voltar à central'}</Button></div></section>}
+
       <MatchScore
         minute={currentMinute}
         score={score}
@@ -675,8 +677,6 @@ export function MatchView({
       {finished && roundSummary && (
         <RoundResultsPanel summary={roundSummary} managedClubIds={[club.id, club.code]} />
       )}
-
-      {finished && <section className="final-whistle"><span className="final-whistle__icon"><Goal size={22} /></span><div><p className="eyebrow">APITO FINAL</p><h2>{homeTeam} {score[0]}–{score[1]} {awayTeam}.</h2><p>{managedClubInFixture ? 'A imprensa já prepara a coletiva pós-jogo.' : 'Partida dos outros managers encerrada.'}</p></div><div className="final-whistle__actions"><Button variant="primary" icon={<Flag size={15} />} onClick={() => { if (onlineMatch && !managedClubInFixture) onlineMatch.reset(); onNavigate(managedClubInFixture ? 'press-conference' : 'home'); }}>{managedClubInFixture ? 'Ir para a coletiva' : 'Voltar à central'}</Button></div></section>}
 
       <Modal open={subOpen} onClose={() => setSubOpen(false)} title="Fazer substituição" eyebrow={`${club.name.toLocaleUpperCase('pt-BR')} · ${currentMinute} MIN · ${displaySubstitutionCount}/5`} footer={<><Button variant="ghost" onClick={() => setSubOpen(false)}>Cancelar</Button><Button variant="primary" loading={onlineMatch?.halftimePending === 'plan'} onClick={() => void confirmSubstitution()} disabled={(!onlineMatch && displaySubstitutionCount >= 5) || !outPlayer || !inPlayer || (Boolean(onlineMatch) && !canEditHalftime)}>Confirmar troca</Button></>}>
         <div className="substitution-form"><label><span>SAI</span><select value={outPlayer} onChange={(event) => setOutPlayer(event.target.value)}>{starterPlayers.map((player) => <option key={player.id} value={player.id}>{substitutionPlayerLabel(player)}</option>)}</select></label><span className="sub-arrow"><ArrowRightLeft size={18} /></span><label><span>ENTRA</span><select value={inPlayer} onChange={(event) => setInPlayer(event.target.value)}>{reservePlayers.map((player) => <option key={player.id} value={player.id}>{substitutionPlayerLabel(player)}</option>)}</select></label></div>

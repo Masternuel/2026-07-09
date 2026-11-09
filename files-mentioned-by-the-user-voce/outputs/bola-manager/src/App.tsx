@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { buildCalendarSchedule } from './views/season/calendarItems';
 import { AppShell } from './components/layout/AppShell';
 import { Toast } from './components/shared/Toast';
+import { MusicOverlay } from './components/audio/MusicOverlay';
+import { useMusic } from './audio/MusicProvider';
 import { useAuth } from './hooks/useAuth';
 import { useClubCatalog } from './hooks/useClubCatalog';
 import { useCareerState } from './hooks/useCareerState';
@@ -23,7 +25,8 @@ import type {
 } from './types';
 import { EntryView } from './views/EntryView';
 import { HomeView } from './views/HomeView';
-import { LobbyView } from './views/LobbyView';
+import { MainMenuView } from './views/MainMenuView';
+import { getMenuCapabilities, type MainMenuPageId } from './components/menu/mainMenuModel';
 import { MatchView } from './views/MatchView';
 import { PressConferenceView } from './views/PressConferenceView';
 import { SquadView } from './views/SquadView';
@@ -96,6 +99,10 @@ function App() {
   const rooms = useRoom(realtime.socket, realtime.state);
   const [stage, setStage] = useState<AppStage>('entry');
   const [route, setRoute] = useState<RouteKey>('home');
+  const [menuPage, setMenuPage] = useState<MainMenuPageId>('career');
+  const { setMenuActive } = useMusic();
+  const musicVisible = auth.status === 'authenticated' && !(stage === 'game' && route === 'match');
+  useEffect(() => { setMenuActive(musicVisible); }, [musicVisible, setMenuActive]);
   const roomCode = rooms.room?.code;
   useRealtimeNotifications({
     socket: realtime.socket,
@@ -276,6 +283,7 @@ function App() {
     rooms.clearRoom();
     setStage('entry');
     setRoute('home');
+    setMenuPage('career');
     await auth.signOut();
   }
 
@@ -284,6 +292,7 @@ function App() {
     onlineMatch.reset();
     setStage('lobby');
     setRoute('home');
+    setMenuPage('career');
   }
 
   function renderRoute() {
@@ -359,50 +368,54 @@ function App() {
             }}
           />
         : homeView;
-      case 'settings': return <ConfigView onToast={showToast} />;
+      case 'settings': return <ConfigView onToast={showToast} room={rooms.room} />;
       default: return homeView;
     }
   }
 
   if (auth.status === 'loading') {
-    return <main className="auth-loading-screen" aria-live="polite"><span className="button-spinner" /> Conectando ao Firebase…</main>;
+    return <main className="auth-loading-screen" aria-live="polite"><span className="button-spinner" /> {auth.desktopAvailable ? 'Preparando o jogo local…' : 'Verificando sua sessão…'}</main>;
   }
 
   return (
-    <>
+    <div className={musicVisible ? 'app-with-music-popup' : undefined}>
       {(stage === 'entry' || !auth.identity) && <EntryView onAuthenticated={() => setStage('lobby')} />}
-      {stage === 'lobby' && auth.identity && (
-        <LobbyView
-          clubs={clubCatalog.clubs}
-          leagues={leagueCatalog.leagues}
-          catalogLoading={clubCatalog.loading}
-          catalogSource={clubCatalog.source}
-          catalogError={clubCatalog.error}
-          leagueCatalogLoading={leagueCatalog.loading}
-          leagueCatalogError={leagueCatalog.error}
-          identity={auth.identity}
-          room={rooms.room}
-          savedRooms={rooms.savedRooms}
-          connectionState={realtime.state}
-          loading={rooms.loading}
-          pending={rooms.pending}
-          error={rooms.error ?? realtime.error}
-          onBack={() => void leaveSession()}
-          onDeselectRoom={rooms.clearRoom}
-          onCreate={rooms.createRoom}
-          onJoin={rooms.joinRoom}
-          onSelectSave={rooms.selectRoom}
-          onDeleteSave={rooms.deleteRoom}
-          onReady={rooms.setReady}
-          onStart={rooms.startRoom}
-          onEnterGame={() => { setStage('game'); setRoute(hasManagerClub ? 'home' : 'coach-career'); }}
-          onOpenEditor={() => { rooms.clearRoom(); setStage('editor'); }}
-          onRefreshCatalog={() => { leagueCatalog.refresh(); clubCatalog.refresh(); }}
-          onClubSelected={setClub}
-          onToast={showToast}
-        />
+      {(stage === 'lobby' || stage === 'editor') && auth.identity && (
+        <div hidden={stage !== 'lobby'}>
+          <MainMenuView
+            page={menuPage}
+            onPageChange={setMenuPage}
+            clubs={clubCatalog.clubs}
+            leagues={leagueCatalog.leagues}
+            catalogLoading={clubCatalog.loading}
+            catalogSource={clubCatalog.source}
+            catalogError={clubCatalog.error}
+            leagueCatalogLoading={leagueCatalog.loading}
+            leagueCatalogError={leagueCatalog.error}
+            identity={auth.identity}
+            room={rooms.room}
+            savedRooms={rooms.savedRooms}
+            connectionState={realtime.state}
+            loading={rooms.loading}
+            pending={rooms.pending}
+            error={rooms.error ?? realtime.error}
+            onBack={leaveSession}
+            onDeselectRoom={rooms.clearRoom}
+            onCreate={rooms.createRoom}
+            onJoin={rooms.joinRoom}
+            onSelectSave={rooms.selectRoom}
+            onDeleteSave={rooms.deleteRoom}
+            onReady={rooms.setReady}
+            onStart={rooms.startRoom}
+            onEnterGame={() => { setStage('game'); setRoute(hasManagerClub ? 'home' : 'coach-career'); }}
+            onOpenEditor={() => { if (auth.identity && getMenuCapabilities(auth.identity.mode).canEdit && !rooms.room) setStage('editor'); }}
+            onRefreshCatalog={() => { leagueCatalog.refresh(); clubCatalog.refresh(); }}
+            onClubSelected={setClub}
+            onToast={showToast}
+          />
+        </div>
       )}
-      {stage === 'editor' && auth.identity && (
+      {stage === 'editor' && auth.identity && getMenuCapabilities(auth.identity.mode).canEdit && !rooms.room && (
         <EditorView
           identity={auth.identity}
           getIdToken={auth.getIdToken}
@@ -449,7 +462,8 @@ function App() {
         </AppShell>
       )}
       <Toast message={toast} onClose={() => setToast(null)} />
-    </>
+      {musicVisible && <MusicOverlay />}
+    </div>
   );
 }
 

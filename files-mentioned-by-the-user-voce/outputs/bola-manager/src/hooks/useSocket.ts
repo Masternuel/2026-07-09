@@ -62,11 +62,11 @@ export function useSocket({ enabled, identity, getIdToken }: UseSocketOptions) {
     setError(null);
 
     const connect = async () => {
-      const token = identity.mode === 'firebase' ? await tokenWithDeadline(getIdToken) : null;
+      const token = identity.mode !== 'demo' ? await tokenWithDeadline(getIdToken) : null;
       if (disposed || authGeneration !== socketSessionGeneration()) return;
-      if (identity.mode === 'firebase' && !token) {
+      if (identity.mode !== 'demo' && !token) {
         setState('error');
-        setError('Sua sessão Firebase expirou. Entre novamente.');
+        setError('Sua sessão expirou. Entre novamente.');
         return;
       }
       const serverUrl = import.meta.env.VITE_SERVER_URL || window.location.origin;
@@ -80,7 +80,7 @@ export function useSocket({ enabled, identity, getIdToken }: UseSocketOptions) {
         reconnectionDelayMax: 10_000,
         randomizationFactor: 0.5,
         transports: ['websocket'],
-        auth: identity.mode === 'firebase'
+        auth: identity.mode !== 'demo'
           ? (provideAuth) => {
               if (firstToken) {
                 provideAuth({ token: firstToken });

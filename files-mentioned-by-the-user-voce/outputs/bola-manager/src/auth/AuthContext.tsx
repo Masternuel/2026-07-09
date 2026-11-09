@@ -12,6 +12,7 @@ import {
 } from 'firebase/auth';
 import { firebaseAuth, hasFirebaseConfig, initializeFirebaseAnalytics } from '../lib/firebaseClient';
 import { endSocketSessions } from '../lib/socketSession';
+import { desktopBridge } from '../lib/desktopClient';
 import type { AuthStatus, ManagerIdentity } from '../types';
 
 export interface AuthContextValue {
@@ -19,6 +20,8 @@ export interface AuthContextValue {
   identity: ManagerIdentity | null;
   error: string | null;
   firebaseConfigured: boolean;
+  desktopAvailable: boolean;
+  startLocal: () => Promise<void>;
   signInEmail: (email: string, password: string) => Promise<void>;
   createEmailAccount: (email: string, password: string) => Promise<void>;
   signInGoogle: () => Promise<void>;
@@ -69,11 +72,20 @@ function authMessage(error: unknown): string {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [demoIdentity, setDemoIdentity] = useState<ManagerIdentity | null>(null);
-  const [loading, setLoading] = useState(Boolean(firebaseAuth));
+  const [loading, setLoading] = useState(Boolean(firebaseAuth || desktopBridge));
   const [error, setError] = useState<string | null>(null);
   const [profileRevision, setProfileRevision] = useState(0);
 
   useEffect(() => {
+    if (desktopBridge) {
+      let active = true;
+      void desktopBridge.session().then(({ identity }) => {
+        if (active) { setDemoIdentity(identity); setLoading(false); }
+      }).catch(() => {
+        if (active) { setError('Não foi possível abrir o perfil local. Reinicie o jogo.'); setLoading(false); }
+      });
+      return () => { active = false; };
+    }
     void initializeFirebaseAnalytics();
     if (!firebaseAuth) {
       setLoading(false);
@@ -86,6 +98,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError(authMessage(nextError));
       setLoading(false);
     });
+  }, []);
+
+  const startLocal = useCallback(async () => {
+    if (!desktopBridge) throw new Error('Versão desktop indisponível.');
+    try {
+      const { identity } = await desktopBridge.session();
+      setError(null);
+      setDemoIdentity(identity);
+    } catch (nextError) {
+      setError('Não foi possível abrir o perfil local. Reinicie o jogo.');
+      throw nextError;
+    }
   }, []);
 
   const runFirebaseAction = useCallback(async (action: () => Promise<void>) => {
@@ -126,6 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }), [runFirebaseAction]);
 
   const startDemo = useCallback(() => {
+    if (desktopBridge) return;
     setError(null);
     setDemoIdentity({
       uid: `demo-${crypto.randomUUID()}`,
@@ -152,6 +177,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     if (demoIdentity) {
+      if (demoIdentity.mode === 'local' || demoIdentity.mode === 'peer') {
+        if (!desktopBridge) throw new Error('Perfil local indisponível.');
+        await desktopBridge.updateProfile(displayName);
+      }
       setDemoIdentity((current) => current ? { ...current, displayName } : current);
       return;
     }
@@ -176,6 +205,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [demoIdentity]);
 
   const getIdToken = useCallback(async (forceRefresh = false) => {
+    if ((demoIdentity?.mode === 'local' || demoIdentity?.mode === 'peer') && desktopBridge) {
+      const session = await desktopBridge.session();
+      if (session.identity.uid !== demoIdentity.uid) throw new Error('O perfil local mudou. Reinicie a sessão.');
+      return session.token;
+    }
     if (demoIdentity) return null;
     return firebaseAuth?.currentUser ? firebaseAuth.currentUser.getIdToken(forceRefresh) : null;
   }, [demoIdentity]);
@@ -190,6 +224,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     identity,
     error,
     firebaseConfigured: hasFirebaseConfig,
+    desktopAvailable: Boolean(desktopBridge),
+    startLocal,
     signInEmail,
     createEmailAccount,
     signInGoogle,
@@ -198,7 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     updateDisplayName,
     getIdToken,
     clearError: () => setError(null),
-  }), [status, identity, error, signInEmail, createEmailAccount, signInGoogle, startDemo, signOut, updateDisplayName, getIdToken]);
+  }), [status, identity, error, signInEmail, createEmailAccount, signInGoogle, startDemo, startLocal, signOut, updateDisplayName, getIdToken]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
