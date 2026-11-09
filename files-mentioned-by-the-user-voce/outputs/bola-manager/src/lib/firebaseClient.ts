@@ -2,6 +2,7 @@ import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { desktopBridge } from './desktopClient';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -14,7 +15,7 @@ const firebaseConfig = {
 };
 
 export const hasFirebaseConfig = Boolean(
-  firebaseConfig.apiKey
+  !desktopBridge && firebaseConfig.apiKey
   && firebaseConfig.authDomain
   && firebaseConfig.projectId
   && firebaseConfig.appId,

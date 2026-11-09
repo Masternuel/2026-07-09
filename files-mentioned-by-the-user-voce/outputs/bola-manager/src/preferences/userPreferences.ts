@@ -20,17 +20,29 @@ export interface ProfilePreferences {
   region: UserRegion;
 }
 
+export interface AudioPreferences {
+  masterVolume: number;
+  musicVolume: number;
+  effectsVolume: number;
+  interfaceVolume: number;
+  musicEnabled: boolean;
+  shuffle: boolean;
+  showNowPlaying: boolean;
+}
+
 export interface UserPreferences {
   version: typeof USER_PREFERENCES_VERSION;
   theme: ThemePreference;
   notifications: NotificationPreferences;
   profile: ProfilePreferences;
+  audio: AudioPreferences;
 }
 
 export interface UserPreferencesPatch {
   theme?: ThemePreference;
   notifications?: Partial<NotificationPreferences>;
   profile?: Partial<ProfilePreferences>;
+  audio?: Partial<AudioPreferences>;
 }
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = Object.freeze({
@@ -46,6 +58,8 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = Object.freeze({
     locale: 'pt-BR',
     region: 'br-sp',
   }),
+  audio: Object.freeze({ masterVolume: 80, musicVolume: 40, effectsVolume: 80,
+    interfaceVolume: 60, musicEnabled: true, shuffle: true, showNowPlaying: true }),
 });
 
 function record(value: unknown): Record<string, unknown> {
@@ -62,6 +76,10 @@ export function normalizeUserPreferences(value: unknown): UserPreferences {
   const source = record(value);
   const notifications = record(source.notifications);
   const profile = record(source.profile);
+  const audio = record(source.audio);
+  const volume = (key: 'masterVolume' | 'musicVolume' | 'effectsVolume' | 'interfaceVolume') =>
+    typeof audio[key] === 'number' && Number.isFinite(audio[key])
+      ? Math.max(0, Math.min(100, audio[key])) : DEFAULT_USER_PREFERENCES.audio[key];
   const theme = source.theme === 'light' || source.theme === 'system' || source.theme === 'dark'
     ? source.theme
     : DEFAULT_USER_PREFERENCES.theme;
@@ -82,6 +100,13 @@ export function normalizeUserPreferences(value: unknown): UserPreferences {
       room: boolean(notifications.room, DEFAULT_USER_PREFERENCES.notifications.room),
     },
     profile: { locale, region },
+    audio: {
+      masterVolume: volume('masterVolume'), musicVolume: volume('musicVolume'),
+      effectsVolume: volume('effectsVolume'), interfaceVolume: volume('interfaceVolume'),
+      musicEnabled: boolean(audio.musicEnabled, DEFAULT_USER_PREFERENCES.audio.musicEnabled),
+      shuffle: boolean(audio.shuffle, DEFAULT_USER_PREFERENCES.audio.shuffle),
+      showNowPlaying: boolean(audio.showNowPlaying, DEFAULT_USER_PREFERENCES.audio.showNowPlaying),
+    },
   };
 }
 
@@ -100,6 +125,7 @@ export function applyUserPreferencesPatch(
       ...current.profile,
       ...patch.profile,
     },
+    audio: { ...current.audio, ...patch.audio },
   });
 }
 

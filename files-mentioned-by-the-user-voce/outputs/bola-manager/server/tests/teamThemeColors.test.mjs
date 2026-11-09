@@ -7,6 +7,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 import { editorCreateSchemas, editorPatchSchemas } from "../editorSchemas.mjs";
+import { buildBuiltinCatalog } from "../../scripts/lib/builtin-catalog.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const clubRecord = {
@@ -113,6 +114,45 @@ test("AppShell escolhe o accent real de cada tema e calcula o foreground", () =>
   assert.equal(light["--on-accent"], "#ffffff");
   assert.match(dark["--accent-hover"], /^#[0-9a-f]{6}$/);
   assert.ok(theme.contrastRatio(dark["--on-accent"], dark["--accent-hover"]) >= 4.5);
+  assert.equal(dark["--club-color"], "#e7e7e7");
+  assert.equal(light["--club-color"], "#171a17");
+});
+
+test("clubes reais sem override mantem identidade cromatica e contraste nas superficies", () => {
+  const catalog = buildBuiltinCatalog();
+  for (const [id, pigment, dominant] of [["FLA", "#c92d35", 0], ["CRU", "#2d61ca", 2]]) {
+    const source = catalog.clubs.find((club) => club.id === id);
+    const before = structuredClone(source);
+    const club = normalizeClub(source, new Map());
+    assert.equal(club.color, pigment);
+    assert.equal(club.darkThemeColor, null);
+    assert.equal(club.lightThemeColor, null);
+    for (const lightMode of [false, true]) {
+      const palette = appShellThemeStyle(club, lightMode);
+      assert.equal(palette["--club-color"], pigment);
+      const accent = palette["--accent"];
+      const channels = [1, 3, 5].map((offset) => Number.parseInt(accent.slice(offset, offset + 2), 16));
+      assert.equal(channels[dominant], Math.max(...channels));
+      for (const token of ["--canvas", "--club-menu", "--club-menu-inset"]) {
+        assert.ok(theme.contrastRatio(accent, palette[token]) >= 4.5, `${id} ${lightMode} ${token}`);
+      }
+      assert.ok(theme.contrastRatio(palette["--on-club-color"], pigment) >= 4.5);
+      assert.ok(theme.contrastRatio(palette["--on-accent"], accent) >= 4.5);
+      assert.ok(theme.contrastRatio(palette["--on-accent"], palette["--accent-hover"]) >= 4.5);
+    }
+    assert.deepEqual(source, before);
+  }
+});
+
+test("identidade da interface respeita override por tema e fallback seguro", () => {
+  const overridden = { color: "#c92d35", darkThemeColor: "#8844cc", lightThemeColor: "#28602f" };
+  assert.equal(theme.resolveClubIdentityColor(overridden, false), "#8844cc");
+  assert.equal(theme.resolveClubIdentityColor(overridden, true), "#28602f");
+  assert.equal(theme.resolveClubIdentityColor({ color: "#2d61ca", darkThemeColor: "invalid" }, false), "#2d61ca");
+  assert.equal(theme.resolveClubIdentityColor({ color: "invalid" }, false), "#f0f0f0");
+  assert.equal(theme.resolveClubIdentityColor({ color: "invalid" }, true), "#171a17");
+  assert.equal(theme.resolveClubIdentityColor({ color: "#ffffff" }, true), "#171a17");
+  assert.equal(theme.resolveClubIdentityColor({ color: "#000000" }, false), "#f0f0f0");
 });
 
 test("AppShell deriva divisorias do Flamengo escuro e Santos claro", () => {

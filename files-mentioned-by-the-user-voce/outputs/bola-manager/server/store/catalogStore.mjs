@@ -16,6 +16,7 @@ import {
   createScopedCatalogFirestore,
 } from "./catalogScope.mjs";
 import { commitCatalogGeneration } from "./catalogImportTransaction.mjs";
+import { withoutClientMediaPaths } from "../services/mediaOwnership.mjs";
 
 const COLLECTIONS = Object.freeze({
   leagues: "brasfootLeagues",
@@ -105,7 +106,7 @@ function sortRecords(records) {
   ));
 }
 
-function tournamentParticipant(record) {
+export function tournamentParticipant(record) {
   const reputation = Number(record.reputation);
   const stadiumCapacity = Number(record.stadiumCapacity);
   return {
@@ -162,7 +163,7 @@ function competitionPrizeMoney(record) {
   return configured ?? 0;
 }
 
-function publicTournament(record, participantsById) {
+export function publicTournament(record, participantsById) {
   const teamIds = Array.isArray(record.teamIds) ? record.teamIds : [];
   const prizeMoney = competitionPrizeMoney(record);
   return {
@@ -209,7 +210,7 @@ function leagueLegs(record) {
   return "double";
 }
 
-function publicLeague(record, clubCount) {
+export function publicLeague(record, clubCount) {
   const prizeMoney = competitionPrizeMoney(record);
   return {
     id: record.id,
@@ -223,7 +224,7 @@ function publicLeague(record, clubCount) {
   };
 }
 
-function publicCompetitionClub(record) {
+export function publicCompetitionClub(record) {
   const configuredColor = Array.isArray(record.colors)
     ? record.colors.find((color) => typeof color === "string" && color.trim())
     : null;
@@ -330,6 +331,37 @@ export class CatalogStore {
       ownerId: String(ownerId),
       now: this.now,
     });
+  }
+
+  async readInitialized() {
+    if (!this.rootFirestore) return this;
+    if (!this.ownerId) {
+      const current = await this.rootFirestore.collection("brasfootImports").doc("current").get();
+      const generationId = current.data()?.activeGenerationId;
+      this.firestore = generationId
+        ? createGlobalCatalogGenerationFirestore(this.rootFirestore, generationId)
+        : this.scopeFirestore;
+      return this;
+    }
+    const snapshot = await catalogDatabaseDocument(this.rootFirestore, this.ownerId).get();
+    const metadata = snapshot.data();
+    if (metadata?.status === "importing") {
+      throw new CatalogStoreError("A base esta sendo importada. Tente novamente em instantes",
+        "CATALOG_DATABASE_IMPORT_IN_PROGRESS", 409);
+    }
+    if (metadata?.status === "import_failed") {
+      throw new CatalogStoreError("A ultima importacao falhou e a base precisa ser recuperada",
+        "CATALOG_DATABASE_RECOVERY_REQUIRED", 503);
+    }
+    if (metadata?.initialized !== true) {
+      throw new CatalogStoreError("A base precisa ser inicializada antes da leitura",
+        "CATALOG_DATABASE_NOT_INITIALIZED", 503);
+    }
+    this.generationId = metadata.activeGenerationId ?? null;
+    this.firestore = this.generationId
+      ? createScopedCatalogFirestore(this.rootFirestore, this.ownerId, this.generationId)
+      : this.scopeFirestore;
+    return this;
   }
 
   async ensureInitialized() {
@@ -832,12 +864,14 @@ export class CatalogStore {
   }
 
   async create(entity, input, updatedBy) {
+    input = withoutClientMediaPaths(input);
     const collection = this.#collection(entity);
     const id = this.#validId(input?.id);
     const reference = collection.doc(id);
     const timestamp = this.now().toISOString();
     let record = {
       ...input,
+      ...(MEDIA_FIELDS[entity] ? { [MEDIA_FIELDS[entity].path]: null } : {}),
       ...(entity === "players" ? { isStar: input?.isStar === true } : {}),
       id,
       createdAt: timestamp,
@@ -897,6 +931,7 @@ export class CatalogStore {
   }
 
   async update(entity, idValue, changes, updatedBy) {
+    changes = withoutClientMediaPaths(changes);
     const collection = this.#collection(entity);
     const id = this.#validId(idValue);
     if (Object.hasOwn(changes ?? {}, "id")) {
@@ -1047,8 +1082,11 @@ export class CatalogStore {
     const ids = idValues.map((value) => this.#validId(value));
     const references = ids.map((id) => collection.doc(id));
     const previousPaths = [];
+    const previousMedia = [];
 
     await this.#runCatalogMutation(async (transaction) => {
+      previousPaths.length = 0;
+      previousMedia.length = 0;
       const documents = typeof transaction.getAll === "function"
         ? await transaction.getAll(...references)
         : await Promise.all(references.map((reference) => transaction.get(reference)));
@@ -1092,12 +1130,15 @@ export class CatalogStore {
       const mediaFields = MEDIA_FIELDS[entity];
       documents.forEach((document, index) => {
         const previousPath = mediaFields ? document.data()?.[mediaFields.path] ?? null : null;
-        if (previousPath) previousPaths.push(previousPath);
+        if (previousPath) {
+          previousPaths.push(previousPath);
+          previousMedia.push({ path: previousPath, entity, recordId: ids[index] });
+        }
         transaction.delete(references[index]);
       });
     });
 
-    return { deleted: true, ids, count: ids.length, previousPaths };
+    return { deleted: true, ids, count: ids.length, previousPaths, previousMedia };
   }
 
   #assertAvailable() {

@@ -137,7 +137,7 @@ export function useClubCatalog(leagues: readonly LeagueChoice[] = [], roomCode?:
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    if (auth.status !== 'authenticated' || !auth.identity || auth.identity.mode !== 'firebase') {
+    if (auth.status !== 'authenticated' || !auth.identity || auth.identity.mode === 'demo') {
       setRemoteTeams([]);
       setLoaded(false);
       setLoading(false);

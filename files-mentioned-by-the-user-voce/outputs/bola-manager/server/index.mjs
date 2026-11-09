@@ -1,5 +1,4 @@
 import { createServer as createHttpServer } from "node:http";
-import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
@@ -45,11 +44,19 @@ import {
   createFirestoreReadinessCheck,
   createLivenessPayload,
   createReadinessChecker,
+  createCachedReadiness,
   createRedisReadinessCheck,
 } from "./infrastructure/readiness.mjs";
 import { createDisabledRedisRuntime, createRedisRuntime } from "./infrastructure/redisRuntime.mjs";
 import { createMetricsHandler } from "./infrastructure/metricsEndpoint.mjs";
 import { createImagesRouter } from "./routes/images.mjs";
+import { createCoordinationGuard, coordinationUnavailable } from "./infrastructure/coordinationAvailability.mjs";
+import { applySecurityHeaders, createSecurityHeaders, secureEngineTransport } from "./infrastructure/httpSecurity.mjs";
+import { createStagingProxyDiagnostics } from "./infrastructure/stagingProxyDiagnostics.mjs";
+import { createOriginPolicy } from "./infrastructure/networkPolicy.mjs";
+import { correlationId, publicError, publicConnectionError } from "./infrastructure/publicErrors.mjs";
+import { httpMetricRoute } from "./infrastructure/metricPolicy.mjs";
+import { createAiUsage } from "./infrastructure/aiUsage.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -69,6 +76,11 @@ export async function createBolaManagerServer({
   readinessCheck: injectedReadinessCheck,
   metrics: injectedMetrics,
   structuredLogger: injectedStructuredLogger,
+  originPolicy: injectedOriginPolicy,
+  requestGuard,
+  editorAccess,
+  localMediaHandler,
+  staticDirectory,
   socketAdapterFactory = createRedisAdapter,
 } = {}) {
   const config = getServerConfig(env);
@@ -114,6 +126,12 @@ export async function createBolaManagerServer({
     })
     : null);
   const firebase = injectedFirebase ?? await initializeFirebaseAdmin(env);
+  const aiUsage = createAiUsage({
+    runtime: redisRuntime,
+    required: (config.nodeEnv === "production" && !injectedStore) || Boolean(config.redisUrl),
+    commandTimeoutMs: config.dependencyTimeoutMs,
+    limits: config.aiLimits,
+  });
   const catalogStore = injectedCatalogStore ?? new CatalogStore({ firestore: firebase.firestore });
   try {
     await catalogStore?.ensureInitialized?.();
@@ -121,6 +139,7 @@ export async function createBolaManagerServer({
     structuredLogger.error("firestore.catalog_startup_unavailable", { error });
   }
   const coachInterviewAi = injectedCoachInterviewAi ?? createCoachInterviewAiService({
+    usage: aiUsage,
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
@@ -139,7 +158,7 @@ export async function createBolaManagerServer({
     metrics,
   });
   const matchSessionStore = injectedMatchSessionStore ?? createMatchSessionPersistence({
-    firestore: firebase.firestore,
+    firestore: firebase.matchFirestore,
     mode: injectedStore && !firebase.firestore ? "memory" : config.roomStoreMode,
     nodeEnv: config.nodeEnv,
     allowDemoAuth: config.allowDemoAuth,
@@ -148,17 +167,18 @@ export async function createBolaManagerServer({
 
   const app = express();
   const httpServer = createHttpServer(app);
-  const allowedOrigins = config.clientOrigin.split(",").map((origin) => origin.trim()).filter(Boolean);
-  const corsOptions = {
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) callback(null, true);
-      else callback(new Error("Origem nao permitida pelo CORS"));
-    },
-    credentials: true,
-  };
+  const originPolicy = injectedOriginPolicy ?? createOriginPolicy(config.clientOrigin, config.nodeEnv);
+  const corsOptions = originPolicy.cors;
+  const headersForRequest = createSecurityHeaders(config);
+  const existingUpgradeHandlers = new Set(httpServer.listeners("upgrade"));
   const io = new SocketIOServer(httpServer, {
     cors: corsOptions,
+    allowRequest: originPolicy.allowRequest,
     ...(config.nodeEnv === "production" ? { transports: ["websocket"] } : {}),
+  });
+  secureEngineTransport({
+    httpServer, io, originPolicy, headersForRequest,
+    upgradeHandlers: httpServer.listeners("upgrade").filter((handler) => !existingUpgradeHandlers.has(handler)),
   });
   if (redisRuntime.enabled) {
     io.adapter(socketAdapterFactory(redisRuntime.publisher, redisRuntime.subscriber, {
@@ -174,8 +194,10 @@ export async function createBolaManagerServer({
     mediaService,
     logger: structuredLogger,
     nodeEnv: config.nodeEnv,
+    limits: config.importQuotas,
   });
   const socialAi = injectedSocialAi ?? createSocialAiService({
+    usage: aiUsage,
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fallbackModels: env.GEMINI_FALLBACK_MODELS,
@@ -201,7 +223,10 @@ export async function createBolaManagerServer({
   const firestoreRequired = !injectedStore && config.roomStoreMode === "firestore";
   const productionCoordinationRequired = config.nodeEnv === "production" && !injectedStore;
   const redisRequired = productionCoordinationRequired || Boolean(config.redisUrl);
-  const readinessCheck = injectedReadinessCheck ?? createReadinessChecker({
+  const assertCoordinationAvailable = createCoordinationGuard({
+    required: redisRequired, runtime: redisRuntime, locks: distributedLocks, rateLimiter,
+  });
+  const readinessCheck = createCachedReadiness(injectedReadinessCheck ?? createReadinessChecker({
     checks: {
       ...(firestoreRequired || firebase.firestore
         ? { firestore: createFirestoreReadinessCheck(firebase.firestore, { timeoutMs: config.dependencyTimeoutMs }) }
@@ -212,19 +237,25 @@ export async function createBolaManagerServer({
     },
     timeoutMs: config.dependencyTimeoutMs,
     metrics,
-  });
+  }), { cacheMs: config.readinessCacheMs, timeoutMs: config.dependencyTimeoutMs });
 
+  app.use((request, response, next) => {
+    applySecurityHeaders(response, headersForRequest(request));
+    next();
+  });
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
-  app.use(cors(corsOptions));
+  if (requestGuard) app.use(requestGuard);
+  if (localMediaHandler) app.use((request, response, next) => Promise.resolve(localMediaHandler(request, response, next)).catch(next));
+  app.set("trust proxy", config.trustProxy);
+  app.use(createStagingProxyDiagnostics({ config: config.stagingProxyDiagnostics, logger: structuredLogger, instanceId: config.instanceId }));
   app.use((request, response, next) => {
     const startedAt = Date.now();
-    request.requestId = String(request.headers["x-request-id"] ?? randomUUID()).slice(0, 128);
+    request.requestId = correlationId(request.headers["x-request-id"]);
     response.setHeader("X-Request-Id", request.requestId);
     const context = {
       requestId: request.requestId,
       method: request.method,
-      path: request.path,
+      path: httpMetricRoute(request.path),
     };
     structuredLogger.info("http.request_start", context);
     let finished = false;
@@ -258,6 +289,7 @@ export async function createBolaManagerServer({
     }
     next();
   });
+  app.use(cors(corsOptions));
   app.use(createHttpMetricsMiddleware(metrics));
   app.all("/metrics", createMetricsHandler({ token: config.metricsToken, metrics, instanceId: config.instanceId }));
   app.use(express.json({ limit: "256kb" }));
@@ -275,6 +307,7 @@ export async function createBolaManagerServer({
   });
 
   app.get("/ready", async (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
     if (draining) {
       response.status(503).json({ status: "draining", instanceId: config.instanceId });
       return;
@@ -287,19 +320,19 @@ export async function createBolaManagerServer({
     });
   });
 
+  app.use((_request, _response, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
   if (rateLimiter) {
     app.use(createRateLimitMiddleware(rateLimiter, {
       keyResolver: (request) => `http:${request.ip || request.socket?.remoteAddress || "unknown"}`,
       limit: config.rateLimitHttpMax,
       windowMs: config.rateLimitWindowMs,
     }));
-  } else if (productionCoordinationRequired) {
-    app.use((_request, response) => {
-      response.status(503).json({
-        error: { code: "REDIS_REQUIRED", message: "Coordenacao distribuida indisponivel" },
-      });
-    });
   }
+  app.use((_request, _response, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
 
   app.use("/api/media", createImagesRouter());
 
@@ -331,35 +364,43 @@ export async function createBolaManagerServer({
     },
   }));
   app.use("/api/editor", expressAuth, createEditorRouter(catalogStore, mediaService, {
+    logger: structuredLogger,
     nodeEnv: config.nodeEnv,
     allowLocalEditor: config.allowLocalEditor,
     editorAdminUids: config.editorAdminUids,
     brasfootImportService,
+    editorAccess,
   }));
 
+  if (staticDirectory) {
+    app.use(express.static(resolve(staticDirectory)));
+    app.get("*", (request, response, next) => {
+      if (request.path.startsWith("/api/") || request.path.startsWith("/socket.io/")) return next();
+      response.sendFile(resolve(staticDirectory, "index.html"));
+    });
+  }
   app.use((request, response) => {
     response.status(404).json({
-      error: { code: "NOT_FOUND", message: `Rota nao encontrada: ${request.method} ${request.path}` },
+      error: { code: "NOT_FOUND", message: "Rota nao encontrada", requestId: request.requestId },
     });
   });
   app.use((error, request, response, _next) => {
-    const status = Number.isInteger(error.status) ? error.status : 500;
+    const { status, error: serialized } = publicError(error, request.requestId);
     if (status >= 500) structuredLogger.error("http.request_error", {
       requestId: request.requestId,
       method: request.method,
-      path: request.path,
+      path: httpMetricRoute(request.path),
       status,
       error,
     });
     response.status(status).json({
-      error: {
-        code: error.code || (error.name === "ValidationError" ? "VALIDATION_ERROR" : "SERVER_ERROR"),
-        message: status >= 500 && error.expose !== true ? "Erro interno do servidor" : error.message,
-        details: error.details,
-      },
+      error: serialized,
     });
   });
 
+  io.use((_socket, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(publicConnectionError(error)); }
+  });
   if (rateLimiter) {
     io.use(async (socket, next) => {
       try {
@@ -370,13 +411,13 @@ export async function createBolaManagerServer({
         if (!result.allowed) {
           const error = new Error("Muitas conexoes em tempo real");
           error.data = { code: "RATE_LIMITED", retryAfterMs: result.retryAfterMs };
-          next(error);
+          next(publicConnectionError(error));
           return;
         }
         next();
       } catch (error) {
-        error.data ??= { code: "RATE_LIMIT_UNAVAILABLE" };
-        next(error);
+        structuredLogger.warn("socket.coordination_unavailable", { error });
+        next(publicConnectionError(coordinationUnavailable(error)));
       }
     });
   }
@@ -388,7 +429,11 @@ export async function createBolaManagerServer({
     recheckMs: config.socketAuthRecheckMs,
   });
   io.use(authenticateSocket);
+  io.use((_socket, next) => {
+    try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
+  });
   const sockets = registerSocketHandlers(io, {
+    assertCoordinationAvailable,
     authenticateSocket,
     store,
     catalogStore,
@@ -443,10 +488,10 @@ export async function createBolaManagerServer({
     distributedLocks,
     rateLimiter,
     metrics,
-    async listen(port = config.port) {
+    async listen(port = config.port, host) {
       await new Promise((resolveListen, reject) => {
         httpServer.once("error", reject);
-        httpServer.listen(port, () => {
+        httpServer.listen(port, host, () => {
           httpServer.off("error", reject);
           resolveListen();
         });
@@ -461,6 +506,7 @@ export async function createBolaManagerServer({
         closePromise = (async () => {
           const graceful = (async () => {
             await sockets.close();
+            await matchSessionStore.close?.();
             await new Promise((resolveClose) => io.close(() => resolveClose()));
             await brasfootImportService.close?.();
             await redisRuntime.close?.();
@@ -498,7 +544,7 @@ function isDirectExecution() {
   return Boolean(process.argv[1]) && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 }
 
-if (isDirectExecution()) {
+async function main() {
   loadLocalEnvironment();
   const server = await createBolaManagerServer();
   await server.listen();
@@ -510,10 +556,17 @@ if (isDirectExecution()) {
       await server.close();
       process.exitCode = 0;
     } catch (error) {
-      console.error(error);
+      createStructuredLogger().error("server.shutdown_failed", { error });
       process.exitCode = 1;
     }
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+if (isDirectExecution()) {
+  main().catch((error) => {
+    createStructuredLogger().error("server.startup_failed", { error });
+    process.exitCode = 1;
+  });
 }

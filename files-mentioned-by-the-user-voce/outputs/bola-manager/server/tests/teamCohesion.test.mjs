@@ -41,6 +41,11 @@ test("estado inicial e serializavel e mede encaixe exato", () => {
     "outOfPositionCount",
     "exactPositionCount",
     "changeImpact",
+    "version",
+    "acquiredScore",
+    "adaptationPenalty",
+    "penaltyMultiplier",
+    "familiarity",
   ]);
   assert.equal(state.score, 88);
   assert.equal(state.formationId, "4-3-3");
@@ -55,7 +60,7 @@ test("estado inicial e serializavel e mede encaixe exato", () => {
 test("salvar plano identico e idempotente", () => {
   const first = calculateTeamCohesion({ lineupIds: ids, tactics: plan(), players: squad() });
   const second = calculateTeamCohesion({
-    previous: { ...first, score: 81, stableMatches: 3, changeImpact: -7 },
+    previous: { ...first, version: undefined, score: 81, stableMatches: 3, changeImpact: -7 },
     lineupIds: ids,
     tactics: plan(),
     players: squad(),
@@ -91,7 +96,7 @@ test("formacao, titulares, slots e estrategia geram penalidades", () => {
   const strategyChanged = calculateTeamCohesion({
     previous: initial,
     lineupIds: ids,
-    tactics: plan({ mentality: "cautious" }),
+    tactics: plan({ teamInstructions: { offensiveTransition: "counter", pressing: "passive" } }),
     players: squad(),
   });
   for (const changed of [formationChanged, replacement, slotChanged, strategyChanged]) {
@@ -164,25 +169,35 @@ test("conclusao sem catalogo de jogadores preserva o encaixe salvo", () => {
   assert.ok(completed.score > initial.score);
 });
 
-test("mudanca antes da partida reinicia sequencia estavel", () => {
+test("mudanca significativa inicia sua propria experiencia em partidas", () => {
   const initial = calculateTeamCohesion({ lineupIds: ids, tactics: plan(), players: squad() });
   const stable = calculateTeamCohesion({
-    previous: { ...initial, stableMatches: 5 },
+    previous: { ...initial, version: undefined, stableMatches: 5 },
     lineupIds: ids,
     tactics: plan(),
     players: squad(),
     reason: "match",
   });
-  const changed = calculateTeamCohesion({
+  const draft = calculateTeamCohesion({
     previous: stable,
     lineupIds: ids,
-    tactics: plan({ teamInstructions: { tempo: "very-slow" } }),
+    tactics: plan({ teamInstructions: { tempo: "very-slow", pressing: "passive", offensiveTransition: "counter" } }),
+    players: squad(),
+    reason: "save",
+  });
+  const changed = calculateTeamCohesion({
+    previous: draft,
+    lineupIds: ids,
+    tactics: plan({ teamInstructions: { tempo: "very-slow", pressing: "passive", offensiveTransition: "counter" } }),
     players: squad(),
     reason: "match",
   });
   assert.equal(stable.stableMatches, 6);
-  assert.equal(changed.stableMatches, 0);
-  assert.ok(changed.changeImpact < 0);
+  assert.equal(draft.stableMatches, 0);
+  assert.equal(changed.stableMatches, 1);
+  assert.ok(draft.changeImpact < 0);
+  assert.ok(changed.score < stable.score);
+  assert.ok(changed.score > draft.score);
 });
 
 test("segredo e ordem das instrucoes nao alteram fingerprint esportivo", () => {

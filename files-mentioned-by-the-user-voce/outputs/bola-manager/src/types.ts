@@ -2055,6 +2055,20 @@ export interface TacticPlanV1 {
   secret: boolean;
 }
 
+export interface TeamCohesionFamiliarity {
+  formationId: string;
+  orderedLineupIds: string[];
+  tactics: {
+    teamInstructions: Record<string, string>;
+    individualInstructions: { playerId: string; withBall: string; withoutBall: string }[];
+    setPieces: Record<string, { takerId: string | null; routine: string }>;
+  };
+  outOfPositionCount: number;
+  exactPositionCount: number;
+  matches: number;
+  adaptationPenalty: number;
+}
+
 export interface TeamCohesionState {
   score: number;
   formationId: string;
@@ -2065,6 +2079,11 @@ export interface TeamCohesionState {
   outOfPositionCount: number;
   exactPositionCount: number;
   changeImpact: number;
+  version?: 2;
+  acquiredScore?: number;
+  adaptationPenalty?: number;
+  penaltyMultiplier?: number;
+  familiarity?: TeamCohesionFamiliarity[];
   updatedAt?: string;
 }
 
@@ -2262,7 +2281,7 @@ export interface NewsCommentReplyApiResponse {
   generatedPost?: NewsPostDto | null;
 }
 
-export type AuthMode = 'firebase' | 'demo';
+export type AuthMode = 'firebase' | 'demo' | 'local' | 'peer';
 export type AuthStatus = 'loading' | 'anonymous' | 'authenticated';
 
 export interface ManagerIdentity {

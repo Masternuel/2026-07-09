@@ -42,6 +42,7 @@ class FakeRedisClient {
   constructor(backend = new FakeRedisBackend()) {
     this.backend = backend;
     this.isOpen = false;
+    this.isReady = false;
     this.connectCount = 0;
     this.quitCount = 0;
   }
@@ -54,11 +55,13 @@ class FakeRedisClient {
 
   async connect() {
     this.isOpen = true;
+    this.isReady = true;
     this.connectCount += 1;
   }
 
   async quit() {
     this.isOpen = false;
+    this.isReady = false;
     this.quitCount += 1;
   }
 
@@ -247,7 +250,7 @@ test("comando Redis travado expira sem prender lock ou rate limit", async () => 
   };
   const lock = createDistributedLock({ client, commandTimeoutMs: 5 });
   const limiter = createDistributedRateLimiter({ client, commandTimeoutMs: 5 });
-  await assert.rejects(lock.acquire("room"), { name: "TimeoutError" });
+  await assert.rejects(lock.acquire("room"), (error) => error.code === "REDIS_REQUIRED" && error.cause?.name === "TimeoutError");
   await assert.rejects(limiter.consume("uid"), { name: "TimeoutError" });
 });
 

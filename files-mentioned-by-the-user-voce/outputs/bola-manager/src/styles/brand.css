@@ -1,0 +1,24 @@
+.brand-logo { display: inline-flex; min-width: 0; align-items: center; gap: 10px; vertical-align: middle; }
+.brand-logo__crest { display: block; width: 44px; height: 44px; flex: none; object-fit: contain; }
+.brand-logo__name { color: var(--ink); font-size: 13px; font-weight: 800; letter-spacing: -.025em; white-space: nowrap; }
+.brand-logo__name strong { color: var(--accent); font-weight: inherit; }
+.brand-logo--menu { width: 100%; justify-content: center; }
+.brand-logo--menu .brand-logo__crest { width: 124px; height: 124px; }
+.brand-logo--menu .brand-logo__name { position: absolute; overflow: hidden; width: 1px; height: 1px; clip-path: inset(50%); }
+.entry-brand .brand-logo__crest { width: 76px; height: 76px; }
+.entry-brand .brand-logo__name { font-size: 16px; }
+@media (max-width: 760px) {
+  .brand-logo--menu { justify-content: flex-start; }
+  .brand-logo--menu .brand-logo__crest { width: 56px; height: 56px; }
+  .brand-logo--menu .brand-logo__name { position: static; overflow: visible; width: auto; height: auto; clip-path: none; }
+  .entry-brand { flex-wrap: wrap; gap: 12px; }
+  .entry-brand .brand-logo__crest { width: 60px; height: 60px; }
+  .entry-brand .brand-logo__name { font-size: 14px; }
+  .entry-brand small { flex: 1 1 80px; text-align: right; }
+}
+@media (max-width: 380px) {
+  .entry-brand small { flex-basis: 100%; margin-left: 0; text-align: left; }
+  .lobby-wordmark .brand-logo { gap: 7px; }
+  .lobby-wordmark .brand-logo__crest { width: 36px; height: 36px; }
+  .lobby-wordmark .brand-logo__name { font-size: 12px; }
+}

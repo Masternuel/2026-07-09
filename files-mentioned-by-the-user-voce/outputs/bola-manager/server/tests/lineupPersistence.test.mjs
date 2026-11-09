@@ -89,6 +89,16 @@ test("lineup persiste plano e entrosamento, valida titulares e progride apos par
   assert.equal(repeated.lineup.cohesion.score, first.lineup.cohesion.score);
   assert.equal(repeated.lineup.cohesion.stableMatches, 0);
 
+  for (const mentality of ["cautious", "positive", "balanced", "positive"]) {
+    const saved = await client.timeout(1_000).emitWithAck("lineup:save", {
+      code, lineupIds, tactics: { ...tacticPlan, mentality },
+    });
+    assert.equal(saved.ok, true);
+    assert.equal(saved.lineup.cohesion.score, first.lineup.cohesion.score);
+    assert.equal(saved.lineup.cohesion.acquiredScore, first.lineup.cohesion.acquiredScore);
+    assert.deepEqual(saved.lineup.cohesion.familiarity, first.lineup.cohesion.familiarity);
+  }
+
   const misplacedIds = [...lineupIds];
   [misplacedIds[1], misplacedIds[9]] = [misplacedIds[9], misplacedIds[1]];
   const misplaced = await client.timeout(1_000).emitWithAck("lineup:save", {
@@ -102,6 +112,7 @@ test("lineup persiste plano e entrosamento, valida titulares e progride apos par
 
   const restored = await client.timeout(1_000).emitWithAck("lineup:save", { code, lineupIds });
   assert.equal(restored.ok, true);
+  assert.equal(restored.lineup.cohesion.score, first.lineup.cohesion.score);
   await client.timeout(1_000).emitWithAck("room:ready", { code, ready: true });
   const started = await client.timeout(1_000).emitWithAck("room:start", { code });
   const fixtureId = started.room.currentFixtureId;

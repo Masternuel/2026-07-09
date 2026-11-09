@@ -23,6 +23,7 @@ function routeError(message, code, status = 404) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   return error;
 }
 
@@ -160,6 +161,7 @@ function enforceCooldown(entries, key, cooldownMs, timestamp, code, message, req
     const error = new Error(message);
     error.code = code;
     error.status = 429;
+    error.public = true;
     throw error;
   }
   entries.set(key, requestId ? { timestamp, requestId } : timestamp);
@@ -342,7 +344,7 @@ export function createNewsRouter(store, newsStore, socialAi, {
         "Aguarde alguns segundos antes de atualizar a analise novamente",
       );
     }
-    const generated = await socialAi.generate(input);
+    const generated = await socialAi.generate(input, { uid: request.user.uid, operation: "feed" });
     const commentsByPostId = new Map(canonicalPosts.map((post) => [
       post.id,
       generatedCommentsForPost(generated, post.id, requestTime).map((comment, index) => ({
@@ -410,7 +412,7 @@ export function createNewsRouter(store, newsStore, socialAi, {
       let comments = [fallbackPressComment(submission)];
       let aiSource = "fallback";
       try {
-        const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]));
+        const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]), { uid: request.user.uid, operation: "press" });
         const generatedComments = generatedCommentsForPost(
           generated,
           editorial.editorialKey,
@@ -488,7 +490,7 @@ export function createNewsRouter(store, newsStore, socialAi, {
       headline: "Declaracao do manager",
       body: payload.message,
     };
-    const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]));
+    const generated = await socialAi.generate(socialInput(room, request.user.uid, [draft]), { uid: request.user.uid, operation: "post" });
     const result = await newsStore.createManagerPostWithOperation({
       roomCode: code,
       actorId: request.user.uid,
@@ -586,7 +588,7 @@ export function createNewsRouter(store, newsStore, socialAi, {
     };
     let generated = null;
     try {
-      generated = await socialAi.generate(threadInput);
+      generated = await socialAi.generate(threadInput, { uid: request.user.uid, operation: "comment" });
     } catch {
       logger.warn?.("Repercussao automatica indisponivel para comentario.");
     }

@@ -1,3 +1,4 @@
+import { redactLogValue } from "../infrastructure/redaction.mjs";
 import { createHash } from "node:crypto";
 import { ensureMarketState, runAiTransferTick } from "./market.mjs";
 
@@ -100,7 +101,7 @@ export function runRecordedAiMarketTick(room, input, now, {
 
 function telemetry(channel, runId, operation) {
   try { operation(); } catch {
-    console.warn(JSON.stringify({ event: "ai_market.telemetry_failed", channel, runId }));
+    console.warn(JSON.stringify(redactLogValue({ event: "ai_market.telemetry_failed", channel, runId })));
   }
 }
 

@@ -43,7 +43,7 @@
   .editor-summary__metric:nth-child(3), .editor-summary__metric:nth-child(5) { border-right: 0; }
   .editor-summary__metric > strong { font-size: 18px; }
   .editor-summary__warning { min-height: 60px; }
-  .editor-api-error { width: calc(100% - 24px); }
+  .editor-api-error, .editor-storage-notice { width: calc(100% - 24px); }
   .editor-workspace { width: calc(100% - 24px); grid-template-columns: minmax(0, 1fr); }
   .editor-entity-rail { position: static; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .editor-entity-rail__label, .editor-entity-rail__foot { display: none; }
@@ -93,7 +93,7 @@
   .editor-catalog-panel__header { min-height: 66px; padding-inline: 12px; }
   .editor-catalog-panel__header { align-items: flex-start; flex-direction: column; padding-block: 12px; }
   .editor-catalog-panel__actions { width: 100%; }
-  .editor-catalog-panel__actions .button { flex: 1; }
+  .editor-catalog-panel__actions .button { flex: 1 1 140px; }
   .editor-catalog-panel__header .button { padding-inline: 10px; }
   .editor-bulk-actions > span { display: none; }
   .editor-bulk-actions .button { flex: 1; }
@@ -189,9 +189,9 @@
   .sidebar-backdrop.is-open { visibility: visible; opacity: 1; }
   .app-main { margin-left: 0; padding-bottom: 56px; }
   .topbar__menu { display: grid; }
-  .bottom-bar { position: fixed; z-index: 35; right: 0; bottom: 0; left: 0; display: grid; height: 56px; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: rgba(19,21,24,.97); }
+  .bottom-bar { position: fixed; z-index: 35; right: 0; bottom: 0; left: 0; display: grid; height: 56px; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: var(--club-menu, #131518); }
   .bottom-bar button { position: relative; display: flex; align-items: center; justify-content: center; gap: 3px; flex-direction: column; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
-  .bottom-bar button.active { color: var(--accent); }
+  .bottom-bar button.active { color: var(--on-club-color, var(--on-accent)); background: var(--club-color, var(--accent)); }
   .bottom-bar button.active::before { position: absolute; top: 0; right: 25%; left: 25%; height: 2px; background: var(--accent); content: ""; }
   .bottom-bar button i { position: absolute; top: 7px; right: 31%; width: 4px; height: 4px; border-radius: 50%; background: var(--red); }
   .lobby-setup { gap: 45px; grid-template-columns: 1fr; }

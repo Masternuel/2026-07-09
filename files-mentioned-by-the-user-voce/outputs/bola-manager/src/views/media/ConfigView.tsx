@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
+  Bot,
   Check,
   Cloud,
   KeyRound,
@@ -13,20 +14,30 @@ import {
   Smartphone,
   Sun,
   UserRound,
+  Users,
+  Volume2,
 } from 'lucide-react';
+import { AudioSettingsPanel } from '../../components/audio/AudioSettingsPanel';
+import { DesktopPeerPanel } from '../../components/lobby/DesktopPeerPanel';
+import { DesktopAiSettingsPanel } from '../../components/settings/DesktopAiSettingsPanel';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
 import { ResilientImage } from '../../components/shared/ResilientImage';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useUserPreferences } from '../../preferences/UserPreferencesContext';
+import { desktopBridge } from '../../lib/desktopClient';
 import type { ThemePreference, UserPreferencesPatch } from '../../preferences/userPreferences';
+import type { Room } from '../../types';
 
 interface ConfigViewProps {
   onToast: (message: string) => void;
+  room?: Room | null;
+  showPeerPanel?: boolean;
+  embedded?: boolean;
 }
 
-type SettingsSection = 'account' | 'notifications' | 'interface' | 'access';
+type SettingsSection = 'account' | 'notifications' | 'interface' | 'audio' | 'access' | 'peer' | 'ai';
 
 function Toggle({ checked, disabled, onChange, label }: {
   checked: boolean;
@@ -71,11 +82,12 @@ const notificationOptions = [
   ['news', 'Notícias do clube', 'Rumores, entrevistas e comunicados'],
 ] as const;
 
-export function ConfigView({ onToast }: ConfigViewProps) {
+export function ConfigView({ onToast, room = null, showPeerPanel = true, embedded = false }: ConfigViewProps) {
   const auth = useAuth();
   const settings = useUserPreferences();
   const browserNotifications = useNotifications();
   const identity = auth.identity;
+  const desktop = identity?.mode === 'local' || identity?.mode === 'peer';
   const managerName = identity?.displayName || 'Manager';
   const [displayName, setDisplayName] = useState(managerName);
   const [profileSaving, setProfileSaving] = useState(false);
@@ -105,7 +117,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
     setProfileError(null);
     try {
       await auth.updateDisplayName(displayName);
-      onToast(identity?.mode === 'demo'
+      onToast(desktop ? 'Nome atualizado no perfil deste computador.' : identity?.mode === 'demo'
         ? 'Nome atualizado nesta demonstração.'
         : 'Nome atualizado no Firebase Auth.');
     } catch (nextError) {
@@ -131,7 +143,9 @@ export function ConfigView({ onToast }: ConfigViewProps) {
         ? settings.error || 'Não foi possível sincronizar as preferências.'
         : settings.savedAt
           ? `Preferências salvas às ${settings.savedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.`
-          : identity?.mode === 'demo'
+          : desktop
+            ? 'Preferências ativas neste computador.'
+            : identity?.mode === 'demo'
             ? 'Preferências ativas somente nesta demonstração.'
             : 'Preferências sincronizadas com sua conta.';
 
@@ -143,8 +157,10 @@ export function ConfigView({ onToast }: ConfigViewProps) {
         ? ['Notificações indisponíveis', 'Este navegador não oferece a API de notificações.']
         : ['Permissão ainda não concedida', 'O navegador só perguntará após uma ação sua.'];
 
+  const Root = embedded ? 'div' : 'main';
+
   return (
-    <main className="secondary-view settings-view view-enter">
+    <Root className="secondary-view settings-view view-enter">
       <div className="view-heading">
         <div>
           <p className="eyebrow">CONTA E PREFERÊNCIAS</p>
@@ -152,7 +168,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
           <p>Preferências globais ligadas à sua identidade, em qualquer save.</p>
         </div>
         <Badge tone={identity?.mode === 'firebase' ? 'positive' : 'info'}>
-          <ShieldCheck size={12} /> {identity?.mode === 'firebase' ? 'Conta Firebase' : 'Modo demonstração'}
+          <ShieldCheck size={12} /> {identity?.mode === 'firebase' ? 'Conta Firebase' : identity?.mode === 'local' ? 'Perfil local' : identity?.mode === 'peer' ? 'Convidado P2P' : 'Modo demonstração'}
         </Badge>
       </div>
 
@@ -162,6 +178,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
             ['account', 'Conta', UserRound],
             ['notifications', 'Notificações', Bell],
             ['interface', 'Interface', Monitor],
+            ['audio', 'Áudio', Volume2],
             ['access', 'Acesso', KeyRound],
           ] as const).map(([section, label, Icon]) => (
             <button
@@ -174,6 +191,8 @@ export function ConfigView({ onToast }: ConfigViewProps) {
               <Icon size={15} /> {label}
             </button>
           ))}
+          {desktop && showPeerPanel && <button type="button" className={activeSection === 'peer' ? 'active' : undefined} aria-current={activeSection === 'peer' ? 'page' : undefined} onClick={() => openSection('peer')}><Users size={15} /> Multiplayer P2P</button>}
+          {desktopBridge && <button type="button" className={activeSection === 'ai' ? 'active' : undefined} aria-current={activeSection === 'ai' ? 'page' : undefined} onClick={() => openSection('ai')}><Bot size={15} /> Inteligência artificial</button>}
         </nav>
 
         <div className="settings-main">
@@ -223,7 +242,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
             </div>
             {profileError && <p className="settings-form-error" role="alert">{profileError}</p>}
             <footer>
-              <span>O e-mail continua sob controle do provedor de autenticação.</span>
+              <span>{desktop ? 'Este perfil pertence ao computador; a carreira compartilhada fica no anfitrião.' : 'O e-mail continua sob controle do provedor de autenticação.'}</span>
               <Button
                 variant="primary"
                 loading={profileSaving}
@@ -287,6 +306,9 @@ export function ConfigView({ onToast }: ConfigViewProps) {
             </div>
           </section>
 
+          <AudioSettingsPanel />
+          {desktopBridge && <DesktopAiSettingsPanel guest={identity?.mode === 'peer'} />}
+
           <section className="settings-section" id="settings-access">
             <header><div><p className="eyebrow">SEGURANÇA</p><h2>Acesso à conta</h2></div><KeyRound size={18} /></header>
             <div className="setting-row settings-readonly-row">
@@ -294,6 +316,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
               <Button variant="ghost" size="sm" disabled title="Recurso ainda não disponível">Indisponível</Button>
             </div>
           </section>
+          {desktop && identity && showPeerPanel && <section id="settings-peer" className="desktop-peer-settings" aria-label="Conexão multiplayer P2P"><DesktopPeerPanel identity={identity} room={room} /></section>}
         </div>
 
         <aside className="settings-aside">
@@ -304,7 +327,7 @@ export function ConfigView({ onToast }: ConfigViewProps) {
             <h3>{managerName}</h3>
             <p>{identity?.email ?? 'Conta sem e-mail'}</p>
             <Badge tone={identity?.mode === 'firebase' ? 'positive' : 'info'}>
-              {identity?.mode === 'firebase' ? 'Firebase Auth' : 'Demonstração'}
+              {identity?.mode === 'firebase' ? 'Firebase Auth' : identity?.mode === 'local' ? 'Perfil local' : identity?.mode === 'peer' ? 'Convidado P2P' : 'Demonstração'}
             </Badge>
             <dl>
               <div><dt>Região</dt><dd>{settings.preferences.profile.region === 'br-sp' ? 'São Paulo' : 'América do Sul'}</dd></div>
@@ -315,12 +338,12 @@ export function ConfigView({ onToast }: ConfigViewProps) {
           <div className="settings-storage-card">
             <Cloud size={16} />
             <span>
-              <strong>{identity?.mode === 'firebase' ? 'Preferências no Firestore' : 'Preferências temporárias'}</strong>
-              <small>{identity?.mode === 'firebase' ? 'Documento privado users/{uid}.' : 'O modo demonstração não grava um perfil remoto.'}</small>
+              <strong>{identity?.mode === 'firebase' ? 'Preferências no Firestore' : desktop ? 'Preferências no computador' : 'Preferências temporárias'}</strong>
+              <small>{identity?.mode === 'firebase' ? 'Documento privado users/{uid}.' : desktop ? 'Gravadas junto ao perfil local, sem serviços de nuvem.' : 'O modo demonstração não grava um perfil remoto.'}</small>
             </span>
           </div>
         </aside>
       </div>
-    </main>
+    </Root>
   );
 }

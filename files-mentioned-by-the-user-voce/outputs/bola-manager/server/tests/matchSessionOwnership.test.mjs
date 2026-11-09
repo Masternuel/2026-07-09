@@ -4,11 +4,11 @@ import {
   FirestoreMatchSessionPersistence,
   MemoryMatchSessionPersistence,
 } from "../store/matchSessionPersistence.mjs";
-import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
+import { createFakeMatchFirestoreV1 } from "./helpers/fakeMatchFirestoreV1.mjs";
 
 for (const [name, createPersistence] of [
   ["memoria", () => new MemoryMatchSessionPersistence()],
-  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeFirestore())],
+  ["Firestore", () => new FirestoreMatchSessionPersistence(createFakeMatchFirestoreV1())],
 ]) {
   test(`${name}: fencing impede replica antiga de sobrescrever ou remover sessao`, async () => {
     const persistence = createPersistence();

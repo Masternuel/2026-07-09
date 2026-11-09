@@ -22,6 +22,7 @@ function lineupError(message, code, status = 409, details) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   error.details = details;
   return error;
 }
@@ -137,6 +138,7 @@ export function registerLineupHandlers(io, socket, {
       const careerEffects = clubCareerPerformanceEffects(currentRoom, manager.clubId);
       const cohesion = calculateTeamCohesion({
         previous: previousLineup?.cohesion,
+        previousTactics: previousLineup?.tactics,
         lineupIds: data.lineupIds,
         tactics: effectiveTactics,
         players: validationPlayers,

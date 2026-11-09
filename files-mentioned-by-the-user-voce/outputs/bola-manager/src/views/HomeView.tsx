@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, BriefcaseBusiness, CalendarDays, ChevronRight, CircleDollarSign, Crosshair, Gauge, Goal, Hammer, HeartPulse, MessageSquareWarning, Newspaper, ShieldCheck, Sparkles, TrendingUp, Users } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, BriefcaseBusiness, CalendarDays, ChevronRight, CircleDollarSign, Crosshair, Gauge, Goal, Hammer, HeartPulse, MessageSquareWarning, Newspaper, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { Badge } from '../components/shared/Badge';
 import { ClubMark } from '../components/shared/ClubMark';
 import { Panel } from '../components/shared/Panel';
+import { InformationDisclosure } from '../components/shared/InformationDisclosure';
 import { ProgressBar } from '../components/shared/ProgressBar';
 import { TacticsField } from '../components/tactics/TacticsField';
 import type { ServerMatchController } from '../hooks/useServerMatch';
@@ -306,11 +307,13 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
     ?? (knownConditions.length ? Math.round(average(knownConditions)) : null);
   const averageMorale = central?.squad.averageMorale
     ?? (knownMoralePlayers.length ? Math.round(average(knownMoralePlayers.map(playerMoraleScore))) : null);
-  const moralePulse = moralePulseCopy(averageMorale ?? 0, squadTotal > 0);
+  const moralePulse = averageMorale === null && squadTotal > 0
+    ? { title: 'Moral não informada', detail: 'Dados de moral ainda não disponíveis.' }
+    : moralePulseCopy(averageMorale ?? 0, squadTotal > 0);
   const activeTraining = players.find((player) => player.training?.active)?.training;
   const trainingLabel = activeTraining
     ? `Treino ativo: ${activeTraining.focus}`
-    : 'Treino não registrado';
+    : null;
   const fixtures = Array.isArray(room?.fixtureSchedule) ? room.fixtureSchedule : [];
   const centralFixture = central?.nextFixture ?? null;
   const activeFixtureId = centralFixture?.id ?? room?.currentFixtureId ?? null;
@@ -348,7 +351,6 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
   const fixtureCompetitionName = currentFixture?.competition || centralFixture?.competitionName || leagueName;
   const season = getSeasonProgress(room);
   const standings = room ? buildSeasonTable(room, roomLeague?.id ?? club.leagueId) : [];
-  const managerName = room?.managers.find((manager) => manager.id === managerId)?.name;
   const clubManagerKeys = new Set([club.id, club.code].map(normalizedKey));
   const controlsClub = (clubId: unknown) => room?.managers.some((manager) => (
     manager.clubId && normalizedKey(manager.clubId) === normalizedKey(clubId)
@@ -400,6 +402,23 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
     { key: 'administrative', title: 'Pendências administrativas', section: central?.administrativePending, route: 'finance', icon: AlertTriangle },
     { key: 'messages', title: 'Mensagens da diretoria', section: central?.messages, route: null, icon: MessageSquareWarning },
   ];
+  const pendingSections = operationalSections.filter(({ section }) => (section?.items.length ?? 0) > 0);
+  const otherSections = operationalSections.filter(({ section }) => !section?.items.length);
+  const unknownSections = otherSections.filter(({ section }) => !section).length;
+
+  function operationalRows(sections: typeof operationalSections) {
+    return sections.map(({ key, title, section, route, icon: Icon }) => {
+      const count = section?.items.length ?? 0;
+      const descriptions = count > 0 ? section!.items.map(operationalItemLabel)
+        : [section ? section.message ?? 'Nenhum registro pendente.' : 'Dados ainda não carregados.'];
+      return <button key={key} className="central-operation-row" type="button" disabled={!route} onClick={() => route && onNavigate(route)}>
+        <span className="central-operation-row__icon"><Icon size={15} /></span>
+        <span className="central-operation-row__details"><strong>{title}</strong>{descriptions.map((description, index) => <small key={`${key}:${index}`}>{description}</small>)}</span>
+        <Badge tone={!section ? 'neutral' : count > 0 ? 'warning' : 'neutral'}>{!section ? '—' : count}</Badge>
+        {route && <ChevronRight size={14} />}
+      </button>;
+    });
+  }
 
   const readinessLabel = !onlineMatch
     ? 'Ir para a partida'
@@ -441,7 +460,7 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
   return (
     <main className="dashboard view-enter">
       <div className="dashboard-heading">
-        <div><p className="eyebrow">{kickoff.heading}</p><h1>{managerName ? `Bom jogo, ${managerName}.` : 'Central do clube'}</h1><p>{centralFixture || currentFixture ? `${homeName} × ${awayName}` : (central?.emptyMessages.nextFixture ?? 'Nenhuma partida agendada')}</p></div>
+        <div><h1>Central do clube</h1></div>
         <div className="dashboard-actions">
           <button onClick={() => onNavigate('calendar')}><CalendarDays size={15} /> Ver agenda</button>
           <button className="accent" onClick={() => void handleMatchAction()} disabled={lineupSavePending || Boolean(onlineMatch?.readyPending) || (Boolean(onlineMatch) && !activeFixtureId)}><Goal size={15} /> {readinessLabel}</button>
@@ -459,12 +478,12 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
           </div>
           <div className="fixture-command__teams">
             <div className="fixture-team fixture-team--home"><ClubMark code={homeCode} color={homeColor} darkThemeColor={homeDarkThemeColor} lightThemeColor={homeLightThemeColor} imageUrl={homeCrestImageUrl} size="xl" /><div><strong>{homeName}</strong><span>{homeController}</span></div></div>
-            <div className="fixture-kickoff"><small>{kickoff.day}</small><strong>{kickoff.time}</strong><span>{kickoff.detail}</span></div>
+            <div className="fixture-kickoff" title={kickoff.heading}><small>{kickoff.day}</small><strong>{kickoff.time}</strong>{!centralFixture && !currentFixture && <span>{central?.emptyMessages.nextFixture ?? 'Nenhuma partida agendada'}</span>}</div>
             <div className="fixture-team fixture-team--away"><ClubMark code={awayCode} color={awayColor} darkThemeColor={awayDarkThemeColor} lightThemeColor={awayLightThemeColor} imageUrl={awayCrestImageUrl} size="xl" /><div><strong>{awayName}</strong><span>{awayController}</span></div></div>
           </div>
           <div className="fixture-command__intel">
             <div><span className="intel-icon"><Crosshair size={15} /></span><span><small>CHAVE DO JOGO</small><strong>{opponentStudy?.recommendations[0]?.detail ?? 'Estudo do adversário ainda não disponível'}</strong></span></div>
-            <div><span className="intel-icon"><ShieldCheck size={15} /></span><span><small>{onlineMatch ? 'PRONTIDÃO DA SALA' : 'ESCALAÇÃO'}</small><strong>{onlineMatch ? `${readyCount} de ${requiredCount} managers confirmados` : `${lineupCount} de 11 titulares definidos`}</strong></span></div>
+            <div><span className="intel-icon"><ShieldCheck size={15} /></span><span><small>ESCALAÇÃO</small><strong>{lineupCount} de 11 titulares definidos</strong></span></div>
             <button onClick={() => onNavigate('tactics')}>Revisar plano <ArrowRight size={15} /></button>
           </div>
         </section>
@@ -479,9 +498,8 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
             ))}
             {!standings.length && <div><span>—</span><span>Classificação ainda não disponível</span><span>—</span><span>—</span><strong>—</strong></div>}
           </div>
-          <div className="position-gap"><span><TrendingUp size={14} /> {standings.length ? (season.completedRounds ? `${season.completedRounds} ${season.completedRounds === 1 ? 'rodada concluída' : 'rodadas concluídas'}` : 'Tabela zerada para a estreia') : 'Aguardando dados da competição'}</span>{standings.length > 0 && <span>Rodada {season.currentRound}</span>}</div>
           <div className="recent-results-mini">
-            <header><strong>Últimos resultados</strong><span>{recentResults.length || '—'}</span></header>
+            <header><strong>Últimos resultados</strong></header>
             {recentResults.map((result) => (
               <div key={result.id}>
                 <Badge tone={result.outcome === 'win' ? 'positive' : result.outcome === 'loss' ? 'danger' : 'warning'}>
@@ -502,25 +520,24 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
           <div className="tactic-tags"><span><Gauge size={13} /> Ritmo {tacticLabels.tempo.toLocaleLowerCase('pt-BR')}</span><span><Crosshair size={13} /> {tacticLabels.transition}</span><span><Sparkles size={13} /> Mentalidade {tacticLabels.mentality.toLocaleLowerCase('pt-BR')}</span><span><ShieldCheck size={13} /> Entrosamento {cohesionScore}%</span></div>
         </Panel>
 
-        <Panel title="Pulso do elenco" eyebrow="MORAL E DISPONIBILIDADE" action="Ver elenco" onAction={() => onNavigate('squad')} className="squad-pulse">
-          <div className="pulse-hero"><div className="pulse-score"><strong>{averageMorale ?? '—'}</strong><span>{averageMorale === null ? '' : '/100'}</span></div><div><strong>{moralePulse.title}</strong><p>{moralePulse.detail}</p></div></div>
+        <Panel title="Elenco" action="Ver elenco" onAction={() => onNavigate('squad')} className="squad-pulse">
+          <div className="pulse-hero"><div className="pulse-score"><strong>{averageMorale ?? '—'}</strong><span>{averageMorale === null ? '' : '/100'}</span></div><div><strong title={moralePulse.detail}>{moralePulse.title}</strong></div></div>
           <div className="pulse-stats">
             <div><span><Users size={14} /> Disponíveis</span><strong>{availableCount}<small>/{squadTotal}</small></strong><ProgressBar value={squadTotal ? (availableCount / squadTotal) * 100 : 0} /></div>
             <div><span><HeartPulse size={14} /> Condição média</span><strong>{averageCondition ?? '—'}<small>{averageCondition === null ? '' : '%'}</small></strong><ProgressBar value={averageCondition ?? 0} tone="info" /></div>
           </div>
-          <div className="availability-row"><Badge tone="danger" dot>{injuredCount} lesionado{injuredCount === 1 ? '' : 's'}</Badge><Badge tone="warning" dot>{suspendedCount} suspenso{suspendedCount === 1 ? '' : 's'}</Badge><span>{trainingLabel}</span></div>
+          {(injuredCount > 0 || suspendedCount > 0 || trainingLabel) && <div className="availability-row">{injuredCount > 0 && <Badge tone="danger" dot>{injuredCount} lesionado{injuredCount === 1 ? '' : 's'}</Badge>}{suspendedCount > 0 && <Badge tone="warning" dot>{suspendedCount} suspenso{suspendedCount === 1 ? '' : 's'}</Badge>}{trainingLabel && <span>{trainingLabel}</span>}</div>}
         </Panel>
 
-        <Panel title="Financeiro" eyebrow="DADOS PERSISTIDOS" action="Detalhes" onAction={() => onNavigate('finance')} className="finance-pulse">
-          <div className="finance-total"><span><small>SALDO OPERACIONAL</small><strong>{formatKnownCurrency(central?.finance.balance)}</strong></span>{financeNet !== null && <span className={`trend${financeNet >= 0 ? ' positive' : ''}`}>{financeNet >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{formatCurrency(Math.abs(financeNet))}</span>}</div>
-          <div className="cashflow-chart" aria-label="Receitas e despesas registradas">
+        <Panel title="Financeiro" action="Detalhes" onAction={() => onNavigate('finance')} className="finance-pulse">
+          <div className="finance-total"><span><small>SALDO OPERACIONAL</small><strong>{formatKnownCurrency(central?.finance.balance)}</strong></span>{financeNet !== null && financeNet !== 0 && <span className={`trend${financeNet > 0 ? ' positive' : ''}`}>{financeNet > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{formatCurrency(Math.abs(financeNet))}</span>}</div>
+          {cashflowPeriods.length > 0 ? <div className="cashflow-chart" aria-label="Receitas e despesas registradas">
             {cashflowPeriods.map((period) => <span key={period.period} title={period.period} style={{ height: '100%', background: 'transparent' }}><b aria-hidden="true" style={{ position: 'absolute', left: 0, bottom: 0, width: '42%', height: `${period.incomeHeight}%`, background: 'var(--accent)' }} /><i style={{ height: `${period.expenseHeight}%` }} /></span>)}
-            {!cashflowPeriods.length && <small>Sem movimentações financeiras registradas.</small>}
-          </div>
+          </div> : <p className="central-empty-copy">Sem movimentações financeiras registradas.</p>}
           <div className="finance-legend"><span><i /> Receita <strong>{formatKnownCurrency(financeIncome)}</strong></span><span><i /> Despesa <strong>{formatKnownCurrency(financeExpense)}</strong></span></div>
         </Panel>
 
-        <Panel title="Diretoria" eyebrow="OBJETIVOS DA TEMPORADA" className="objectives-panel">
+        <Panel title="Objetivos da temporada" className="objectives-panel">
           {objectives.map((objective, index) => {
             const title = nonEmptyText(objective.title ?? objective.name)!;
             const detail = nonEmptyText(objective.description ?? objective.detail ?? objective.target);
@@ -533,42 +550,20 @@ export function HomeView({ players, savedLineup, savedLineupIds, opponentStudy, 
             : 'Objetivos ainda não carregados'}</strong></span></div>}
         </Panel>
 
-        <Panel title="Sala de imprensa" eyebrow="RADAR DO CLUBE" action="Ver feed" onAction={() => onNavigate('news')} className="newsroom-panel">
+        <Panel title="Notícias" action="Ver feed" onAction={() => onNavigate('news')} className="newsroom-panel">
           {leadNews ? <article className="lead-news">
             <div className="lead-news__visual"><span>{leadNewsCategory.toLocaleUpperCase('pt-BR')}</span><i>{newsDay(leadNewsDate)}</i></div>
-            <div><Badge tone="info">{leadNewsCategory}</Badge><h3>{leadNews.title}</h3><p>{leadNews.summary ?? leadNews.content ?? 'Conteúdo não registrado.'}</p><span><Newspaper size={13} /> {newsDateLabel(leadNewsDate)}</span></div>
-          </article> : <article className="lead-news"><div className="lead-news__visual"><span>SEM NOTÍCIAS</span><i>—</i></div><div><Badge tone="neutral">Feed</Badge><h3>{central?.latestNews.message ?? 'Nenhuma notícia da carreira'}</h3><p>Os fatos da temporada aparecerão aqui quando forem registrados.</p></div></article>}
+            <div><h3>{leadNews.title}</h3><p>{leadNews.summary ?? leadNews.content ?? 'Conteúdo não registrado.'}</p><span><Newspaper size={13} /> {newsDateLabel(leadNewsDate)}</span></div>
+          </article> : <p className="central-empty-copy">{central?.latestNews.message ?? 'Nenhuma notícia da carreira'}</p>}
           <div className="news-headlines">
             {clubNews.slice(1, 3).map((item) => <button key={item.id} onClick={() => onNavigate('news')}><span>{item.category ?? 'Notícia'}</span><strong>{item.title}</strong><ChevronRight size={14} /></button>)}
           </div>
         </Panel>
 
-        <Panel title="Pendências do clube" eyebrow="DADOS FACTUAIS DA CARREIRA" className="central-operations-panel">
-          <div className="central-operations-grid">
-            {operationalSections.map(({ key, title, section, route, icon: Icon }) => {
-              const count = section?.items.length ?? 0;
-              const firstItem = section?.items[0];
-              const description = firstItem
-                ? operationalItemLabel(firstItem)
-                : section
-                  ? section.message ?? 'Nenhum registro pendente.'
-                  : 'Dados ainda não carregados.';
-              return (
-                <button
-                  key={key}
-                  className="central-operation-row"
-                  type="button"
-                  disabled={!route}
-                  onClick={() => route && onNavigate(route)}
-                >
-                  <span className="central-operation-row__icon"><Icon size={15} /></span>
-                  <span><strong>{title}</strong><small>{description}</small></span>
-                  <Badge tone={!section ? 'neutral' : count > 0 ? 'warning' : 'positive'}>{!section ? '—' : count > 0 ? count : 'OK'}</Badge>
-                  {route && <ChevronRight size={14} />}
-                </button>
-              );
-            })}
-          </div>
+        <Panel title="Pendências do clube" className="central-operations-panel">
+          {pendingSections.length > 0 && <div className="central-operations-grid" aria-label="Pendências registradas">{operationalRows(pendingSections)}</div>}
+          {pendingSections.length === 0 && <p className="central-empty-copy">{unknownSections ? 'Pendências ainda não carregadas.' : 'Nenhuma pendência registrada.'}</p>}
+          {otherSections.length > 0 && <InformationDisclosure title={unknownSections ? `Outras áreas · ${unknownSections} ainda não carregadas` : 'Áreas sem pendências'} className="central-operations-details"><div className="central-operations-grid">{operationalRows(otherSections)}</div></InformationDisclosure>}
         </Panel>
       </div>
     </main>

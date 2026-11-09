@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stringifyRedacted, redactText } from "../server/infrastructure/redaction.mjs";
 import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { extname, relative, resolve, sep } from "node:path";
@@ -294,7 +295,7 @@ export async function secureAssetPath(assetRoot, relativePath) {
   return realTarget;
 }
 
-export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, report, concurrency = 6 }) {
+export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, report, ownerId = "brasfoot-import", concurrency = 6 }) {
   const withCrest = clubs.filter((club) => club.assets?.shield);
   report.assets.uploaded ??= 0;
   report.assets.failed ??= 0;
@@ -313,11 +314,11 @@ export async function uploadBrasfootCrests({ clubs, assetRoot, mediaService, rep
           kind: "crest",
           mimeType: "image/png",
           bytes,
-          uploadedBy: "brasfoot-import",
+          uploadedBy: ownerId,
         });
         club.crestImageUrl = media.url;
         club.crestImagePath = media.path;
-        uploadedMedia.push({ ...media, recordId: String(club.id) });
+        uploadedMedia.push({ ...media, entity: "clubs", recordId: String(club.id), ownerId });
         report.assets.uploaded += 1;
       } catch (error) {
         report.assets.failed += 1;
@@ -338,7 +339,7 @@ async function cleanupUploadedAssets(mediaService, uploadedMedia, report) {
   if (!mediaService || typeof mediaService.remove !== "function") return;
   await Promise.all(uploadedMedia.map(async (media) => {
     try {
-      await mediaService.remove(media.path);
+      await mediaService.remove(media.path, media);
       report.assets.cleanedUp += 1;
     } catch (error) {
       report.assets.cleanupFailed += 1;
@@ -390,6 +391,7 @@ function compactReport(report) {
 export async function executeImportCommit({
   database,
   catalogStore = null,
+  ownerId = catalogStore?.ownerId ?? "brasfoot-import",
   data,
   summary,
   parsedSource,
@@ -455,6 +457,7 @@ export async function executeImportCommit({
       } else {
         await persistProgress("uploading-assets");
         const upload = await uploadBrasfootCrests({
+          ownerId,
           clubs: data.clubs,
           assetRoot: parsedSource.assetRoot,
           mediaService,
@@ -692,11 +695,11 @@ export async function runImport(options, env = process.env) {
   } finally {
     if (options.report) {
       try {
-        await writeFile(resolve(options.report), `${JSON.stringify(finalReport ?? {
+        await writeFile(resolve(options.report), `${stringifyRedacted(finalReport ?? {
           sourceFormat: "unknown",
           inputPath,
           commit: { status: caughtError ? "failed" : "unknown", error: caughtError?.message },
-        }, null, 2)}\n`, "utf8");
+        }, 2)}\n`, "utf8");
       } catch (reportError) {
         if (!caughtError) throw reportError;
       }
@@ -712,12 +715,12 @@ if (isDirectExecution()) {
   try {
     const options = parseArguments(process.argv.slice(2));
     if (options.help) console.log(helpText());
-    else console.log(JSON.stringify(await runImport(options), null, 2));
+    else console.log(stringifyRedacted(await runImport(options), 2));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error("Dataset inválido:", error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+      console.error("Dataset inválido:", redactText(error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")));
     } else {
-      console.error(error.message);
+      console.error(redactText(error.message));
     }
     process.exitCode = 1;
   }

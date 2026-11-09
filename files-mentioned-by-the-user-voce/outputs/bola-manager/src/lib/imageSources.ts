@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { allowedExternalImage, MAX_IMAGE_BYTES } from '../../shared/imagePolicy.mjs';
+import { useContext, useEffect, useState } from 'react';
+import { allowedDesktopImage, allowedExternalImage, MAX_IMAGE_BYTES } from '../../shared/imagePolicy.mjs';
 import { createImageLoader } from '../../shared/imageLoader.mjs';
+import { AuthContext } from '../auth/AuthContext';
 
 const previews = new Set<string>();
 export function createImagePreview(file: File) {
@@ -53,15 +54,34 @@ const loader = createImageLoader({
   },
 });
 
-function localSource(value?: string | null) {
+function localSource(value: string | null | undefined, desktopOrigin: string | null) {
   if (!value) return null;
   if (previews.has(value)) return value;
+  if (desktopOrigin) {
+    const desktopImage = allowedDesktopImage(value, desktopOrigin);
+    if (desktopImage) return desktopImage;
+  }
   return /^\/assets\/[a-zA-Z0-9_/-]+\.(?:png|jpe?g|webp)$/.test(value) && !value.includes('..') ? value : null;
 }
 
-export function useImageSource(source?: string | null) {
-  const local = localSource(source);
+function useImagePolicy(source?: string | null) {
+  const auth = useContext(AuthContext);
+  const desktopOrigin = typeof window !== 'undefined' && window.bolaDesktop
+    && (auth?.identity?.mode === 'local' || auth?.identity?.mode === 'peer')
+    ? window.location.origin
+    : null;
+  const local = localSource(source, desktopOrigin);
   const external = allowedExternalImage(source);
+  return { local, external };
+}
+
+export function useImageSourceAllowed(source?: string | null) {
+  const { local, external } = useImagePolicy(source);
+  return Boolean(local || external);
+}
+
+export function useImageSource(source?: string | null) {
+  const { local, external } = useImagePolicy(source);
   const [loaded, setLoaded] = useState<{ source: string; url: string | null } | null>(null);
   useEffect(() => {
     if (local || !external) return;

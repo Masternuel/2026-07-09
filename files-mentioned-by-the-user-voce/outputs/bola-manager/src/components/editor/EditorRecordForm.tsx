@@ -7,8 +7,7 @@ import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { ClubMark } from '../shared/ClubMark';
 import { ResilientImage } from '../shared/ResilientImage';
-import { createImagePreview, releaseImagePreview } from '../../lib/imageSources';
-import { allowedExternalImage } from '../../../shared/imagePolicy.mjs';
+import { createImagePreview, releaseImagePreview, useImageSourceAllowed } from '../../lib/imageSources';
 import type {
   EditorClub,
   EditorEntity,
@@ -181,6 +180,7 @@ function MediaField({ entity, record, file, previewUrl, progress, error, pending
   const label = entity === 'clubs' ? 'Escudo do clube' : entity === 'players' ? 'Foto do jogador' : 'Troféu do torneio';
   const fallback = entity === 'tournaments' ? <Trophy size={26} /> : <ImagePlus size={26} />;
   const currentUrl = previewUrl || mediaUrl(entity, record);
+  const sourceAllowed = useImageSourceAllowed(currentUrl);
   return (
     <section className="editor-media-field editor-field--wide" aria-labelledby={`editor-media-${entity}`}>
       <header><span id={`editor-media-${entity}`}>MÍDIA / {label.toUpperCase()}</span><small>PNG, JPEG ou WebP · máximo 5 MB</small></header>
@@ -190,7 +190,7 @@ function MediaField({ entity, record, file, previewUrl, progress, error, pending
         </div>
         <div className="editor-media-field__controls">
           <p>{file ? <><strong>{file.name}</strong><small>{(file.size / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} KB · será enviada ao salvar</small></> : <><strong>{currentUrl ? 'Imagem associada' : 'Nenhuma imagem selecionada'}</strong><small>Use uma imagem nítida; o recorte se adapta à interface.</small></>}</p>
-          {!file && currentUrl && !allowedExternalImage(currentUrl) && <p role="status">Origem da imagem bloqueada. Reenvie o arquivo pelo Editor.</p>}
+          {!file && currentUrl && !sourceAllowed && <p role="status">Origem da imagem bloqueada. Reenvie o arquivo pelo Editor.</p>}
           <input
             ref={inputRef}
             className="sr-only"

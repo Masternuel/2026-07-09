@@ -8,6 +8,7 @@ import { createMediaService } from "../services/mediaService.mjs";
 
 import { png } from "./helpers/imageFixtures.mjs";
 import { pendingJsonResponse } from "./fixtures/cloudinaryPendingBody.mjs";
+import { mediaHash } from "../services/mediaOwnership.mjs";
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -45,7 +46,7 @@ test("envia e remove imagem Cloudinary com assinatura gerada no backend", async 
     assert.equal(form.get("api_secret"), null);
     if (url.endsWith("/image/upload")) {
       const publicId = form.get("public_id");
-      assert.match(publicId, /^editor-media\/clubs\/cloudinary\/[a-f0-9]{24}\/asset-id$/);
+      assert.match(publicId, /^editor-media\/clubs\/cloudinary\/v2\/[a-f0-9]{24}\/[a-f0-9]{24}\/asset-id\.[a-f0-9]{64}$/);
       assert.equal(form.get("timestamp"), String(timestamp));
       assert.equal(
         form.get("signature"),
@@ -91,7 +92,7 @@ test("envia e remove imagem Cloudinary com assinatura gerada no backend", async 
   });
   assert.equal(media.path.includes("/cloudinary/"), true);
   assert.equal(media.url.startsWith("https://res.cloudinary.com/"), true);
-  await service.remove(media.path);
+  await service.remove(media.path, { entity: "clubs", recordId: "AUR", ownerId: "uid-editor" });
   assert.equal(calls.length, 2);
   await assert.rejects(
     service.remove("editor-media/clubs/cloudinary/../../outro-asset"),
@@ -115,7 +116,7 @@ test("recusa URL inesperada do provedor e remove somente o novo upload", async (
         return jsonResponse({ result: "ok" });
       },
     });
-    await assert.rejects(service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png }),
+    await assert.rejects(service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png, uploadedBy: "uid-editor" }),
       (error) => error.code === "EDITOR_MEDIA_UPLOAD_FAILED");
     assert.deepEqual(deleted, [uploadedPath]);
   }
@@ -126,7 +127,10 @@ test("mantem exclusao de objetos Firebase legados ao usar Cloudinary", async () 
   const bucket = {
     name: "legacy.appspot.com",
     file(path) {
-      return { async delete() { deleted.push(path); } };
+      return {
+        async getMetadata() { return [{ generation: "1", metadata: { uploadedBy: "uid-editor", mediaEntity: "clubs", mediaKind: "crest" } }]; },
+        async delete() { deleted.push(path); },
+      };
     },
   };
   const service = createMediaService({
@@ -142,8 +146,9 @@ test("mantem exclusao de objetos Firebase legados ao usar Cloudinary", async () 
     (error) => error.code === "EDITOR_MEDIA_PATH_INVALID",
   );
   assert.deepEqual(deleted, []);
-  await service.remove("editor-media/clubs/hash/legacy.png");
-  assert.deepEqual(deleted, ["editor-media/clubs/hash/legacy.png"]);
+  const legacyPath = `editor-media/clubs/${mediaHash("AUR")}/legacy.png`;
+  await service.remove(legacyPath, { ownerId: "uid-editor", entity: "clubs", recordId: "AUR" });
+  assert.deepEqual(deleted, [legacyPath]);
 });
 
 test("configuracao Cloudinary incompleta falha somente no upload", async () => {
@@ -168,7 +173,7 @@ test("erro do Cloudinary vira falha tipada sem vazar o segredo", async () => {
     fetchImpl: async () => jsonResponse({ error: { message: "Unauthorized super-secret" } }, 401),
   });
   await assert.rejects(
-    service.upload({ entity: "players", recordId: "AUR-9", kind: "avatar", mimeType: "image/png", bytes: png }),
+    service.upload({ entity: "players", recordId: "AUR-9", kind: "avatar", mimeType: "image/png", bytes: png, uploadedBy: "uid-editor" }),
     (error) => {
       const exposed = JSON.stringify({ message: error.message, details: error.details, stack: error.stack });
       return error.code === "EDITOR_MEDIA_UPLOAD_FAILED" && !exposed.includes("super-secret");
@@ -190,7 +195,7 @@ test("timeout continua ativo enquanto o corpo da resposta nao termina", async ()
     },
   });
   await assert.rejects(
-    service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png }),
+    service.upload({ entity: "clubs", recordId: "AUR", kind: "crest", mimeType: "image/png", bytes: png, uploadedBy: "uid-editor" }),
     (error) => error.code === "EDITOR_MEDIA_UPLOAD_FAILED" && error.details?.cause === "timeout",
   );
   assert.equal(signal.aborted, true);

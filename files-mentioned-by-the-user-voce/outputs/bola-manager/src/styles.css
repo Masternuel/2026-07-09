@@ -1,6 +1,14 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@config "../tailwind.config.js";
+@source "../index.html";
+@source "./";
+
+/* Keep the v3 reset values; application styles still override this base layer. */
+@layer base {
+  *, ::before, ::after, ::backdrop { border-color: #e5e7eb; }
+  input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+  button:disabled, input:disabled, select:disabled, optgroup:disabled, textarea:disabled { opacity: revert-layer; }
+}
 
 :root {
   color-scheme: dark;
@@ -175,8 +183,9 @@ em { font-style: normal; }
 
 .theme-light { --canvas: #eceeeb; --panel: #fafbf9; --raised: #f0f2ef; --raised-2: #e7eae5; --ink: #171a17; --ink-soft: #40453f; --muted: #626860; --muted-2: #838981; --line: #d4d8d1; --line-soft: #dde0da; color-scheme: light; }
 .theme-light .club-mark { --club-color: var(--club-color-light); }
-.theme-light .sidebar, .theme-light .topbar { background: #f5f7f3; }
-.theme-light .club-switcher, .theme-light .sidebar__season, .theme-light .next-deadline, .theme-light .modal__footer { background: #edf0eb; }
+.theme-light .sidebar, .theme-light .topbar { background: var(--club-menu, #f5f7f3); }
+.theme-light .club-switcher, .theme-light .sidebar__season, .theme-light .next-deadline { background: var(--club-menu-inset, #edf0eb); }
+.theme-light .modal__footer { background: #edf0eb; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

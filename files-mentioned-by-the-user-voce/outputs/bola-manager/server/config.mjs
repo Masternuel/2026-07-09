@@ -1,4 +1,6 @@
 import { validateMetricsToken } from "./infrastructure/metricsEndpoint.mjs";
+import { createOriginPolicy, parseTrustedProxies } from "./infrastructure/networkPolicy.mjs";
+import { getStagingDiagnosticsConfig } from "./infrastructure/stagingProxyDiagnostics.mjs";
 
 function nonNegativeInteger(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -37,9 +39,26 @@ export function getServerConfig(env = process.env) {
     throw new Error("ALLOW_DEMO_AUTH nunca pode ser ativado em producao");
   }
 
+  const clientOrigin = env.CLIENT_ORIGIN?.trim() || (nodeEnv === "production" ? "" : DEFAULT_LOCAL_ORIGINS);
+  createOriginPolicy(clientOrigin, nodeEnv);
+  const stagingHttpsOrigin = env.STAGING_HTTPS_ORIGIN?.trim() || "";
+  if (stagingHttpsOrigin) {
+    let valid = false;
+    try {
+      const origin = new URL(stagingHttpsOrigin);
+      valid = origin.protocol === "https:" && origin.origin === stagingHttpsOrigin;
+    } catch { /* Invalid configuration fails before dependencies initialize. */ }
+    if (!valid || env.RAILWAY_ENVIRONMENT_NAME !== "staging" || env.RAILWAY_SERVICE_NAME !== "backend-staging") {
+      throw new Error("STAGING_HTTPS_ORIGIN requires an exact HTTPS origin and backend-staging/staging");
+    }
+  }
   return {
     port: nonNegativeInteger(env.PORT, 3001),
-    clientOrigin: env.CLIENT_ORIGIN?.trim() || DEFAULT_LOCAL_ORIGINS,
+    clientOrigin,
+    trustProxy: parseTrustedProxies(env.TRUST_PROXY?.trim()),
+    enableHsts: nodeEnv === "production" && enabled(env.ENABLE_HSTS),
+    stagingHttpsOrigin,
+    stagingProxyDiagnostics: getStagingDiagnosticsConfig(env),
     matchEventDelayMs: nonNegativeInteger(env.MATCH_EVENT_DELAY_MS, 800),
     nodeEnv,
     allowDemoAuth: requestedDemoAuth,
@@ -59,6 +78,7 @@ export function getServerConfig(env = process.env) {
     rateLimitSocketMax: positiveInteger(env.RATE_LIMIT_SOCKET_MAX, 120),
     metricsToken: validateMetricsToken(env.METRICS_TOKEN),
     dependencyTimeoutMs: positiveInteger(env.DEPENDENCY_TIMEOUT_MS, 2_500),
+    readinessCacheMs: Math.min(2_000, positiveInteger(env.READINESS_CACHE_MS, 1_000)),
     authTimeoutMs: positiveInteger(env.AUTH_TIMEOUT_MS, 10_000),
     socketAuthRecheckMs: positiveInteger(env.SOCKET_AUTH_RECHECK_MS, 60_000),
     httpSlowMs: positiveInteger(env.HTTP_SLOW_MS, 5_000),
@@ -67,6 +87,19 @@ export function getServerConfig(env = process.env) {
     matchPersistenceTimeoutMs: positiveInteger(env.MATCH_PERSISTENCE_TIMEOUT_MS, 15_000),
     shutdownTimeoutMs: positiveInteger(env.SHUTDOWN_TIMEOUT_MS, 10_000),
     importObjectTtlDays: positiveInteger(env.IMPORT_OBJECT_TTL_DAYS, 1),
+    importQuotas: {
+      maxActiveSessionsPerUser: positiveInteger(env.IMPORT_MAX_SESSIONS_PER_UID, 3),
+      maxReservedBytesPerUser: positiveInteger(env.IMPORT_MAX_RESERVED_BYTES_PER_UID, 2 * 1024 * 1024 * 1024),
+      maxConcurrentProcessesPerUser: positiveInteger(env.IMPORT_MAX_PROCESSES_PER_UID, 1),
+    },
+    aiLimits: {
+      windowMs: positiveInteger(env.AI_BUDGET_WINDOW_MS, 3_600_000),
+      operationLimit: positiveInteger(env.AI_OPERATION_ATTEMPTS, 60),
+      userLimit: positiveInteger(env.AI_UID_ATTEMPTS, 120),
+      globalLimit: positiveInteger(env.AI_GLOBAL_ATTEMPTS, 1_000),
+      userConcurrent: positiveInteger(env.AI_UID_CONCURRENCY, 1),
+      globalConcurrent: positiveInteger(env.AI_GLOBAL_CONCURRENCY, 8),
+    },
   };
 }
 

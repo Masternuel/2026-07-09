@@ -107,7 +107,9 @@ test('cabeçalho interativo altera sentido e abertura do jogador continua funcio
 test('serviços ainda ausentes não exibem ações falsas', async () => {
   const header = renderToStaticMarkup(createElement(Header, { route: 'squad', club: { name: 'Clube' },
     manager: { displayName: 'Teste', mode: 'demo' }, nextFixture: null, onMenu() {}, onNavigate() {}, lightMode: false, onToggleTheme() {} }));
-  assert.match(header, /<button[^>]*aria-label="Busca global indisponível"[^>]*disabled/);
+  assert.doesNotMatch(header, /Busca global|search-button|lucide-search/);
+  assert.match(header, /aria-label="Abrir configurações de notificações"/);
+  assert.match(header, /aria-label="Ativar tema claro"/);
   const config = await readFile(new URL('../../src/views/media/ConfigView.tsx', import.meta.url), 'utf8');
   assert.match(config, /inventário confiável de dispositivos/);
   assert.match(config, /disabled title="Recurso ainda não disponível">Indisponível/);

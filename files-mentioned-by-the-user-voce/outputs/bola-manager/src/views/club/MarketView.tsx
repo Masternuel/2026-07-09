@@ -565,7 +565,7 @@ export function MarketView({
 
   return <main className="secondary-view view-enter">
     <div className="view-heading">
-      <div><p className="eyebrow">MERCADO DA SALA · BASE COMPARTILHADA</p><h1>Mercado</h1><p>Ofertas, leilões, empréstimos e transferências persistidos no save.</p></div>
+      <div><h1>Mercado</h1></div>
       <div className="market-budget"><small>ORÇAMENTO DISPONÍVEL</small><strong>{snapshot ? formatCurrency(snapshot.finance.available) : '—'}</strong><span>{snapshot ? `${formatCurrency(snapshot.finance.committed)} comprometidos` : 'Sincronizando finanças'}</span></div>
     </div>
 
@@ -581,7 +581,7 @@ export function MarketView({
 
     <div className="market-layout">
       <section className="auction-board">
-        <header><div><p className="eyebrow">REDE DA SALA</p><h2>{boardTitle}</h2></div><Badge tone={market.error ? 'danger' : 'positive'} dot>{market.syncing ? 'Sincronizando' : market.error ? 'Indisponível' : 'Mercado ao vivo'}</Badge></header>
+        <header><div><h2>{boardTitle}</h2></div><Badge tone={market.error ? 'danger' : 'positive'} dot>{market.syncing ? 'Sincronizando' : market.error ? 'Indisponível' : 'Mercado ao vivo'}</Badge></header>
         {market.loading && !snapshot
           ? <div className="market-empty market-empty--loading"><RefreshCw className="spin" size={20} /><strong>Sincronizando mercado…</strong><small>Buscando anúncios, finanças e negociações.</small></div>
           : tab === 'opportunities'

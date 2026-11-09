@@ -447,7 +447,7 @@ export function TacticsView({
   return (
     <main className="tactics-view view-enter">
       <div className="view-heading tactics-heading">
-        <div><p className="eyebrow">PLANO DE JOGO · VERSÃO 09</p><h1>Táticas</h1><p>Estrutura dinâmica, funções e comportamento em todas as fases.</p></div>
+        <div><h1>Táticas</h1></div>
         <div className="view-heading__actions"><Button variant="secondary" icon={<RotateCcw size={15} />} onClick={restore}>Restaurar</Button><Button variant="primary" loading={savePending} icon={dirty ? <Save size={15} /> : <Check size={15} />} onClick={() => void save()}>{dirty ? 'Salvar alterações' : 'Plano salvo'}</Button></div>
       </div>
 

@@ -242,7 +242,7 @@ export function mutationPayload(entity: EditorEntity, input: EditorRecord, inclu
   const id = includeId ? { id: record.id } : {};
   if (entity === 'leagues') {
     const league = record as EditorLeague;
-    return { ...id, name: league.name, country: league.country, level: league.level, division: league.division, active: league.active };
+    return { ...id, name: league.name, country: league.country, level: league.level, division: league.division, legs: league.legs, active: league.active };
   }
   if (entity === 'clubs') {
     const club = record as EditorClub;

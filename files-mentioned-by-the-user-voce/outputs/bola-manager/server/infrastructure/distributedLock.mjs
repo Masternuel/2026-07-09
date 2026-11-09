@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { withTimeout } from "./readiness.mjs";
 import { lockMetricResource } from "./metricPolicy.mjs";
+import { coordinationUnavailable } from "./coordinationAvailability.mjs";
 
 export const RELEASE_LOCK_SCRIPT = `
 -- bola-manager:lock:release
@@ -80,8 +81,12 @@ export function createDistributedLock({
   const retryCeiling = Math.max(retryFloor, positiveInteger(retryMaxMs, 250));
   const commandTimeout = positiveInteger(commandTimeoutMs, 2_500);
 
-  function command(promise, operation) {
-    return withTimeout(promise, commandTimeout, `redis-lock-${operation}`);
+  async function command(promise, operation) {
+    try {
+      return await withTimeout(promise, commandTimeout, `redis-lock-${operation}`);
+    } catch (error) {
+      throw coordinationUnavailable(error);
+    }
   }
 
   async function evaluate(script, key, args) {

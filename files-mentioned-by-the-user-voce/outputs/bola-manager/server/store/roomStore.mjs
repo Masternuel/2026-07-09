@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { redactLogValue } from "../infrastructure/redaction.mjs";
 import { applyScoutingAction, scoutingClub, scoutingError, scoutingNeedsPlayer, scoutingPlayer, scoutingSnapshot, SCOUTING_READ_PATHS, SCOUTING_WRITE_PATHS } from "../game/scouting.mjs";
 import { buildClubTacticalStudy, startTacticalStudy, studyKnowledge, tacticalStudyContext, TACTICAL_STUDY_PATHS } from "../game/clubTacticalStudy.mjs";
 import { assertHistoryId, assertMatchHistoryCapacity, enqueueMatchHistory, flushMatchHistory, historyPage, historyPageOptions, initializeMatchHistory, MATCH_HISTORY_PATHS } from "./matchHistory.mjs";
@@ -848,6 +849,7 @@ function careerRosterLoadFailure(message, code, status, transient = false) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   error.transient = transient;
   return error;
 }
@@ -1219,7 +1221,7 @@ function createRoomCompetitionSeason(room) {
     });
   } catch (error) {
     throw new RoomError(
-      `Torneio invalido: ${error?.message ?? "configuracao nao suportada"}`,
+      "Configuracao do torneio invalida",
       error?.code ?? "INVALID_TOURNAMENT_CONFIGURATION",
       409,
     );
@@ -1506,6 +1508,27 @@ const VIEWER_EXCLUDED_PATHS = Object.freeze([
   "tacticalStudyState",
 ]);
 
+const ROSTER_READ_PATHS = Object.freeze([
+  "competitionCatalog", "tournamentCatalog", "playerStates", "clubMoraleStates",
+  "marketState.registrations", "careerState.players", "careerState.roster",
+  "careerState.trainingPlans", "careerState.currentSeason",
+]);
+
+function clubRuntimeState(room, clubId) {
+  const state = (room.clubMoraleStates ?? []).find(
+    (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
+  );
+  return {
+    currentSeason: room.currentSeason ?? 1,
+    playerStates: (room.playerStates ?? []).filter(
+      (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
+    ),
+    moraleState: state ?? {
+      clubId, active: false, score: 70, playerDeltas: [], updatedAt: null, sourceMatchId: null,
+    },
+  };
+}
+
 // Private coach career reads use only the aggregates consumed by
 // buildCoachCareerSnapshot. Composite aggregates are persisted one child per
 // section, therefore their child paths must be explicit here. In particular,
@@ -1767,15 +1790,44 @@ export class RoomStore {
     return viewerProjection(room);
   }
 
-  async requireMembershipPaths(code, managerId, paths) {
+  async requireMembershipPaths(code, managerId, paths, options = {}) {
     const normalizedCode = this.#normalizeCode(code);
     const room = typeof this.#persistence.getPaths === "function"
-      ? await this.#persistence.getPaths(normalizedCode, paths)
+      ? await this.#persistence.getPaths(normalizedCode, paths, options)
       : await this.#persistence.get(normalizedCode);
     if (!room || !Array.isArray(room.managerIds) || !room.managerIds.includes(managerId)) {
       throw new RoomError("Sala nao encontrada", "ROOM_NOT_FOUND", 404);
     }
     return room;
+  }
+
+  async requireRosterReadScope(code, managerId, clubId) {
+    const room = await this.requireMembershipPaths(code, managerId, ROSTER_READ_PATHS, {
+      readOnly: true, legacyPaths: ["clubCareerState.currentDate", "clubCareerState.clubFacilities",
+        "clubCareerState.staffMembers", "clubCareerState.staffContracts", "clubCareerState.staffCandidates",
+        "clubCareerState.staffInitializedClubIds", "clubCareerState.staffSchemaVersion"],
+    });
+    // Reuse the existing legacy registration interpreter, only on this detached projection.
+    room.currentSeason = Number.isInteger(room.currentSeason) && room.currentSeason > 0
+      ? room.currentSeason : 1;
+    if (room.status === "active") ensureMarketState(room, careerDateFor(room, this.#now()));
+    return { room, runtime: clubRuntimeState(room, clubId) };
+  }
+
+  async completeRosterReadScope(scope, catalog) {
+    const { room } = scope;
+    if (room.status !== "active" || room.careerState || room.completedFixtureCount > 0) return scope;
+    const managerClubIds = (room.managers ?? []).map((manager) => manager.clubId).filter(Boolean);
+    const [competitions, tournaments] = await Promise.all([
+      this.#loadCompetitionCatalog(room.catalogOwnerId || room.ownerId, room.activeLeagues, managerClubIds, catalog),
+      this.#loadTournamentCatalog(room.catalogOwnerId || room.ownerId, managerClubIds, catalog),
+    ]);
+    if (competitions.length === 0 && tournaments.length === 0) return scope;
+    const candidate = { ...room, competitionCatalog: competitions.length ? competitions : room.competitionCatalog,
+      tournamentCatalog: tournaments };
+    const roster = await this.#loadCareerRoster(candidate, catalog);
+    if (roster.length) candidate.careerState = initialCareerState(candidate, roster);
+    return { ...scope, room: candidate };
   }
 
   async requireRoom(code) {
@@ -1826,8 +1878,8 @@ export class RoomStore {
       // The match and durable outbox already committed. Never report it as
       // failed or discard its events just because the archive needs a retry.
       const context = { code: room.code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED", pending: room.matchHistoryPending?.length ?? 0 };
-      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.archive_pending", context); } catch { /* Logging cannot undo a committed match. */ }
-      return { code: context.errorCode, message: "Arquivamento pendente; detalhes preservados no save para nova tentativa" };
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.archive_pending", redactLogValue(context)); } catch { /* Logging cannot undo a committed match. */ }
+      return { code: "MATCH_HISTORY_WRITE_FAILED", message: "Arquivamento pendente; detalhes preservados no save para nova tentativa" };
     }
   }
 
@@ -1843,7 +1895,7 @@ export class RoomStore {
       }
     };
     const job = drain().catch((error) => {
-      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.drain_failed", { code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED" }); } catch { /* Durable queue remains the source of truth. */ }
+      try { (this.#aiMarketTelemetry.logger ?? console).warn("match_history.drain_failed", redactLogValue({ code, errorCode: error?.code ?? "MATCH_HISTORY_WRITE_FAILED" })); } catch { /* Durable queue remains the source of truth. */ }
     }).finally(() => this.#historyArchiveDrains.delete(code));
     this.#historyArchiveDrains.set(code, job);
   }
@@ -3029,7 +3081,7 @@ export class RoomStore {
       depth: input.depth,
       context,
       transcript: [],
-    });
+    }, { uid: managerId });
     let outcome;
     const expectedRevision = Number(interview.revision ?? 0);
     const room = await this.#mutate(code, (current) => {
@@ -3080,7 +3132,7 @@ export class RoomStore {
       context,
       transcript: interview.transcript ?? [],
       candidateMessage: input.message,
-    });
+    }, { uid: managerId });
     let outcome;
     const room = await this.#mutate(code, (current) => {
       if (!current.managerIds.includes(managerId)) {
@@ -3357,7 +3409,7 @@ export class RoomStore {
           payload: { clubId: manager.clubId, playerId: player.id },
         });
       } catch (error) {
-        throw new RoomError(error.message, "ACADEMY_PROMOTION_INVALID", 409);
+        throw Object.assign(new RoomError("Nao foi possivel promover este jogador", "ACADEMY_PROMOTION_INVALID", 409), { cause: error });
       }
       return room;
     });
@@ -4065,23 +4117,7 @@ export class RoomStore {
 
   async getClubRuntimeState(code, managerId, clubId) {
     const room = await this.requireMembership(code, managerId);
-    const state = (room.clubMoraleStates ?? []).find(
-      (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
-    );
-    return this.#snapshot({
-      currentSeason: room.currentSeason ?? 1,
-      playerStates: (room.playerStates ?? []).filter(
-        (candidate) => clubKey(candidate?.clubId) === clubKey(clubId),
-      ),
-      moraleState: state ?? {
-        clubId,
-        active: false,
-        score: 70,
-        playerDeltas: [],
-        updatedAt: null,
-        sourceMatchId: null,
-      },
-    });
+    return this.#snapshot(clubRuntimeState(room, clubId));
   }
 
   async #marketCatalog(room) {
@@ -4345,9 +4381,9 @@ export class RoomStore {
       } catch (error) {
         lastError = error;
         if (!transientCareerRosterFailure(error)) {
-          throw error instanceof RoomError
+          throw error instanceof RoomError || error.public === true
             ? error
-            : new RoomError(error.message, error.code ?? "CAREER_ROSTER_LOAD_FAILED", error.status ?? 409);
+            : Object.assign(new RoomError("Nao foi possivel carregar o elenco", "CAREER_ROSTER_LOAD_FAILED", 503), { cause: error });
         }
         if (attempt < this.#careerRosterPolicy.maxAttempts) {
           await waitFor(this.#careerRosterPolicy.retryDelayMs * attempt);

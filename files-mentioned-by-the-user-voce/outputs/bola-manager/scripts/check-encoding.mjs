@@ -3,8 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const sourceDirectories = new Set(['src', 'server', 'shared', 'scripts', 'docs', 'e2e', '.github']);
-const excludedDirectories = new Set(['node_modules', '.git', '.tmp', 'dist', 'coverage', 'release']);
+const sourceDirectories = new Set(['src', 'server', 'shared', 'scripts', 'docs', 'e2e', 'desktop', '.github']);
+const excludedDirectories = new Set(['node_modules', '.git', '.tmp', 'dist', 'dist-desktop', 'coverage', 'release']);
 const textExtensions = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.css', '.html', '.json', '.md', '.yml', '.yaml']);
 const rootFiles = new Set(['.editorconfig', '.gitattributes', '.gitignore', '.firebaserc']);
 // UTF-8 bytes decoded as Latin-1/Windows-1252. Escapes keep intentional signatures out of the source scan.

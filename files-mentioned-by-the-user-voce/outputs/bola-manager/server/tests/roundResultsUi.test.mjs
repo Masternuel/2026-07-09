@@ -222,7 +222,17 @@ test("painel mostra jogos de managers e IA, pendencia, escudos e destaque do clu
   assert.match(completeHtml, /Rodada conclu[ií]da/);
 });
 
-test("partida encerrada exibe resumo antes da coletiva e legado continua funcional", () => {
+function assertFinalWhistleFirst(html) {
+  assert.match(html, /^<main class="match-view view-enter"><section class="final-whistle">/);
+  assert.equal((html.match(/<section class="final-whistle">/g) ?? []).length, 1);
+  const banner = html.indexOf('class="final-whistle"');
+  for (const section of ['class="match-scoreboard"', 'class="commentary-panel"', 'class="round-results"']) {
+    const position = html.indexOf(section);
+    if (position !== -1) assert.ok(banner < position, `Apito final deve preceder ${section}`);
+  }
+}
+
+test("partida encerrada mostra apito final primeiro e preserva resumo e coletiva", () => {
   const html = renderToStaticMarkup(React.createElement(MatchView, {
     onToast: () => {},
     onNavigate: () => {},
@@ -233,8 +243,10 @@ test("partida encerrada exibe resumo antes da coletiva e legado continua funcion
   }));
   assert.match(html, /Resultados da rodada 3/);
   assert.match(html, /Ir para a coletiva/);
-  assert.ok(html.indexOf("Resultados da rodada 3") < html.indexOf("APITO FINAL"));
+  assertFinalWhistleFirst(html);
+});
 
+test("partida encerrada legada mantém apito final no topo e coletiva sem resumo", () => {
   const legacyHtml = renderToStaticMarkup(React.createElement(MatchView, {
     onToast: () => {},
     onNavigate: () => {},
@@ -246,6 +258,36 @@ test("partida encerrada exibe resumo antes da coletiva e legado continua funcion
   assert.match(legacyHtml, /APITO FINAL/);
   assert.match(legacyHtml, /Ir para a coletiva/);
   assert.doesNotMatch(legacyHtml, /Resultados da rodada/);
+  assertFinalWhistleFirst(legacyHtml);
+});
+
+test("espectador recebe um único apito final no topo com retorno à central", () => {
+  const html = renderToStaticMarkup(React.createElement(MatchView, {
+    onToast: () => {},
+    onNavigate: () => {},
+    onlineMatch: finishedController(true),
+    room,
+    club: { ...club, id: 'PAL', code: 'PAL', name: 'Palmeiras' },
+    managerId: 'spectator',
+  }));
+  assertFinalWhistleFirst(html);
+  assert.match(html, /Partida dos outros managers encerrada/);
+  assert.match(html, /Voltar [aà] central/);
+  assert.doesNotMatch(html, /Ir para a coletiva/);
+});
+
+test("partida em andamento mantém placar primeiro e não exibe apito final", () => {
+  const onlineMatch = finishedController(true);
+  onlineMatch.phase = 'running';
+  onlineMatch.match = { ...onlineMatch.result, eventCount: 12, delayMs: 800 };
+  onlineMatch.result = null;
+  onlineMatch.events = [{ minute: 20, kind: 'info', text: 'Partida em andamento.', score: [0, 0] }];
+  const html = renderToStaticMarkup(React.createElement(MatchView, {
+    onToast: () => {}, onNavigate: () => {}, onlineMatch, room, club, managerId: 'manager-1',
+  }));
+  assert.match(html, /^<main class="match-view view-enter"><section class="match-scoreboard">/);
+  assert.doesNotMatch(html, /final-whistle|APITO FINAL/);
+  assert.match(html, /Narração ao vivo/);
 });
 
 test("classificacao usa resultados completos da liga, inclui IA e nao duplica jogo humano", () => {

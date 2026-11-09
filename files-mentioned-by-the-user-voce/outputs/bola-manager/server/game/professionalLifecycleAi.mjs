@@ -1,3 +1,4 @@
+import { publicError } from "../infrastructure/publicErrors.mjs";
 import {
   calculateProfessionalCompensation,
   ensureProfessionalLifecycleState,
@@ -703,7 +704,7 @@ function progressAgreement(roomValue, agreementInput, now, tickId, config, optio
       professionalId: agreement.professionalId,
       clubId: agreement.clubId,
       resultStatus: agreement.status,
-      reason: text(error?.code ?? error?.message) || "unknown_error",
+      reason: publicError(error).error.code,
       factors: assessment,
     });
   }

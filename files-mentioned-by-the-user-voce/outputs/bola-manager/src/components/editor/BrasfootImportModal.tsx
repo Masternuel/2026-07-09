@@ -86,6 +86,8 @@ function clubPreview(value: unknown) {
 }
 
 export function BrasfootImportModal({ open, credentials, onClose, onComplete }: BrasfootImportModalProps) {
+  const local = credentials.identity.mode === 'local';
+  const storageDestination = local ? 'na base local' : 'no Firebase';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -213,14 +215,14 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
 
   async function commit() {
     if (!session || !preview) return;
-    setStage('committing'); setError(null); setStatusText('Gravando dados no Firebase…');
+    setStage('committing'); setError(null); setStatusText(`Gravando dados ${storageDestination}…`);
     try {
       const payload = await apiRequest<ImportPayload>(`/api/editor/brasfoot-import/sessions/${encodeURIComponent(session.sessionId)}/commit`, credentials, {
         method: 'POST', body: { allowPartial, importAssets }, timeoutMs: 300_000,
       });
       setResult(payload); setStage('done'); setStatusText('Importação concluída.');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Não foi possível gravar os dados no Firebase.');
+      setError(nextError instanceof Error ? nextError.message : `Não foi possível gravar os dados ${storageDestination}.`);
       setStatusText('A importação não foi concluída. Revise as opções e tente novamente.');
       setStage('preview');
     }
@@ -245,9 +247,9 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
   const footer = stage === 'done' ? (
     <Button variant="primary" icon={<Check size={15} />} onClick={finish}>Concluir e atualizar Editor</Button>
   ) : stage === 'preview' ? (
-    <><Button variant="ghost" onClick={close}>Cancelar</Button><Button variant="primary" icon={<Database size={15} />} disabled={previewErrors.length > 0 && !allowPartial} onClick={() => void commit()}>Importar para o Firebase</Button></>
+    <><Button variant="ghost" onClick={close}>Cancelar</Button><Button variant="primary" icon={<Database size={15} />} disabled={previewErrors.length > 0 && !allowPartial} onClick={() => void commit()}>{local ? 'Importar para a base local' : 'Importar para o Firebase'}</Button></>
   ) : stage === 'committing' ? (
-    <Button variant="primary" loading>Importando para o Firebase</Button>
+    <Button variant="primary" loading>{local ? 'Importando para a base local' : 'Importando para o Firebase'}</Button>
   ) : stage === 'uploading' ? (
     <><Button variant="ghost" onClick={close}>Cancelar envio</Button><Button variant="secondary" loading>Analisando arquivos</Button></>
   ) : (
@@ -258,11 +260,13 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
     <Modal open={open} onClose={close} eyebrow="CENTRAL DE DADOS" title="Importar dados do Brasfoot" size="lg" footer={footer}>
       <div className="brasfoot-import">
         <ol className="brasfoot-import__steps" aria-label="Etapas da importação">
-          {['Arquivos', 'Análise', 'Firebase'].map((label, index) => {
+          {['Arquivos', 'Análise', local ? 'Base local' : 'Firebase'].map((label, index) => {
             const activeIndex = stage === 'files' ? 0 : stage === 'uploading' || stage === 'preview' ? 1 : 2;
             return <li key={label} className={index < activeIndex ? 'is-complete' : index === activeIndex ? 'is-active' : undefined} aria-current={index === activeIndex ? 'step' : undefined}><span>{index < activeIndex ? <Check size={13} /> : index + 1}</span>{label}</li>;
           })}
         </ol>
+
+        {local && <p className="brasfoot-import__storage">Os arquivos serão importados para o disco deste computador, sem envio para a nuvem. Apenas novas carreiras usarão a base atualizada; saves existentes serão preservados.</p>}
 
         {error && <div className="brasfoot-import__error" role="alert"><XCircle size={17} /><span><strong>Não foi possível continuar</strong>{error}</span></div>}
 
@@ -305,7 +309,7 @@ export function BrasfootImportModal({ open, credentials, onClose, onComplete }: 
           </section>
         </>}
 
-        {stage === 'done' && result && <section className="brasfoot-import-result"><span><CheckCircle2 size={29} /></span><p className="eyebrow">IMPORTAÇÃO CONCLUÍDA</p><h3>Dados gravados no Firebase</h3><p>O catálogo será atualizado assim que você concluir.</p><div>{[
+        {stage === 'done' && result && <section className="brasfoot-import-result"><span><CheckCircle2 size={29} /></span><p className="eyebrow">IMPORTAÇÃO CONCLUÍDA</p><h3>Dados gravados {storageDestination}</h3><p>O catálogo será atualizado assim que você concluir.</p><div>{[
           ['Clubes', summaryNumber(result.summary, 'clubs', 'clubsImported')], ['Jogadores', summaryNumber(result.summary, 'players', 'playersImported')], ['Ligas', summaryNumber(result.summary, 'leagues', 'leaguesImported')], ['Falhas', finalErrors.length],
         ].map(([label, value]) => <span key={label as string}><small>{label}</small><strong>{Number(value).toLocaleString('pt-BR')}</strong></span>)}</div><code>EXECUÇÃO · {result.runId ?? 'ID não informado'}</code></section>}
       </div>

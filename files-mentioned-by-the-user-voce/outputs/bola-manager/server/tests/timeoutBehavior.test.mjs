@@ -34,9 +34,12 @@ test("autenticacao distingue falha transitória de token inválido", async () =>
   assert.equal(unavailable.code, "AUTH_UNAVAILABLE");
   assert.equal(unavailable.status, 503);
 
-  const invalid = await verify(Object.assign(new Error("Token expirado"), { code: "auth/id-token-expired" }));
+  const invalid = await verify(Object.assign(new Error("Token invalido"), { code: "auth/argument-error" }));
   assert.equal(invalid.code, "INVALID_AUTH_TOKEN");
   assert.equal(invalid.status, 401);
+  const expired = await verify(Object.assign(new Error("Token expirado"), { code: "auth/id-token-expired" }));
+  assert.equal(expired.code, "AUTH_TOKEN_EXPIRED");
+  assert.equal(expired.status, 401);
 });
 
 test("ACK de Socket nao espera trabalho de broadcast posterior", async () => {

@@ -14,13 +14,13 @@ async function createCareer(page, name) {
   const initialRooms = page.waitForResponse((response) => response.url().endsWith('/api/rooms') && response.request().method() === 'GET');
   await page.goto('/');
   const origin = new URL((await initialRooms).url()).origin;
-  await page.getByRole('tab', { name: 'Criar sala', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Menu principal', exact: true }).getByRole('button', { name: 'Novo Jogo', exact: true }).click();
   await page.getByRole('textbox', { name: 'Nome da temporada' }).fill(name);
   await page.getByRole('button', { name: 'Criar e escolher clube' }).click();
   await page.getByRole('button', { name: /Clube Alfa.*Livre/ }).click();
   await page.getByRole('button', { name: 'Confirmar Clube Alfa' }).click();
   await page.getByRole('button', { name: 'Iniciar temporada', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /Bom jogo/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Central do clube', exact: true })).toBeVisible();
   async function read(path) {
     const response = await page.request.get(`${origin}${path}`, { headers: { authorization: 'Bearer owner-token' } });
     expect(response.ok()).toBe(true);
@@ -35,7 +35,7 @@ async function createCareer(page, name) {
 async function resume(page, name) {
   await page.reload();
   await page.locator('.save-manager__card').filter({ hasText: name }).getByRole('button', { name: /Continuar/ }).click();
-  await expect(page.getByRole('heading', { name: /Bom jogo/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Central do clube', exact: true })).toBeVisible();
 }
 
 test('criar/carregar carreira, calendário, tática e rankings', async ({ page }) => {
@@ -114,6 +114,7 @@ test('scouting e transferência atualizam elenco e histórico após reload', asy
 });
 
 test('partida pausa no intervalo, recupera sessão e conclui rodada', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
   const { read, code } = await createCareer(page, 'E2E partida');
   await page.getByRole('button', { name: 'Estou pronto', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Partida pausada para ajustes' })).toBeVisible();
@@ -122,7 +123,17 @@ test('partida pausa no intervalo, recupera sessão e conclui rodada', async ({ p
   await expect(page.getByRole('heading', { name: 'Partida pausada para ajustes' })).toBeVisible();
   await page.getByRole('button', { name: 'Estou pronto para o 2º tempo' }).click();
   await expect(page.getByRole('heading', { name: /Resultados da rodada/ })).toBeVisible();
+  const finalWhistle = page.locator('.final-whistle');
+  const pressButton = finalWhistle.getByRole('button', { name: 'Ir para a coletiva', exact: true });
+  await expect(finalWhistle).toHaveCount(1);
+  expect(await page.locator('main.match-view').evaluate((main) => main.firstElementChild?.className)).toBe('final-whistle');
+  await expect(pressButton).toBeInViewport({ ratio: 1 });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(pressButton).toBeInViewport({ ratio: 1 });
+  await page.setViewportSize({ width: 1366, height: 768 });
   const { room } = await read(`/api/rooms/${code}`);
   expect(room.completedFixtureIds.length).toBeGreaterThan(0);
   expect(room.lastCompletedMatch).toBeTruthy();
+  await pressButton.click();
+  await expect(page.getByRole('heading', { name: 'Sala de imprensa', exact: true })).toBeVisible();
 });

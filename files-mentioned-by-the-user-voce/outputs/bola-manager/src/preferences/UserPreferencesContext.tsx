@@ -11,6 +11,8 @@ import {
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '../hooks/useAuth';
 import { firebaseDb } from '../lib/firebaseClient';
+import { desktopBridge } from '../lib/desktopClient';
+import { PreferenceWriter } from './preferenceWriter';
 import {
   DEFAULT_USER_PREFERENCES,
   USER_PREFERENCES_VERSION,
@@ -77,8 +79,33 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [prefersLight, setPrefersLight] = useState(systemPrefersLight);
   const loadSequence = useRef(0);
+  const writeSequence = useRef(0);
+  const writerRef = useRef<PreferenceWriter<UserPreferences> | null>(null);
+  const writeErrorRef = useRef<string | null>(null);
   const identityUid = auth.identity?.uid ?? null;
   const identityMode = auth.identity?.mode ?? null;
+
+  useEffect(() => {
+    const writer = new PreferenceWriter<UserPreferences>(async (next) => {
+      try {
+        if ((identityMode === 'local' || identityMode === 'peer') && desktopBridge) {
+          await desktopBridge.writePreferences(next);
+        } else {
+          if (!firebaseDb || !identityUid) throw new Error('O Firestore não está configurado neste ambiente.');
+          await setDoc(doc(firebaseDb, 'users', identityUid), {
+            preferencesVersion: USER_PREFERENCES_VERSION,
+            preferences: next,
+            preferencesUpdatedAt: serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (nextError) {
+        writeErrorRef.current = preferencesError(nextError);
+        throw nextError;
+      }
+    });
+    writerRef.current = writer;
+    return () => { writeSequence.current++; writer.close(); writerRef.current = null; };
+  }, [identityMode, identityUid]);
 
   const replacePreferences = useCallback((next: UserPreferences) => {
     const normalized = normalizeUserPreferences(next);
@@ -101,6 +128,22 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       replacePreferences(DEFAULT_USER_PREFERENCES);
       setStatus('saved');
       setSavedAt(null);
+      return;
+    }
+
+    if ((identityMode === 'local' || identityMode === 'peer') && desktopBridge) {
+      setStatus('loading');
+      try {
+        const stored = await desktopBridge.readPreferences();
+        if (sequence !== loadSequence.current) return;
+        replacePreferences(normalizeUserPreferences(stored));
+        setStatus('saved');
+        setSavedAt(null);
+      } catch (nextError) {
+        if (sequence !== loadSequence.current) return;
+        setStatus('error');
+        setError(preferencesError(nextError));
+      }
       return;
     }
 
@@ -156,6 +199,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   }, [resolvedTheme]);
 
   const updatePreferences = useCallback(async (patch: UserPreferencesPatch) => {
+    const sequence = ++writeSequence.current;
     const previous = preferencesRef.current;
     const next = applyUserPreferencesPatch(previous, patch);
     replacePreferences(next);
@@ -175,26 +219,16 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       return true;
     }
 
-    if (!firebaseDb) {
-      replacePreferences(previous);
-      setStatus('error');
-      setError('O Firestore não está configurado neste ambiente.');
-      return false;
-    }
-
-    try {
-      await setDoc(doc(firebaseDb, 'users', identityUid), {
-        preferencesVersion: USER_PREFERENCES_VERSION,
-        preferences: next,
-        preferencesUpdatedAt: serverTimestamp(),
-      }, { merge: true });
+    const success = await writerRef.current?.enqueue(next, patch.audio ? 150 : 0) ?? false;
+    if (sequence !== writeSequence.current) return success;
+    if (success) {
       setStatus('saved');
       setSavedAt(new Date());
       return true;
-    } catch (nextError) {
+    } else {
       replacePreferences(previous);
       setStatus('error');
-      setError(preferencesError(nextError));
+      setError(writeErrorRef.current ?? 'Não foi possível salvar as preferências.');
       return false;
     }
   }, [identityMode, identityUid, replacePreferences]);

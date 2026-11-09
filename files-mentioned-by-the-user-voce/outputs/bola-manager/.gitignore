@@ -1,9 +1,12 @@
 node_modules/
 dist/
+dist-desktop/
+release-desktop/
 *.tsbuildinfo
 .env
 .env.*
 !.env.example
+!.env.staging.example
 coverage/
 npm-debug.log*
 /.npm-cache/
@@ -15,3 +18,5 @@ npm-debug.log*
 *service-account*.json
 *.pem
 *.p12
+/public/audio/tracks/*
+/public/assets/audio/covers/*

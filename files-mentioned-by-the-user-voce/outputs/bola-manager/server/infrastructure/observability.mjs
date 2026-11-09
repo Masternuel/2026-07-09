@@ -1,31 +1,5 @@
 import { httpMetricRoute, normalizeMetricSample } from "./metricPolicy.mjs";
-
-const SECRET_PATTERN = /(authorization|cookie|password|secret|token|private.?key|credential|api.?key)/i;
-
-function safeText(value) {
-  return value
-    .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[REDACTED]")
-    .replace(/(\b(?:redis|rediss|https?):\/\/)[^@\s/]+@/gi, "$1[REDACTED]@");
-}
-
-function safeValue(value, key = "", seen = new WeakSet()) {
-  if (SECRET_PATTERN.test(key)) return "[REDACTED]";
-  if (typeof value === "string") return safeText(value);
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      code: value.code,
-      message: safeText(value.message),
-      stack: safeText(value.stack ?? ""),
-    };
-  }
-  if (!value || typeof value !== "object") return value;
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((item) => safeValue(item, "", seen));
-  return Object.fromEntries(Object.entries(value)
-    .map(([childKey, childValue]) => [childKey, safeValue(childValue, childKey, seen)]));
-}
+import { redactLogValue as safeValue } from "./redaction.mjs";
 
 function outputLine(output, level, line) {
   const method = typeof output?.[level] === "function"
@@ -61,7 +35,7 @@ export function createStructuredLogger({
           ...base,
           ...context,
           event: typeof event === "string" ? event : "log",
-          ...(typeof event === "string" ? fields : event),
+          ...(typeof event === "string" ? fields : event instanceof Error ? { error: event } : event),
         });
         outputLine(output, method, JSON.stringify(payload));
       };

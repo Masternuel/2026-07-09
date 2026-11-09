@@ -31,7 +31,7 @@ async function listen(context, handler) {
 
 test('lockfile não reintroduz versões vulneráveis nos caminhos transitivos', () => {
   const { packages } = JSON.parse(readFileSync(new URL('../../package-lock.json', import.meta.url), 'utf8'));
-  const floors = { qs: '6.16.0', 'fast-xml-parser': '5.10.1', uuid: '11.1.1', 'socket.io-parser': '4.2.7' };
+  const floors = { qs: '6.16.0', 'fast-xml-parser': '5.10.1', uuid: '11.1.1', 'socket.io-parser': '4.2.7', '@fastify/busboy': '3.2.1' };
   for (const [name, floor] of Object.entries(floors)) {
     const entries = Object.entries(packages).filter(([path]) => path.endsWith(`/node_modules/${name}`) || path === `node_modules/${name}`);
     assert.ok(entries.length, `${name} precisa estar instalado`);
@@ -81,6 +81,31 @@ test('google-gax continua gerando identificadores para Firestore', () => {
   const gaxRequire = consumers[0][1];
   const { makeUUID } = gaxRequire('./util.js');
   assert.equal(gaxRequire('uuid').validate(makeUUID()), true);
+});
+
+test('Firebase Admin mantém parsing multipart Dicer com Busboy corrigido', { timeout: 5_000 }, async () => {
+  const { Dicer } = adminRequire('@fastify/busboy');
+  const boundary = 'dependency-security-boundary';
+  const bodies = ['{"name":"Jogador São Paulo"}', '{"ok":true}'];
+  const body = Buffer.from(bodies.map(value => `--${boundary}\r\nContent-Type: application/json\r\n\r\n${value}\r\n`).join('') + `--${boundary}--\r\n`);
+  const parser = new Dicer({ boundary });
+  const parts = [];
+  parser.on('part', part => {
+    const chunks = [];
+    part.on('data', chunk => chunks.push(chunk));
+    part.on('error', error => parser.destroy(error));
+    part.on('end', () => parts.push(Buffer.concat(chunks).toString('utf8')));
+  });
+  const finished = once(parser, 'finish');
+  try {
+    const chunks = [];
+    for (let offset = 0; offset < body.length; offset += 7) chunks.push(body.subarray(offset, offset + 7));
+    Readable.from(chunks).pipe(parser);
+    await finished;
+    assert.deepEqual(parts.map(value => JSON.parse(value)), bodies.map(value => JSON.parse(value)));
+  } finally {
+    parser.destroy();
+  }
 });
 
 test('gaxios e teeny-request mantêm uploads multipart com os novos UUIDs', { timeout: 5_000 }, async (context) => {

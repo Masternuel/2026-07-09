@@ -33,7 +33,7 @@ import {
 } from "../schemas.mjs";
 import { emitRoomForViewers, roomForViewer } from "../services/roomVisibility.mjs";
 import { catalogForOwner } from "../store/catalogScope.mjs";
-import { channelForRoom, registerSafe, rememberMembership } from "./helpers.mjs";
+import { channelForRoom, clientError, registerSafe, rememberMembership } from "./helpers.mjs";
 import { withTimeout } from "../infrastructure/readiness.mjs";
 
 const DEMO_PLAYER_IDS = Array.from(
@@ -78,6 +78,7 @@ function matchError(message, code, status = 409, details) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.public = true;
   error.details = details;
   return error;
 }
@@ -697,10 +698,11 @@ export function registerMatchHandlers(io, socket, {
       .then(() => metrics?.increment?.("jobs_completed_total", 1, { job: "match_playback" }))
       .catch((error) => {
         metrics?.increment?.("jobs_failed_total", 1, { job: "match_playback" });
-        logger?.error?.("match.playback_failed", { code: session.code, error });
+        const serialized = clientError(error);
+        logger?.error?.("match.playback_failed", { code: session.code, requestId: serialized.requestId, error });
         io.to(channelForRoom(session.code)).emit("server:error", {
           event: "match:recovery",
-          error: { code: error.code || "MATCH_PLAYBACK_ERROR", message: error.message },
+          error: serialized,
         });
       })
       .finally(() => {

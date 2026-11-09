@@ -28,6 +28,7 @@ import type {
   TournamentParticipant,
 } from '../types';
 import { formations } from '../constants/formations';
+import { normalizeTeamCohesionExperience } from './teamCohesion';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -171,6 +172,7 @@ function normalizeCohesion(value: unknown, lineupIds: readonly string[]): RoomLi
     outOfPositionCount: integer(record.outOfPositionCount, 0, 0, 11),
     exactPositionCount: integer(record.exactPositionCount, 0, 0, 11),
     changeImpact: finiteNumber(record.changeImpact, 0),
+    ...normalizeTeamCohesionExperience(record),
     updatedAt: optionalText(record.updatedAt),
   };
 }

@@ -283,6 +283,7 @@ test("rotas exigem Firebase, mantem contrato flat, confirmam parcial e limpam se
   assert.equal(Array.isArray(committed.report.errors), true);
   assert.equal(commits.length, 1);
   assert.equal(commits[0].options.allowPartial, true);
+  assert.equal(commits[0].ownerId, "uid-editor");
   assert.equal(commits[0].options.skipAssets, false);
   assert.equal(commits[0].mediaService, service.mediaService);
 

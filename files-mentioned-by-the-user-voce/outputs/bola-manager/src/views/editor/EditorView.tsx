@@ -8,6 +8,7 @@ import { EditorEntityList } from '../../components/editor/EditorEntityList';
 import { EditorRecordForm } from '../../components/editor/EditorRecordForm';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
+import { BrandLogo } from '../../components/shared/BrandLogo';
 import { useEditorCatalog } from '../../hooks/useEditorCatalog';
 import { ApiError, type ApiCredentials } from '../../lib/apiClient';
 import type { EditorClub, EditorEntity, EditorPlayer, EditorRecord, EditorTournament, ManagerIdentity } from '../../types';
@@ -50,6 +51,7 @@ function exportFilename(filename: string | null) {
 }
 
 export function EditorView({ identity, getIdToken, onBack, onToast }: EditorViewProps) {
+  const local = identity.mode === 'local';
   const credentials = useMemo<ApiCredentials>(() => ({ identity, getIdToken }), [identity, getIdToken]);
   const editor = useEditorCatalog(credentials);
   const [entity, setEntity] = useState<EditorEntity>('clubs');
@@ -434,29 +436,29 @@ export function EditorView({ identity, getIdToken, onBack, onToast }: EditorView
   }
 
   const syncLabel = editor.loading
-    ? 'Sincronizando catálogo'
+    ? local ? 'Carregando catálogo local' : 'Sincronizando catálogo'
     : editor.error
-      ? 'Falha na sincronização'
+      ? local ? 'Falha ao acessar a base' : 'Falha na sincronização'
       : editor.lastSyncedAt
-        ? `Sincronizado às ${editor.lastSyncedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-        : 'Aguardando sincronização';
+        ? `${local ? 'Atualizado' : 'Sincronizado'} às ${editor.lastSyncedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+        : local ? 'Aguardando catálogo local' : 'Aguardando sincronização';
 
   return (
     <main className="editor-screen">
       <header className="editor-global-header">
         <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> Voltar aos saves</button>
-        <div className="editor-wordmark"><span className="wordmark-glyph"><Shield size={17} /></span><span>BOLA <strong>MANAGER</strong></span><i /></div>
-        <div className="editor-global-header__title"><span>MINHA CONTA</span><strong>Editor da Base</strong></div>
-        <Badge tone="info" dot>Minha base</Badge>
-        <div className={`editor-sync ${editor.error ? 'is-error' : ''}`}><span /> {syncLabel}</div>
+        <div className="editor-wordmark"><BrandLogo /><i /></div>
+        <div className="editor-global-header__title"><span>{local ? 'PERFIL LOCAL' : 'MINHA CONTA'}</span><strong>Editor da Base</strong></div>
+        <Badge tone="info" dot>{local ? 'Base local' : 'Minha base'}</Badge>
+        <div className={`editor-sync ${editor.error ? 'is-error' : ''}`} role="status" aria-label={syncLabel}><span /> {syncLabel}</div>
       </header>
 
       {editor.access === 'denied' ? (
         <section className="editor-access-state">
           <span><ShieldAlert size={25} /></span>
           <p className="eyebrow">ACESSO RESTRITO</p>
-          <h1>Editor indisponível para esta conta</h1>
-          <p>{editor.accessReason ?? 'Sua conta não possui acesso à base de dados pessoal.'}</p>
+          <h1>Editor indisponível para {local ? 'este perfil' : 'esta conta'}</h1>
+          <p>{editor.accessReason ?? 'Esta identidade não possui acesso à base de dados pessoal.'}</p>
           <Button variant="secondary" icon={<ArrowLeft size={15} />} onClick={onBack}>Voltar aos saves</Button>
         </section>
       ) : editor.access === 'error' ? (
@@ -470,12 +472,17 @@ export function EditorView({ identity, getIdToken, onBack, onToast }: EditorView
       ) : (
         <>
           <section className="editor-summary" aria-label="Resumo do catálogo">
-            <div className="editor-summary__heading"><Database size={17} /><span><strong>Minha base</strong><small>Clubes, ligas e jogadores da sua conta</small></span></div>
+            <div className="editor-summary__heading"><Database size={17} /><span><strong>{local ? 'Base local' : 'Minha base'}</strong><small>{local ? 'Catálogo neste computador' : 'Clubes, ligas e jogadores da sua conta'}</small></span></div>
             {entities.map(({ key, label }) => (
               <div key={key} className="editor-summary__metric"><span>{label}</span><strong>{editor.counts[key].toLocaleString('pt-BR')}</strong><small>{editor.catalog[key].length.toLocaleString('pt-BR')} carregados</small></div>
             ))}
-            <div className="editor-summary__warning"><TriangleAlert size={16} /><span><strong>Base compartilhável</strong><small>Exporte para compartilhar ou importe para combinar registros.</small></span></div>
+            <div className="editor-summary__warning"><TriangleAlert size={16} /><span><strong>{local ? 'Backup em JSON' : 'Base compartilhável'}</strong><small>{local ? 'Exporte uma cópia para guardar ou compartilhar.' : 'Exporte para compartilhar ou importe para combinar registros.'}</small></span></div>
           </section>
+
+          <aside className="editor-storage-notice" aria-label="Onde as alterações são aplicadas">
+            <ShieldAlert size={16} aria-hidden="true" />
+            <p><strong>Novas carreiras usam esta base.</strong> Saves existentes mantêm o catálogo anterior.{local && ' Os dados ficam no disco deste computador, sem sincronização com a nuvem. Encerre sessões P2P e partidas em andamento antes de editar.'}</p>
+          </aside>
 
           {editor.error && (
             <div className="editor-api-error" role="alert">
@@ -492,7 +499,7 @@ export function EditorView({ identity, getIdToken, onBack, onToast }: EditorView
                   <Icon size={17} /><span><strong>{label}</strong><small>{editor.counts[key]} registros</small></span><em>{short}</em>
                 </button>
               ))}
-              <div className="editor-entity-rail__foot"><ShieldAlert size={14} /><span>Operações auditadas</span></div>
+              <div className="editor-entity-rail__foot"><ShieldAlert size={14} /><span>{local ? 'Neste computador' : 'Operações auditadas'}</span></div>
             </nav>
 
             <div className="editor-catalog-panel">

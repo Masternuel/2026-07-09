@@ -8,12 +8,27 @@ import { jsonRequest, startTestServer } from "./testHarness.mjs";
 const redisUrl = process.env.TEST_REDIS_URL;
 
 test("Redis adapter entrega broadcast entre duas replicas", { skip: !redisUrl }, async (context) => {
+  let staging;
+  if (process.env.STAGING_RUN_ID) {
+    const { authorize, sameTargets } = await import("../../scripts/security-staging-runner.mjs");
+    const { readReceipt, openRedis, closeRedis } = await import("../../scripts/staging/fixtures.mjs");
+    const { createAdapter } = await import("@socket.io/redis-adapter");
+    const preflight = await authorize(process.env, "redis");
+    const receipt = readReceipt(process.env.STAGING_RUN_ID);
+    assert.equal(receipt.group, "redis");
+    assert.equal(sameTargets(receipt, preflight), true);
+    staging = async () => {
+      const runtime = await openRedis(process.env, receipt, { existing: true });
+      context.after(() => closeRedis(runtime));
+      return { redisRuntime: runtime, socketAdapterFactory: (pub, sub, options) => createAdapter(pub, sub, { ...options, key: receipt.runId }) };
+    };
+  }
   const store = new RoomStore({
     persistence: new MemoryRoomPersistence(),
     codeFactory: () => "CLUSTER-1",
   });
-  const first = await startTestServer({ store, env: { REDIS_URL: redisUrl } });
-  const second = await startTestServer({ store, env: { REDIS_URL: redisUrl } });
+  const first = await startTestServer({ store, env: { REDIS_URL: redisUrl }, ...(staging ? await staging() : {}) });
+  const second = await startTestServer({ store, env: { REDIS_URL: redisUrl }, ...(staging ? await staging() : {}) });
   const clients = [];
   context.after(async () => {
     clients.forEach((client) => client.disconnect());

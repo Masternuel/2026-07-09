@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { redactText } from "../server/infrastructure/redaction.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initializeFirebaseAdmin, loadLocalEnvironment } from "../server/config.mjs";
@@ -95,7 +96,7 @@ async function main() {
 
 if (resolve(process.argv[1] ?? "") === resolve(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
-    console.error(error.message);
+    console.error(redactText(error.message));
     process.exitCode = 1;
   });
 }
