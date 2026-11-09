@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { HTTP_CSP } from './shared/imagePolicy.mjs';
 import { SECURITY_HEADERS } from './shared/securityHeaders.mjs';
+import { APP_CSP_REPORT_ONLY } from './shared/contentSecurityPolicy.mjs';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -28,7 +29,7 @@ export default defineConfig({
   server: {
     headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' },
     port: 5173,
-    host: true,
+    host: '127.0.0.1',
     fs: {
       allow: [projectRoot],
     },
@@ -37,5 +38,5 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:3001', ws: true },
     },
   },
-  preview: { headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' } },
+  preview: { headers: { ...SECURITY_HEADERS, 'Content-Security-Policy': HTTP_CSP, 'Content-Security-Policy-Report-Only': APP_CSP_REPORT_ONLY, 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' } },
 });
