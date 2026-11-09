@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { join, resolve, relative } from "node:path";
+import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import sharp from "sharp";
 import { startLocalBackend } from "../localBackend.mjs";
 import { openLocalDatabase } from "../localDatabase.mjs";
 import { createStarterCatalog } from "../localCatalog.mjs";
 import { LocalEditorCatalog } from "../localEditorCatalog.mjs";
 import { createCatalogDatabasePackage } from "../../server/services/catalogDatabase.mjs";
+import { removeFixtureDirectory } from "./helpers/fixtureCleanup.mjs";
 
 const root = resolve(".tmp/local-editor-tests");
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
@@ -15,7 +16,13 @@ const closers = new Map();
 const initial = () => ({ profile: { uid: "local-editor", displayName: "Manager" }, catalog: createStarterCatalog(), rooms: { rooms: [], deletedCodes: [], creationReceipts: [], history: [] }, matches: [], news: { posts: [], operations: [] } });
 async function directory(t) {
   await mkdir(root, { recursive: true }); const path = await mkdtemp(join(root, "run-"));
-  t.after(async () => { await closers.get(path)?.(); closers.delete(path); const target = relative(root, path); assert.ok(target && !target.startsWith("..") && !target.includes(":")); await rm(path, { recursive: true, force: true }); });
+  t.after(async () => {
+    try { await closers.get(path)?.(); }
+    catch (error) { t.diagnostic(`Editor backend cleanup failed: ${error.code ?? 'UNKNOWN'}`); throw error; }
+    closers.delete(path);
+    try { await removeFixtureDirectory(root, path); }
+    catch (error) { t.diagnostic(`Editor fixture cleanup failed: ${error.code ?? 'UNKNOWN'}`); throw error; }
+  });
   return path;
 }
 async function fixture(t) {
