@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-desktop/
+release-desktop/
 *.tsbuildinfo
 .env
 .env.*
@@ -16,3 +18,5 @@ npm-debug.log*
 *service-account*.json
 *.pem
 *.p12
+/public/audio/tracks/*
+/public/assets/audio/covers/*

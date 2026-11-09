@@ -1,14 +1,22 @@
 {
   "name": "bola-manager",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.8",
   "type": "module",
+  "main": "desktop/main.mjs",
+  "description": "Bola Manager — carreira local e multiplayer P2P",
   "engines": {
     "node": ">=20.9"
   },
   "scripts": {
     "dev": "concurrently -n WEB,SERVER -c green,cyan \"npm:dev:client\" \"npm:server:dev\"",
     "dev:client": "vite --configLoader runner",
+    "desktop": "npm run build:desktop && electron desktop/main.mjs",
+    "build:desktop": "npm run typecheck && node scripts/build-desktop.mjs",
+    "installer:windows": "npm run build:desktop && node scripts/package-desktop.mjs",
+    "portable:windows": "npm run build:desktop && node scripts/package-desktop.mjs --dir",
+    "pretest:desktop": "npm run build:desktop",
+    "test:desktop": "node --test --test-concurrency=1 desktop/tests/*.test.mjs",
     "server": "node server/index.mjs",
     "server:dev": "node --watch server/index.mjs",
     "build": "tsc -b && vite build --configLoader runner",
@@ -55,6 +63,8 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.2.4",
+    "electron": "44.6.0",
+    "electron-builder": "26.15.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.7.3",
     "vite": "^6.0.7"
