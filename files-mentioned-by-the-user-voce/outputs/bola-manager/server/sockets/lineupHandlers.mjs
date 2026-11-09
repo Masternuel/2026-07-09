@@ -138,6 +138,7 @@ export function registerLineupHandlers(io, socket, {
       const careerEffects = clubCareerPerformanceEffects(currentRoom, manager.clubId);
       const cohesion = calculateTeamCohesion({
         previous: previousLineup?.cohesion,
+        previousTactics: previousLineup?.tactics,
         lineupIds: data.lineupIds,
         tactics: effectiveTactics,
         players: validationPlayers,
