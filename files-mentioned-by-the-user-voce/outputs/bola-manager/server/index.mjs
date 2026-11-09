@@ -76,6 +76,11 @@ export async function createBolaManagerServer({
   readinessCheck: injectedReadinessCheck,
   metrics: injectedMetrics,
   structuredLogger: injectedStructuredLogger,
+  originPolicy: injectedOriginPolicy,
+  requestGuard,
+  editorAccess,
+  localMediaHandler,
+  staticDirectory,
   socketAdapterFactory = createRedisAdapter,
 } = {}) {
   const config = getServerConfig(env);
@@ -162,7 +167,7 @@ export async function createBolaManagerServer({
 
   const app = express();
   const httpServer = createHttpServer(app);
-  const originPolicy = createOriginPolicy(config.clientOrigin, config.nodeEnv);
+  const originPolicy = injectedOriginPolicy ?? createOriginPolicy(config.clientOrigin, config.nodeEnv);
   const corsOptions = originPolicy.cors;
   const headersForRequest = createSecurityHeaders(config);
   const existingUpgradeHandlers = new Set(httpServer.listeners("upgrade"));
@@ -239,6 +244,8 @@ export async function createBolaManagerServer({
     next();
   });
   app.disable("x-powered-by");
+  if (requestGuard) app.use(requestGuard);
+  if (localMediaHandler) app.use((request, response, next) => Promise.resolve(localMediaHandler(request, response, next)).catch(next));
   app.set("trust proxy", config.trustProxy);
   app.use(createStagingProxyDiagnostics({ config: config.stagingProxyDiagnostics, logger: structuredLogger, instanceId: config.instanceId }));
   app.use((request, response, next) => {
@@ -362,8 +369,16 @@ export async function createBolaManagerServer({
     allowLocalEditor: config.allowLocalEditor,
     editorAdminUids: config.editorAdminUids,
     brasfootImportService,
+    editorAccess,
   }));
 
+  if (staticDirectory) {
+    app.use(express.static(resolve(staticDirectory)));
+    app.get("*", (request, response, next) => {
+      if (request.path.startsWith("/api/") || request.path.startsWith("/socket.io/")) return next();
+      response.sendFile(resolve(staticDirectory, "index.html"));
+    });
+  }
   app.use((request, response) => {
     response.status(404).json({
       error: { code: "NOT_FOUND", message: "Rota nao encontrada", requestId: request.requestId },
@@ -473,10 +488,10 @@ export async function createBolaManagerServer({
     distributedLocks,
     rateLimiter,
     metrics,
-    async listen(port = config.port) {
+    async listen(port = config.port, host) {
       await new Promise((resolveListen, reject) => {
         httpServer.once("error", reject);
-        httpServer.listen(port, () => {
+        httpServer.listen(port, host, () => {
           httpServer.off("error", reject);
           resolveListen();
         });

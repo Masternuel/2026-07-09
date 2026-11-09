@@ -86,10 +86,11 @@ function requiredBrasfootImportService(options) {
   throw error;
 }
 
-export function canEditCatalog(user, _options = {}) {
+export function canEditCatalog(user, options = {}) {
   // Each Firebase account owns an isolated database, so the Editor is a
   // player feature instead of a single global administrative surface.
-  return Boolean(user && user.authType === "firebase" && user.uid);
+  return Boolean(user && user.authType === "firebase" && user.uid
+    && (!options.editorAccess || options.editorAccess(user)));
 }
 
 function requireEditor(options) {

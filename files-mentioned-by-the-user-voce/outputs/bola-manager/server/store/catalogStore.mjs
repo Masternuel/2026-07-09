@@ -106,7 +106,7 @@ function sortRecords(records) {
   ));
 }
 
-function tournamentParticipant(record) {
+export function tournamentParticipant(record) {
   const reputation = Number(record.reputation);
   const stadiumCapacity = Number(record.stadiumCapacity);
   return {
@@ -163,7 +163,7 @@ function competitionPrizeMoney(record) {
   return configured ?? 0;
 }
 
-function publicTournament(record, participantsById) {
+export function publicTournament(record, participantsById) {
   const teamIds = Array.isArray(record.teamIds) ? record.teamIds : [];
   const prizeMoney = competitionPrizeMoney(record);
   return {
@@ -210,7 +210,7 @@ function leagueLegs(record) {
   return "double";
 }
 
-function publicLeague(record, clubCount) {
+export function publicLeague(record, clubCount) {
   const prizeMoney = competitionPrizeMoney(record);
   return {
     id: record.id,
@@ -224,7 +224,7 @@ function publicLeague(record, clubCount) {
   };
 }
 
-function publicCompetitionClub(record) {
+export function publicCompetitionClub(record) {
   const configuredColor = Array.isArray(record.colors)
     ? record.colors.find((color) => typeof color === "string" && color.trim())
     : null;

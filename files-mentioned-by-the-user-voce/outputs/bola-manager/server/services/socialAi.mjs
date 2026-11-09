@@ -298,6 +298,8 @@ function normalizeBundle(bundle, input, idFactory) {
 
 function responseText(payload) {
   if (typeof payload?.output_text === "string") return payload.output_text.trim();
+  const parts = payload?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts)) return parts.filter((part) => !part.thought && typeof part.text === "string").map((part) => part.text).join("").trim();
   if (!Array.isArray(payload?.steps)) return "";
   for (let index = payload.steps.length - 1; index >= 0; index -= 1) {
     const content = payload.steps[index]?.content;
@@ -355,6 +357,7 @@ function shouldTryNextModel(error) {
 export function createSocialAiService({
   usage,
   apiKey,
+  api = "interactions",
   model = DEFAULT_MODEL,
   fallbackModels = DEFAULT_FALLBACK_MODELS,
   fetchImpl = globalThis.fetch,
@@ -369,6 +372,7 @@ export function createSocialAiService({
   now = () => Date.now(),
   idFactory = randomUUID,
 } = {}) {
+  if (!["interactions", "generateContent"].includes(api)) throw new Error("Social AI API invalida");
   const normalizedKey = String(apiKey ?? "").trim();
   const normalizedModel = String(model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const requestedFallbackModels = normalizeModelList(fallbackModels);
@@ -399,14 +403,25 @@ export function createSocialAiService({
       let response;
       try {
         response = await fetchImpl(
-          "https://generativelanguage.googleapis.com/v1beta/interactions",
+          api === "generateContent"
+            ? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel)}:generateContent`
+            : "https://generativelanguage.googleapis.com/v1beta/interactions",
           {
             method: "POST",
             headers: {
               "content-type": "application/json",
               "x-goog-api-key": normalizedKey,
             },
-            body: JSON.stringify({
+            body: JSON.stringify(api === "generateContent" ? {
+              contents: [{ role: "user", parts: [{ text: JSON.stringify(input) }] }],
+              systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+              generationConfig: {
+                responseMimeType: "application/json",
+                responseJsonSchema: RESPONSE_SCHEMA,
+                maxOutputTokens: 900,
+                thinkingConfig: { thinkingLevel: "low" },
+              },
+            } : {
               model: requestedModel,
               input: JSON.stringify(input),
               system_instruction: SYSTEM_INSTRUCTION,

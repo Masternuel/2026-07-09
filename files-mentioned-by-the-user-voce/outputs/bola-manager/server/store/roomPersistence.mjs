@@ -251,12 +251,23 @@ export class MemoryRoomPersistence {
   #deletedCodes = new Set();
   #creationReceipts = new Map();
 
-  constructor(initialRooms = []) {
-    this.matchHistory = new MemoryMatchHistory((code) => this.#rooms.has(code) && !this.#deletedCodes.has(code));
+  constructor(initialRooms = [], { deletedCodes = [], creationReceipts = [], history = [] } = {}) {
+    this.#deletedCodes = new Set(deletedCodes);
+    this.#creationReceipts = new Map(clone(creationReceipts));
+    this.matchHistory = new MemoryMatchHistory((code) => this.#rooms.has(code) && !this.#deletedCodes.has(code), history);
     for (const room of initialRooms) {
       if (isDeletedRoom(room)) this.#deletedCodes.add(room.code);
       else this.#rooms.set(room.code, clone(room));
     }
+  }
+
+  exportState() {
+    return clone({
+      rooms: [...this.#rooms.values()],
+      deletedCodes: [...this.#deletedCodes],
+      creationReceipts: [...this.#creationReceipts],
+      history: this.matchHistory.exportState(),
+    });
   }
 
   async findCreation(operation) {

@@ -103,7 +103,11 @@ export function assertHistoryId(id) {
 
 export class MemoryMatchHistory {
   #records = new Map();
-  constructor(isActive = () => true) { this.isActive = isActive; }
+  constructor(isActive = () => true, records = []) {
+    this.isActive = isActive;
+    this.#records = new Map(structuredClone(records));
+  }
+  exportState() { return structuredClone([...this.#records]); }
   async put(room, record) {
     if (!this.isActive(room.code)) throw historyError("ROOM_NOT_FOUND", "Sala nao encontrada", 404);
     const key = `${room.id ?? room.code}:${record.id}`;

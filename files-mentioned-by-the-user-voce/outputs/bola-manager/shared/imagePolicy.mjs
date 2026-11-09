@@ -4,6 +4,22 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_IMAGE_DIMENSION = 4096;
 export const MAX_IMAGE_PIXELS = 16_000_000;
 
+/** Caller must require the native desktop bridge and a local/peer identity. Never request the stored origin. */
+export function allowedDesktopImage(value, currentOrigin) {
+  if (typeof value !== "string" || typeof currentOrigin !== "string" || value.length > 2048
+    || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;
+  try {
+    const app = new URL(currentOrigin);
+    const url = new URL(value);
+    if (app.protocol !== "http:" || app.hostname !== "127.0.0.1" || app.origin !== currentOrigin
+      || url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.search || url.hash
+      || url.href !== value || !/^\/desktop-media\/[a-f0-9-]{36}$/.test(url.pathname)) return null;
+    return `${app.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
 export function allowedExternalImage(value) {
   if (typeof value !== "string" || value.length > 2048 || !value
     || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;

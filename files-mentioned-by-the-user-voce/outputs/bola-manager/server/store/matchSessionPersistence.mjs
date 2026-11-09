@@ -153,6 +153,8 @@ export class MemoryMatchSessionPersistence {
     }
   }
 
+  exportState() { return clone([...this.#sessions.values()]); }
+
   async get(code) {
     return clone(activeRecord(this.#sessions.get(normalizedCode(code))));
   }
