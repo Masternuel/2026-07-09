@@ -403,7 +403,9 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 | Etapa | Status | Onde |
 |---|---|---|
 | 0 | ✅ Concluída: trabalho local commitado em 6 commits temáticos | branch `codex/desktop-offline`, PR #3 |
-| 1 | ✅ Concluída, com as pendências listadas abaixo | branch `chore/etapa1-security` |
+| 1 | ✅ Concluída, com as pendências listadas abaixo | branch `chore/etapa1-security`, PR #4 |
+| — | ✅ Limpeza de fixtures dos testes do Editor (trabalho do Codex) | branch `test/editor-fixture-cleanup`, PR #5 |
+| 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality` |
 
 **Etapa 1, o que foi feito:**
 - **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
@@ -417,6 +419,18 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 - **S-02:** gerar uma chave (`node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`) e configurar `CLUSTER_SIGNING_KEY` igual em todas as réplicas do Railway. Durante o deploy com overlap, réplicas ainda no código antigo não reconhecem a asserção, o que pode causar falhas pontuais por até 30 s.
 - **S-04:** mover as service accounts do `.env.staging` para fora do projeto e rotacioná-las se a pasta já foi sincronizada com algum serviço de nuvem. Não alterei esse arquivo.
 - **P-02:** as pastas vazias `cr/`, `cria-um-jogo-similar-a-brasfoot/` e `.agents`/`.codex`/`.codex-tmp` foram mantidas, porque o Codex usa essa estrutura e estava ativo durante o trabalho.
+
+**Etapa 2, o que foi feito:**
+- **CI desktop:** novo job `Desktop (Windows)` em `windows-latest`, rodando `npm run test:desktop` (typecheck + build desktop + testes nativos com o Electron instalado). Ele entra no job `required`. `ciPipeline.test.mjs` passou a exigir esse job.
+- **ESLint 9 (flat config, `eslint.config.mjs`) em modo relatório:** todas as regras ficam como `warn`, e o `npm run lint` roda no job `quality`. Primeira medição: **160 avisos, 0 erros**, sendo 107 `no-unused-vars`, 33 `react-hooks/exhaustive-deps`, 8 `@typescript-eslint/no-unused-vars`, 6 `no-control-regex`, 2 `no-unsafe-finally`, 1 `no-dupe-keys` (em fixture de teste) e 3 avulsos. Nenhum autofix foi aplicado.
+- **checkJs:** `tsconfig.server.json` entra no `npm run typecheck`. Cobre `shared/*.mjs` e 7 dos 15 módulos de `server/infrastructure/`. Para passar, recebi só duas anotações JSDoc, sem mudança de lógica: `metricPolicy.mjs` e `calculateTeamCohesion`. Pendentes, com 24 erros (opções desestruturadas e `Error` com campos customizados): aiUsage, coordinationAvailability, distributedLock, distributedRateLimit, metricsEndpoint, publicErrors, readiness, redisRuntime.
+- **Cobertura:** `npm run coverage:server` gera `.tmp/coverage/lcov.info`. O job `coverage` publica o arquivo como artefato e não entra no `required`. Primeira medição do backend: **92,8 % das linhas, 79,2 % dos ramos, 92,9 % das funções**. O `roomStore.mjs` tem 88,7 % das linhas e 68,5 % dos ramos.
+- **S-09:** foi criado `desktop/tests/fixtures/saves/career-v1-electron-44.10.2.bolasave`, com conteúdo fictício e determinístico, junto com um `.json` de metadados. `saveCompatibility.test.mjs` abre o fixture **dentro do Electron instalado** (`ELECTRON_RUN_AS_NODE`), usando o `openLocalDatabase` real. Ele compara o hash canônico do estado (que preserva Date, `undefined`, NaN e −0) e confirma que abrir o save não regrava o arquivo. Antes de cada upgrade de Electron, rode `npm run fixture:save` com a versão antiga e versione o par gerado. Fixtures existentes nunca são sobrescritos.
+
+**Etapa 2, limites e observações:**
+- O `npm audit` passou de 7 para 13 linhas porque o `typescript-eslint` (só desenvolvimento) também depende do `minimatch` vulnerável. Continuam os **mesmos 2 alertas**: `minimatch` (ferramentas de build e lint) e `zod`.
+- O job de Windows só será validado de verdade na primeira execução do GitHub Actions. Localmente, a suíte desktop passou com 78/78.
+- O fixture de save só prova a leitura pela versão atual. A proteção real vem quando o próximo upgrade de Electron rodar esse teste.
 
 ---
 
