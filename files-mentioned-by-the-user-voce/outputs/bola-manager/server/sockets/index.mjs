@@ -6,6 +6,7 @@ import { registerLineupHandlers } from "./lineupHandlers.mjs";
 import { registerClubCareerHandlers } from "./clubCareerHandlers.mjs";
 import { channelForManager, clientError } from "./helpers.mjs";
 import { coordinationUnavailable } from "../infrastructure/coordinationAvailability.mjs";
+import { installSocketAuthSession } from "./authSession.mjs";
 
 export function registerSocketHandlers(io, options) {
   const matchSessions = new Map();
@@ -57,7 +58,15 @@ export function registerSocketHandlers(io, options) {
       const proxy = clusterSocket(request?.auth);
       try {
         options.assertCoordinationAvailable?.();
-        await new Promise((resolve, reject) => options.authenticateSocket(proxy, (error) => error ? reject(error) : resolve()));
+        if (request?.auth?.assertion !== undefined) {
+          if (!options.clusterIdentity) throw Object.assign(new Error("Identidade de cluster nao configurada"), { code: "AUTH_REQUIRED", status: 401 });
+          const identity = options.clusterIdentity.verify(request.auth.assertion);
+          installSocketAuthSession(proxy, { ...identity, token: null, preverified: true }, async () => {
+            throw Object.assign(new Error("Sessao de cluster nao renovavel"), { code: "AUTH_SESSION_CLOSED", status: 401 });
+          });
+        } else {
+          await new Promise((resolve, reject) => options.authenticateSocket(proxy, (error) => error ? reject(error) : resolve()));
+        }
         registerMatchHandlers(io, proxy, matchOptions);
         const response = await proxy.dispatch(eventName, request.payload);
         acknowledgement?.({ handled: Boolean(response), response });
@@ -105,7 +114,10 @@ export function registerSocketHandlers(io, options) {
         const responses = await io.serverSideEmitWithAck("cluster:match-command", {
           event: eventName,
           payload,
-          auth: socket.data.authCredentials(),
+          // authorize() above re-verified the token; send only a signed identity when configured.
+          auth: options.clusterIdentity
+            ? { assertion: options.clusterIdentity.sign(socket.data.user) }
+            : socket.data.authCredentials(),
         });
         return responses.find((response) => response?.handled)?.response ?? null;
       };

@@ -57,6 +57,7 @@ import { createOriginPolicy } from "./infrastructure/networkPolicy.mjs";
 import { correlationId, publicError, publicConnectionError } from "./infrastructure/publicErrors.mjs";
 import { httpMetricRoute } from "./infrastructure/metricPolicy.mjs";
 import { createAiUsage } from "./infrastructure/aiUsage.mjs";
+import { createClusterIdentity } from "./infrastructure/clusterIdentity.mjs";
 
 export async function createBolaManagerServer({
   env = process.env,
@@ -432,8 +433,15 @@ export async function createBolaManagerServer({
   io.use((_socket, next) => {
     try { assertCoordinationAvailable(); next(); } catch (error) { next(error); }
   });
+  const clusterIdentity = createClusterIdentity(config.clusterSigningKey);
+  if (!clusterIdentity && distributedLocks && config.nodeEnv === "production") {
+    structuredLogger.warn("cluster.identity_unsigned", {
+      message: "CLUSTER_SIGNING_KEY ausente: comandos entre replicas encaminham o token do usuario pelo Redis",
+    });
+  }
   const sockets = registerSocketHandlers(io, {
     assertCoordinationAvailable,
+    clusterIdentity,
     authenticateSocket,
     store,
     catalogStore,
