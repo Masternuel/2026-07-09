@@ -398,6 +398,28 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 
 ---
 
+### Status de execução
+
+| Etapa | Status | Onde |
+|---|---|---|
+| 0 | ✅ Concluída: trabalho local commitado em 6 commits temáticos | branch `codex/desktop-offline`, PR #3 |
+| 1 | ✅ Concluída, com as pendências listadas abaixo | branch `chore/etapa1-security` |
+
+**Etapa 1, o que foi feito:**
+- **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
+- **S-01:** política CSP completa (`shared/contentSecurityPolicy.mjs`) publicada como `Content-Security-Policy-Report-Only` na Vercel e no `vite preview`. O CSP aplicado continua o mesmo. Um teste garante que o hash do script inline corresponde ao `index.html`.
+- **S-03:** dev server do Vite em `127.0.0.1`. Para expor na LAN, usar `npm run dev:client -- --host`.
+- **S-02:** com `CLUSTER_SIGNING_KEY` configurada, as réplicas trocam uma identidade assinada por HMAC (TTL de 15 s) em vez do token Firebase. Sem a chave, o comportamento antigo continua, com um aviso em produção.
+- **P-03/P-04/P-05:** `.gitattributes`, logs vazios removidos, `moke e2e"` e `NVIDIA Corporation/` removidos e ignorados.
+
+**Etapa 1, pendências que dependem de você:**
+- **S-01:** abrir o staging, conferir o console do navegador por violações de CSP (login, partida, editor, upload de imagem) e só então promover a política para `Content-Security-Policy`.
+- **S-02:** gerar uma chave (`node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`) e configurar `CLUSTER_SIGNING_KEY` igual em todas as réplicas do Railway. Durante o deploy com overlap, réplicas ainda no código antigo não reconhecem a asserção, o que pode causar falhas pontuais por até 30 s.
+- **S-04:** mover as service accounts do `.env.staging` para fora do projeto e rotacioná-las se a pasta já foi sincronizada com algum serviço de nuvem. Não alterei esse arquivo.
+- **P-02:** as pastas vazias `cr/`, `cria-um-jogo-similar-a-brasfoot/` e `.agents`/`.codex`/`.codex-tmp` foram mantidas, porque o Codex usa essa estrutura e estava ativo durante o trabalho.
+
+---
+
 ## 10. Recomendações para evolução futura
 
 1. **Modelo de domínio tipado e versionado.** O objeto `room` é o coração do sistema e tem dezenas de subestados com `version` próprio (`coachEmploymentState.version`, `professionalLifecycleState.version`…). Centralizar os schemas zod (ou JSDoc types) em `shared/model/` e gerar `src/types.ts` a partir deles elimina a duplicação manual de 3.055 linhas de tipos do frontend.

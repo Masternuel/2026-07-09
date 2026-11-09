@@ -20,3 +20,6 @@ npm-debug.log*
 *.p12
 /public/audio/tracks/*
 /public/assets/audio/covers/*
+
+# Created by the GPU driver when Electron runs from the project directory
+/NVIDIA Corporation/

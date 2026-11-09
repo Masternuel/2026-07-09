@@ -61,7 +61,8 @@ export function installSocketAuthSession(socket, initial, verify, {
   async function authorize(eventName) {
     if (eventName === "auth:logout") return;
     assertActive();
-    if (eventName === "auth:refresh" || credentials.user.authType === "demo") return;
+    // Pre-verified sessions carry a short-lived cluster assertion, not a token.
+    if (eventName === "auth:refresh" || credentials.user.authType === "demo" || credentials.preverified) return;
     for (let attempt = 0; attempt < 3; attempt++) {
       assertActive();
       const currentRevision = revision;
