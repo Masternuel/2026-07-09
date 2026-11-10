@@ -7,6 +7,9 @@ import { join, resolve } from 'node:path';
 import { removeFixtureDirectory } from './helpers/fixtureCleanup.mjs';
 
 const root = resolve('.tmp/editor-cleanup-tests');
+// Startup budget for the helper reader process only (a cold PowerShell on CI runners takes
+// several seconds). It does not affect the cleanup being tested, whose retries stay bounded.
+const READER_STARTUP_MS = 30000;
 async function fixture(t) {
   await mkdir(root, { recursive: true });
   const directory = await mkdtemp(join(root, 'run-'));
@@ -47,7 +50,7 @@ async function holdFile(file) {
         child.once('error', reject);
         child.once('exit', () => reject(new Error('Test reader exited before ready')));
       }),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Test reader did not become ready')), 3000); }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Test reader did not become ready')), READER_STARTUP_MS); }),
     ]);
     return release;
   } catch (error) { await release(); throw error; }
@@ -85,7 +88,7 @@ test('Editor fixture cleanup preserves a persistent deletion error instead of hi
   assert.equal((await stat(profile)).isDirectory(), true);
 });
 
-test('Editor fixture cleanup tolerates a transient real file reader without skipping assertions', { timeout: 10000 }, async (t) => {
+test('Editor fixture cleanup tolerates a transient real file reader without skipping assertions', { timeout: 45000 }, async (t) => {
   const { directory, profile } = await fixture(t);
   const file = join(profile, 'fixture.bin');
   await writeFile(file, 'disposable test data');

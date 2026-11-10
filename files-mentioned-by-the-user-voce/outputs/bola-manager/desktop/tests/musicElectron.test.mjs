@@ -92,7 +92,16 @@ test('desktop audio shows only a timed popup, survives navigation and persists r
     await page.getByRole('button', { name: 'Áudio', exact: true }).click();
     for (const width of [1366, 390, 320]) {
       await page.setViewportSize({ width, height: 844 });
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+      const overflow = await page.evaluate(() => {
+        const { scrollWidth, clientWidth } = document.documentElement;
+        const widest = [...document.querySelectorAll('body *')]
+          .map((element) => ({ element, right: element.getBoundingClientRect().right }))
+          .filter((item) => item.right > clientWidth + 0.5)
+          .sort((a, b) => b.right - a.right).slice(0, 3)
+          .map(({ element, right }) => `${element.tagName.toLowerCase()}.${[...element.classList].join('.')}@${Math.round(right)}`);
+        return { scrollWidth, clientWidth, innerWidth: window.innerWidth, widest };
+      });
+      assert.ok(overflow.scrollWidth <= overflow.clientWidth, `horizontal overflow at ${width}px: ${JSON.stringify(overflow)}`);
       await expect(page.getByRole('slider', { name: 'Volume geral', exact: true })).toBeVisible();
       const previous = (await player(page)).players.at(-1).src;
       await page.evaluate(() => window.__musicPlayers.at(-1).dispatchEvent(new Event('ended')));
