@@ -98,7 +98,14 @@ test('desktop audio shows only a timed popup, survives navigation and persists r
           .map((element) => ({ element, right: element.getBoundingClientRect().right }))
           .filter((item) => item.right > clientWidth + 0.5)
           .sort((a, b) => b.right - a.right).slice(0, 3)
-          .map(({ element, right }) => `${element.tagName.toLowerCase()}.${[...element.classList].join('.')}@${Math.round(right)}`);
+          .map(({ element, right }) => {
+            const path = [];
+            for (let node = element; node && node !== document.body && path.length < 5; node = node.parentElement) {
+              path.push(`${node.tagName.toLowerCase()}${node.classList.length ? `.${[...node.classList].join('.')}` : ''}`);
+            }
+            const style = getComputedStyle(element);
+            return `${path.join(' < ')}@${Math.round(right)} "${element.textContent.trim().slice(0, 40)}" font=${style.fontFamily.slice(0, 40)}`;
+          });
         return { scrollWidth, clientWidth, innerWidth: window.innerWidth, widest };
       });
       assert.ok(overflow.scrollWidth <= overflow.clientWidth, `horizontal overflow at ${width}px: ${JSON.stringify(overflow)}`);
