@@ -34,7 +34,8 @@ export function registerSafe(socket, eventName, handler) {
       });
     }, slowMs);
     slowTimer.unref?.();
-    logger?.info?.("socket.event_start", { requestId, eventName, socketId: socket.id });
+    // D-03: one info line per event (event_end, with status and duration) is enough.
+    logger?.debug?.("socket.event_start", { requestId, eventName, socketId: socket.id });
 
     const finish = (status, error = null) => {
       clearTimeout(slowTimer);
