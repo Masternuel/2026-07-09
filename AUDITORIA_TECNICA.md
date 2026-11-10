@@ -405,7 +405,8 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 | 0 | ✅ Concluída: trabalho local commitado em 6 commits temáticos | branch `codex/desktop-offline`, PR #3 |
 | 1 | ✅ Concluída, com as pendências listadas abaixo | branch `chore/etapa1-security`, PR #4 |
 | — | ✅ Limpeza de fixtures dos testes do Editor (trabalho do Codex) | branch `test/editor-fixture-cleanup`, PR #5 |
-| 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality` |
+| 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality`, PR #6 |
+| 3 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa3-reliability` |
 
 **Etapa 1, o que foi feito:**
 - **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
@@ -429,8 +430,30 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 
 **Etapa 2, limites e observações:**
 - O `npm audit` passou de 7 para 13 linhas porque o `typescript-eslint` (só desenvolvimento) também depende do `minimatch` vulnerável. Continuam os **mesmos 2 alertas**: `minimatch` (ferramentas de build e lint) e `zod`.
-- O job de Windows só será validado de verdade na primeira execução do GitHub Actions. Localmente, a suíte desktop passou com 78/78.
+- Na primeira execução no GitHub Actions, o job de Windows encontrou dois problemas que não aparecem localmente:
+  - o PowerShell auxiliar de um teste levou mais de 3 s para abrir; ele ganhou um tempo próprio de inicialização, e o teste da limpeza ficou igual;
+  - **um defeito real de layout:** a 320 px, com a fonte `system-ui` mais larga do Windows Server, o rótulo "Configurações" do menu lateral transbordava 2 px. Corrigido em `main-menu.css`; com Verdana forçada, o transbordamento era de 15 px antes da correção e zero depois.
 - O fixture de save só prova a leitura pela versão atual. A proteção real vem quando o próximo upgrade de Electron rodar esse teste.
+
+**Etapa 3, o que foi feito:**
+- **D-01:** o `read()` do banco local não copia mais o save inteiro a cada leitura. O estado gravado fica congelado em profundidade, e só o resultado de cada leitura é copiado. Uma leitura que tente alterar o estado falha com `TypeError`, em vez de corromper o próximo save. Os bytes binários de mídia não são congelados, mas continuam sendo copiados na leitura.
+  - Achado no caminho: o `v8.serialize` depende do layout interno dos objetos (objetos congelados e arrays copiados geram bytes diferentes). Por isso, o backup antes da importação agora reaproveita os bytes exatos do último save gravado. O formato em disco não mudou, e um teste compara byte a byte. Custo: os bytes do save gravado ficam em memória, ou seja, mais uma vez o tamanho do save.
+- **S-10:** a troca do arquivo de save e de backup (`rename`) tenta de novo em `EPERM`, `EBUSY` e `EACCES`: até 5 tentativas, com espera de 20, 40, 60 e 80 ms. Outros erros falham na hora.
+- **S-07:** não precisou de mudança. Com locks distribuídos, `room:delete` segura `match:<code>` com `waitTimeoutMs: 0`, então duas réplicas não excluem a mesma sala ao mesmo tempo, e o store exclui dentro de uma transação. Única ressalva: a segunda tentativa recebe a mensagem "partida em andamento".
+- **S-08:** `deletedRooms` virou um `ExpiringSet`: entradas expiram em 1 h, com no máximo 10.000 entradas, e a mesma interface de `Set`.
+- **D-03:**
+  - `http.request_start` e `socket.event_start` passaram para `debug`;
+  - `*_end` continua em `info`, com status e duração;
+  - probes bem-sucedidos (`/health`, `/ready`, `/metrics`) agora são `debug`;
+  - no nível padrão, cada requisição gera **1 linha**, e não 2.
+- **D-02:** a medição foi feita com `scripts/measure-brasfoot-event-loop.mjs`, usando arquivos `.ban` **sintéticos** (time com um array de jogadores no formato Java real). Resultados na thread principal: 200 times de 30 jogadores bloquearam 10 ms; 10 mil jogadores, 37 ms; 100 mil jogadores (perto do limite de 32 MB), **802 a 889 ms**, acima dos 250 ms combinados. Por isso o servidor agora lê os arquivos num `worker_threads`, com limite de 1 GiB de memória e 120 s de tempo. Com o worker, o pior caso bloqueia **7 ms**. O resultado é idêntico ao do parser antigo, e um teste garante isso.
+
+**Etapa 3, limites e observações:**
+- **D-02:**
+  - Não havia arquivos reais do Brasfoot nesta máquina. Repita a medição com uma instalação real: `node scripts/measure-brasfoot-event-loop.mjs C:\Brasfoot` (worker) ou com `--inline` (thread principal).
+  - O mapeamento dos arquivos sintéticos produz poucos jogadores, então o custo de transferir de volta um dataset grande não foi medido.
+  - **O desktop continua lendo na thread atual**, de propósito: o backend dele já roda isolado num `utilityProcess` e atende um só usuário. Além disso, o worker teria de carregar código de dentro do `app.asar`, o que não foi validado.
+- **D-01:** se alguma leitura não coberta pelos testes alterar o estado, ela agora falha com `TypeError` em vez de corromper o save. Nas suítes desktop e de servidor, nenhuma leitura fez isso.
 
 ---
 

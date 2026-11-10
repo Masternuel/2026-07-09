@@ -258,7 +258,10 @@ export async function createBolaManagerServer({
       method: request.method,
       path: httpMetricRoute(request.path),
     };
-    structuredLogger.info("http.request_start", context);
+    // D-03: start lines are debug; request_end carries status and duration at info.
+    // Health/readiness/metrics probes hit every few seconds, so they stay at debug unless they fail.
+    const probe = ["/health", "/ready", "/metrics"].includes(request.path);
+    structuredLogger.debug("http.request_start", context);
     let finished = false;
     const slowTimer = setTimeout(() => {
       structuredLogger.warn("http.request_slow", {
@@ -271,7 +274,7 @@ export async function createBolaManagerServer({
     response.once("finish", () => {
       finished = true;
       clearTimeout(slowTimer);
-      structuredLogger.info("http.request_end", {
+      structuredLogger[probe && response.statusCode < 400 ? "debug" : "info"]("http.request_end", {
         ...context,
         status: response.statusCode,
         durationMs: Date.now() - startedAt,

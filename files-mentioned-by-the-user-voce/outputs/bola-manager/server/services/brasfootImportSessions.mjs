@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, posix, resolve, sep, win32 } from "node:path";
-import { parseBrasfootSource } from "../../scripts/lib/brasfoot-binary.mjs";
+import { parseBrasfootSourceInWorker } from "../../scripts/lib/brasfoot-parse-worker.mjs";
 import { executeImportCommit, normalizeDataset } from "../../scripts/import-brasfoot.mjs";
 
 export const BRASFOOT_IMPORT_LIMITS = Object.freeze({
@@ -214,7 +214,8 @@ export class BrasfootImportSessionService {
     limits = {},
     now = () => Date.now(),
     idFactory = randomUUID,
-    parseSource = parseBrasfootSource,
+    // Off the main thread so a near-limit file cannot stall live-match sockets (D-02).
+    parseSource = parseBrasfootSourceInWorker,
     normalize = normalizeDataset,
     commitImport = executeImportCommit,
     scheduleCleanup = true,
