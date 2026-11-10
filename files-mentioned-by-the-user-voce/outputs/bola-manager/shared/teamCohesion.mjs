@@ -214,6 +214,7 @@ export function normalizeCohesionExperience(previous, formationRoles) {
   };
 }
 
+/** @param {Partial<import("./teamCohesion.mjs").CohesionCalculationOptions>} [options] */
 export function calculateTeamCohesion({
   previous = null,
   lineupIds = [],

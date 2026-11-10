@@ -31,6 +31,7 @@ jobs:
           cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm run build
       - run: npm run test:server
       - run: npm run test:frontend
@@ -56,10 +57,45 @@ jobs:
             files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/report
             files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/results
           retention-days: 7
+  desktop:
+    name: Desktop (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      BOLA_ENV_FILES: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+      - run: npm ci
+      # pretest:desktop runs typecheck + build:desktop; native tests use the installed Electron.
+      - run: npm run test:desktop
+  coverage:
+    name: Cobertura do backend (relatório)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+      - run: npm ci
+      - run: npm run coverage:server
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: server-coverage
+          path: files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/coverage
+          retention-days: 7
   required:
     name: Bola Manager required
     if: ${{ always() }}
-    needs: [quality, smoke]
+    needs: [quality, smoke, desktop]
     runs-on: ubuntu-latest
     steps:
       - name: Exigir todas as verificações
@@ -67,4 +103,5 @@ jobs:
         env:
           QUALITY: ${{ needs.quality.result }}
           SMOKE: ${{ needs.smoke.result }}
-        run: test "$QUALITY" = success && test "$SMOKE" = success
+          DESKTOP: ${{ needs.desktop.result }}
+        run: test "$QUALITY" = success && test "$SMOKE" = success && test "$DESKTOP" = success

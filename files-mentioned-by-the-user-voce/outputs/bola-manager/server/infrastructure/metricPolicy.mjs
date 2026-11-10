@@ -31,7 +31,7 @@ export function lockMetricResource(resource) {
 }
 
 // Only these dimensions may enter the registry. Never retain arbitrary IDs or error messages.
-const definitions = new Map([
+const definitions = new Map(/** @type {Array<[string, [string, object]]>} */ ([
   ["http_requests_total", ["counter", httpLabels]],
   ["ai_market_ticks_total", ["counter", { status: aiMarketStatus }]],
   ["ai_market_tick_duration_ms", ["summary", { status: aiMarketStatus }]],
@@ -59,7 +59,7 @@ const definitions = new Map([
   ...["socket_connections_total", "socket_disconnections_total"].map((name) => [name, ["counter", {}]]),
   ...["socket_connections_active", "event_loop_lag_ms", "dependency_readiness", "server_ready"]
     .map((name) => [name, ["gauge", {}]]),
-]);
+]));
 
 export function normalizeMetricSample(name, type, labels = {}) {
   const definition = definitions.get(name);

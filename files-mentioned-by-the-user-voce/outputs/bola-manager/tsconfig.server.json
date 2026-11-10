@@ -1,0 +1,27 @@
+{
+  "//": "Etapa 2 da auditoria: checkJs incremental. Arquivos pendentes (inferencia de options/Error customizado): aiUsage, coordinationAvailability, distributedLock, distributedRateLimit, metricsEndpoint, publicErrors, readiness, redisRuntime. Adicione-os ao include conforme receberem JSDoc.",
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "shared/**/*.mjs",
+    "server/infrastructure/clusterIdentity.mjs",
+    "server/infrastructure/httpSecurity.mjs",
+    "server/infrastructure/metricPolicy.mjs",
+    "server/infrastructure/networkPolicy.mjs",
+    "server/infrastructure/observability.mjs",
+    "server/infrastructure/redaction.mjs",
+    "server/infrastructure/stagingProxyDiagnostics.mjs"
+  ]
+}

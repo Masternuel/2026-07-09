@@ -8,12 +8,13 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 test('CI exige qualidade e E2E sem ignorar falhas', async () => {
   const workflow = await read('../../../../../.github/workflows/bola-manager-ci.yml');
   const { scripts } = JSON.parse(await read('../../package.json'));
-  for (const command of ['typecheck', 'build', 'test:server', 'test:frontend', 'test:e2e']) {
+  for (const command of ['typecheck', 'build', 'test:server', 'test:frontend', 'test:e2e', 'test:desktop']) {
     assert.ok(scripts[command], command);
     assert.ok(workflow.includes(`run: npm run ${command}`), command);
   }
-  assert.match(workflow, /needs: \[quality, smoke\]/);
-  assert.match(workflow, /test "\$QUALITY" = success && test "\$SMOKE" = success/);
+  assert.match(workflow, /needs: \[quality, smoke, desktop\]/);
+  assert.match(workflow, /desktop:\n(?:.*\n)*?\s+runs-on: windows-latest/);
+  assert.match(workflow, /test "\$QUALITY" = success && test "\$SMOKE" = success && test "\$DESKTOP" = success/);
   assert.match(workflow, /contents: read/);
   assert.doesNotMatch(workflow, /continue-on-error|pull_request_target|secrets\./);
 });
