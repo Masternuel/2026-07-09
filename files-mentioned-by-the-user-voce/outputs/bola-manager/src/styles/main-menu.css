@@ -264,6 +264,8 @@
   .main-menu__navigation { display: grid; gap: 4px; overflow: visible; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .main-menu__nav-item { display: flex; min-width: 0; flex-direction: column; }
   .main-menu__nav-item button { height: auto; min-height: 40px; gap: 7px; padding: 8px 9px; font-size: 12px; line-height: 1.45; }
+  /* Labels may shrink and break inside the 3-column grid; wider system fonts (e.g. Windows Server) overflowed by 2px at 320px. */
+  .main-menu__nav-item button > span { min-width: 0; overflow-wrap: break-word; }
   .main-menu__nav-item button > svg { width: 15px; }
   .main-menu__nav-item button > svg:last-child:not(:first-child) { display: none; }
   .main-menu__nav-item--play + .main-menu__nav-item--personal, .main-menu__nav-item--about { margin: 0; padding: 0; border-top: 0; }
