@@ -406,7 +406,8 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 | 1 | ✅ Concluída, com as pendências listadas abaixo | branch `chore/etapa1-security`, PR #4 |
 | — | ✅ Limpeza de fixtures dos testes do Editor (trabalho do Codex) | branch `test/editor-fixture-cleanup`, PR #5 |
 | 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality`, PR #6 |
-| 3 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa3-reliability` |
+| 3 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa3-reliability`, PR #7 |
+| 4 | 🟡 Q-04, Q-03 e o primeiro subdomínio do Q-02 concluídos; P-02 preparado (ver abaixo) | PRs #8, #9, #10 e o PR do P-02 |
 
 **Etapa 1, o que foi feito:**
 - **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
@@ -458,6 +459,16 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
   - **Correção:** `ERR_ABORTED` na primeira carga não é mais falha de inicialização. Falhas reais continuam sendo. A inicialização agora grava `LOCAL_STARTUP:<código>` no stderr antes de qualquer diálogo.
   - **Teste:** espera a primeira carga, captura o stderr do Electron e encerra instâncias penduradas.
   - **Verificação:** 0 falhas em 10 execuções só com a correção do app, e 0 em 10 com as duas.
+
+**Etapa 4, o que foi feito (um PR por item):**
+- **Q-04 (PR #8):** `shared/formations.mjs` virou a única fonte de ids e papéis das formações. O servidor reexporta a tabela pelo `tactics.mjs`, e o cliente guarda só os dados visuais. Antes da mudança, as duas cópias eram idênticas nas 9 formações, então nenhuma regra mudou.
+- **Q-03 (PR #9):** o parser Brasfoot, o worker, a Java Serialization e a biblioteca do importador foram para `server/import/brasfoot/`, e o catálogo embutido para `server/catalog/`, todos com `git mv`. `scripts/import-brasfoot.mjs` virou só o CLI. O pacote desktop não inclui mais nada de `scripts/`.
+- **Q-02, primeiro subdomínio (PR #10):** o callback de cerca de 500 linhas do `completeMatch` virou 12 etapas nomeadas. Uma caracterização com carreiras de 1 e 2 temporadas, usando relógio e UUIDs determinísticos, produziu hashes **idênticos** de todos os resumos e do estado final antes e depois. Ficam para PRs próprios: `CoachCareerService` (`coachEmployment.mjs`, 7,7 mil linhas) e o mercado (`market.mjs`).
+- **P-02:** branch `refactor/p02-project-at-root`, com o projeto na raiz do repositório via `git mv` (644 arquivos renomeados). **O merge exige mudar configurações fora do Git.** Veja as instruções no PR.
+
+**Etapa 4, limites e observações:**
+- O E2E "partida pausa no intervalo…" falha às vezes quando roda logo depois das suítes pesadas na mesma máquina: o título "Central do clube" não aparece em 15 s. Isso já acontecia antes da Etapa 4, e o teste passa quando roda sozinho. Ainda não foi investigado.
+- Q-01 (tipagem do backend) e Q-05/Q-06 (middleware duplicado e import no fim do arquivo) não faziam parte da Etapa 4.
 
 ---
 
