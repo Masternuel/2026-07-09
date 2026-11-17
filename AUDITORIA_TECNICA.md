@@ -454,6 +454,10 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
   - O mapeamento dos arquivos sintéticos produz poucos jogadores, então o custo de transferir de volta um dataset grande não foi medido.
   - **O desktop continua lendo na thread atual**, de propósito: o backend dele já roda isolado num `utilityProcess` e atende um só usuário. Além disso, o worker teria de carregar código de dentro do `app.asar`, o que não foi validado.
 - **D-01:** se alguma leitura não coberta pelos testes alterar o estado, ela agora falha com `TypeError` em vez de corromper o save. Nas suítes desktop e de servidor, nenhuma leitura fez isso.
+- **Defeito encontrado pelo CI do PR #7 (anterior à Etapa 3):** se a janela fosse recarregada antes de terminar a primeira carga, o `window.loadURL` inicial falhava com `ERR_ABORTED`. A inicialização tratava isso como erro fatal e abria um diálogo modal. Localmente o app fechava em cerca de 1 a cada 5 execuções do teste de áudio; no runner Windows, o modal travava o job até o timeout de 30 min.
+  - **Correção:** `ERR_ABORTED` na primeira carga não é mais falha de inicialização. Falhas reais continuam sendo. A inicialização agora grava `LOCAL_STARTUP:<código>` no stderr antes de qualquer diálogo.
+  - **Teste:** espera a primeira carga, captura o stderr do Electron e encerra instâncias penduradas.
+  - **Verificação:** 0 falhas em 10 execuções só com a correção do app, e 0 em 10 com as duas.
 
 ---
 
