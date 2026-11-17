@@ -1,10 +1,6 @@
-import { formations } from '../constants/formations';
 import type { Player, RoomLineup, TacticPlanV1 } from '../types';
+import { FORMATION_ROLES as formationRoles } from '../../shared/formations.mjs';
 import { calculateTeamCohesion, normalizeCohesionExperience } from '../../shared/teamCohesion.mjs';
-
-const formationRoles = Object.fromEntries(formations.map((formation) => [
-  formation.id, formation.slots.map((slot) => slot.role),
-]));
 
 export function normalizeTeamCohesionExperience(value: unknown) {
   return normalizeCohesionExperience(value, formationRoles);
