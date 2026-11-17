@@ -1,4 +1,4 @@
-import { buildBuiltinCatalog } from "../scripts/lib/builtin-catalog.mjs";
+import { buildBuiltinCatalog } from "../server/catalog/builtinCatalog.mjs";
 import { CatalogStoreError, publicLeague, publicCompetitionClub, publicTournament, tournamentParticipant } from "../server/store/catalogStore.mjs";
 import { calculateStarImpact, sortPlayersForSelection } from "../server/game/starImpact.mjs";
 

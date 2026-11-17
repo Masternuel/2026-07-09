@@ -1,6 +1,6 @@
 import { BrasfootImportSessionService } from "../server/services/brasfootImportSessions.mjs";
-import { uploadBrasfootCrests } from "../scripts/import-brasfoot.mjs";
-import { parseBrasfootSource } from "../scripts/lib/brasfoot-binary.mjs";
+import { uploadBrasfootCrests } from "../server/import/brasfoot/importer.mjs";
+import { parseBrasfootSource } from "../server/import/brasfoot/binary.mjs";
 
 // Reuse the original parser, preview, quotas, safe paths and session cleanup.
 // Only the final catalog publication changes from Firestore to the local transaction.

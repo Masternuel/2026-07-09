@@ -3,7 +3,7 @@ import { redactText } from "../server/infrastructure/redaction.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initializeFirebaseAdmin, loadLocalEnvironment } from "../server/config.mjs";
-import { buildBuiltinCatalog } from "./lib/builtin-catalog.mjs";
+import { buildBuiltinCatalog } from "../server/catalog/builtinCatalog.mjs";
 
 const COLLECTIONS = Object.freeze({
   leagues: "brasfootLeagues",

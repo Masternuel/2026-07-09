@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBuiltinCatalog } from "../../scripts/lib/builtin-catalog.mjs";
+import { buildBuiltinCatalog } from "../catalog/builtinCatalog.mjs";
 
 test("base interna possui IDs unicos e referencias validas", () => {
   const catalog = buildBuiltinCatalog();

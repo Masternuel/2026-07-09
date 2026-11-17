@@ -6,7 +6,7 @@ import { createServer, transformWithEsbuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
 import { test, expect } from '@playwright/test';
-import { buildBuiltinCatalog } from '../scripts/lib/builtin-catalog.mjs';
+import { buildBuiltinCatalog } from '../server/catalog/builtinCatalog.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const records = buildBuiltinCatalog().clubs.filter((club) => ['FLA', 'CRU'].includes(club.id));

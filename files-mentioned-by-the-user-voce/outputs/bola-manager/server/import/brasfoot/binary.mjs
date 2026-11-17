@@ -1,7 +1,7 @@
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
-import { JavaSerializationError, parseJavaSerialization } from "./java-serialization.mjs";
+import { JavaSerializationError, parseJavaSerialization } from "./javaSerialization.mjs";
 
 const MAX_SOURCE_FILES = 50_000;
 const BRAZIL_COUNTRY_ID = 29;

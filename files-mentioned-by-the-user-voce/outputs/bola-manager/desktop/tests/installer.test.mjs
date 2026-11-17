@@ -18,7 +18,8 @@ test("Package uses a runtime allowlist and excludes credentials, fixtures and sa
   const includes = config.files.filter((entry) => !entry.startsWith("!"));
   assert.ok(!includes.includes("**/*"));
   assert.ok(includes.includes("dist-desktop/**"));
-  assert.ok(includes.includes("scripts/lib/*.mjs"));
+  // Runtime code no longer imports scripts/ (Q-03), so the package ships none of it.
+  assert.ok(!includes.some((entry) => entry.startsWith("scripts/")));
   for (const entry of ["!**/.env*", "!**/.tmp/**", "!**/*.bolasave", "!**/*.log", "!desktop/tests/**", "!server/tests/**", "!**/*service-account*.json", "!**/*firebase-adminsdk*.json"]) {
     assert.ok(config.files.includes(entry), entry);
   }

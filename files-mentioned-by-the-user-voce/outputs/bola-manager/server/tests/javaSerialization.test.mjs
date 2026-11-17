@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JavaSerializationError, parseJavaSerialization } from "../../scripts/lib/java-serialization.mjs";
+import { JavaSerializationError, parseJavaSerialization } from "../import/brasfoot/javaSerialization.mjs";
 
 function utf(value) {
   const bytes = Buffer.from(value, "utf8");

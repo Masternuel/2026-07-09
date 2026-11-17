@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeDataset } from "../../scripts/import-brasfoot.mjs";
+import { normalizeDataset } from "../import/brasfoot/importer.mjs";
 
 function validDataset() {
   return {
