@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, posix, resolve, sep, win32 } from "node:path";
-import { parseBrasfootSourceInWorker } from "../../scripts/lib/brasfoot-parse-worker.mjs";
-import { executeImportCommit, normalizeDataset } from "../../scripts/import-brasfoot.mjs";
+import { parseBrasfootSourceInWorker } from "../import/brasfoot/parseWorker.mjs";
+import { executeImportCommit, normalizeDataset } from "../import/brasfoot/importer.mjs";
 
 export const BRASFOOT_IMPORT_LIMITS = Object.freeze({
   maxFiles: 200,

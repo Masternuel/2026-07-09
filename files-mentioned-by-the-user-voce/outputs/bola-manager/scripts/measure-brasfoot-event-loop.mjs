@@ -8,8 +8,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { parseBrasfootSource } from "./lib/brasfoot-binary.mjs";
-import { parseBrasfootSourceInWorker } from "./lib/brasfoot-parse-worker.mjs";
+import { parseBrasfootSource } from "../server/import/brasfoot/binary.mjs";
+import { parseBrasfootSourceInWorker } from "../server/import/brasfoot/parseWorker.mjs";
 
 const inline = process.argv.includes("--inline");
 const parse = inline ? parseBrasfootSource : parseBrasfootSourceInWorker;

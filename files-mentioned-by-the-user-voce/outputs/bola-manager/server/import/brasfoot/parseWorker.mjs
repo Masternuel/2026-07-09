@@ -2,7 +2,7 @@
 // blocked the event loop for ~0.9 s in measurement, stalling live-match sockets on a shared
 // replica. The parser now runs in a worker thread with memory and time limits.
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
-import { parseBrasfootSource } from "./brasfoot-binary.mjs";
+import { parseBrasfootSource } from "./binary.mjs";
 
 const WORKER_FLAG = "bola-brasfoot-parse";
 

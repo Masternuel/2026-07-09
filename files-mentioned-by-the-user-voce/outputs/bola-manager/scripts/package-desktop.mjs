@@ -56,7 +56,7 @@ const artifacts = await build({
       const forbidden = entries.filter((path) => /(?:^|\/)\.env[^/]*$|(?:^|\/)(?:\.tmp|\.git|saves)(?:\/|$)|\.bolasave$|\.log$|\.(?:pem|p12)$|(?:service-account|firebase-adminsdk)[^/]*\.json$/i.test(path)
         || /^\/(?:desktop|server)\/tests(?:\/|$)/.test(path));
       if (forbidden.length) throw new Error(`Unsafe package entries: ${forbidden.length}. Installer creation stopped.`);
-      for (const required of ["/desktop/main.mjs", "/desktop/server-worker.mjs", "/desktop/peer/transport.mjs", "/desktop/catalogImport.mjs", "/desktop/localEditorCatalog.mjs", "/desktop/localEditorMedia.mjs", "/desktop/localBrasfootImport.mjs", "/dist-desktop/index.html", "/dist-desktop/assets/brand/bola-manager-icon.png", "/dist-desktop/assets/brand/bola-manager-logo-512.png", "/dist-desktop/assets/brand/bola-manager-favicon.png", "/server/index.mjs", "/scripts/import-brasfoot.mjs", "/scripts/lib/builtin-catalog.mjs"]) {
+      for (const required of ["/desktop/main.mjs", "/desktop/server-worker.mjs", "/desktop/peer/transport.mjs", "/desktop/catalogImport.mjs", "/desktop/localEditorCatalog.mjs", "/desktop/localEditorMedia.mjs", "/desktop/localBrasfootImport.mjs", "/dist-desktop/index.html", "/dist-desktop/assets/brand/bola-manager-icon.png", "/dist-desktop/assets/brand/bola-manager-logo-512.png", "/dist-desktop/assets/brand/bola-manager-favicon.png", "/server/index.mjs", "/server/import/brasfoot/importer.mjs", "/server/import/brasfoot/binary.mjs", "/server/catalog/builtinCatalog.mjs"]) {
         if (!entries.includes(required)) throw new Error(`Missing runtime file: ${required}`);
       }
       console.log(`Package verified: ${entries.length} entries; no local env, saves, credentials or test fixtures.`);

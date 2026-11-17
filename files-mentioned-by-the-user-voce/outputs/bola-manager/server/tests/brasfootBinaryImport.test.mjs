@@ -3,10 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { mapBrasfootLeague, mapBrasfootTeam, planClubIds } from "../../scripts/lib/brasfoot-binary.mjs";
+import { mapBrasfootLeague, mapBrasfootTeam, planClubIds } from "../import/brasfoot/binary.mjs";
 import {
   executeImportCommit, normalizeDataset, runImport, secureAssetPath, uploadBrasfootCrests,
-} from "../../scripts/import-brasfoot.mjs";
+} from "../import/brasfoot/importer.mjs";
 import { createFakeFirestore } from "./helpers/fakeFirestore.mjs";
 
 function javaObject(className, fields) {

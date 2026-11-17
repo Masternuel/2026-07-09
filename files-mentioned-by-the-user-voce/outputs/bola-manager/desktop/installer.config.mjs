@@ -15,8 +15,6 @@ export default {
     "desktop/*.html",
     "server/**/*.mjs",
     "shared/**/*.mjs",
-    "scripts/import-brasfoot.mjs",
-    "scripts/lib/*.mjs",
     "!desktop/tests/**",
     "!desktop/installer.config.mjs",
     "!server/tests/**",

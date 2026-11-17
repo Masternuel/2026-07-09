@@ -1,4 +1,4 @@
-import { calculatePlayerOverall } from "../../server/game/lineupStrength.mjs";
+import { calculatePlayerOverall } from "../game/lineupStrength.mjs";
 
 const LEAGUE_ID = "BR-A";
 

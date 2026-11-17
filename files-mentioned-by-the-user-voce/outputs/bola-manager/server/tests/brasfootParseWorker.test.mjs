@@ -3,8 +3,8 @@ import test from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseBrasfootSource } from "../../scripts/lib/brasfoot-binary.mjs";
-import { parseBrasfootSourceInWorker } from "../../scripts/lib/brasfoot-parse-worker.mjs";
+import { parseBrasfootSource } from "../import/brasfoot/binary.mjs";
+import { parseBrasfootSourceInWorker } from "../import/brasfoot/parseWorker.mjs";
 
 function javaObject(className, fields) {
   const utf = (text) => { const bytes = Buffer.from(text); const size = Buffer.alloc(2); size.writeUInt16BE(bytes.length); return Buffer.concat([size, bytes]); };
