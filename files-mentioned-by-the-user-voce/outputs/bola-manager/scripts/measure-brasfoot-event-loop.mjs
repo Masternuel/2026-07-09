@@ -16,14 +16,6 @@ const parse = inline ? parseBrasfootSource : parseBrasfootSourceInWorker;
 
 const THRESHOLD_MS = 250;
 
-function javaObject(className, fields) {
-  const utf = (text) => { const bytes = Buffer.from(text); const size = Buffer.alloc(2); size.writeUInt16BE(bytes.length); return Buffer.concat([size, bytes]); };
-  const count = Buffer.alloc(2); count.writeUInt16BE(fields.length);
-  const definitions = fields.map(([type, name]) => Buffer.concat([Buffer.from(type), utf(name), ...(type === "L" ? [Buffer.from([0x74]), utf("Ljava/lang/String;")] : [])]));
-  const values = fields.map(([type, , value]) => { if (type === "L") return Buffer.concat([Buffer.from([0x74]), utf(value)]); const bytes = Buffer.alloc(4); bytes.writeInt32BE(value); return bytes; });
-  return Buffer.concat([Buffer.from([0xac, 0xed, 0x00, 0x05, 0x73, 0x72]), utf(className), Buffer.from("0000000000000001", "hex"), Buffer.from([0x02]), count, ...definitions, Buffer.from([0x78, 0x70]), ...values]);
-}
-
 const utf = (text) => { const bytes = Buffer.from(text); const size = Buffer.alloc(2); size.writeUInt16BE(bytes.length); return Buffer.concat([size, bytes]); };
 const int = (value) => { const bytes = Buffer.alloc(4); bytes.writeInt32BE(value); return bytes; };
 const reference = (handle) => Buffer.concat([Buffer.from([0x71]), int(0x7e0000 + handle)]);

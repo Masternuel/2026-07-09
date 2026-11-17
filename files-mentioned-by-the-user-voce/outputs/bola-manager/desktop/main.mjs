@@ -49,7 +49,10 @@ function rejectPending() {
   networkPending.clear();
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) {
+  console.error("LOCAL_STARTUP:ALREADY_RUNNING");
+  app.quit();
+}
 else {
   app.on("second-instance", () => { window?.restore(); window?.focus(); });
   void app.whenReady().then(async () => {
@@ -250,8 +253,13 @@ else {
     window.webContents.on("will-navigate", (event, url) => { if (new URL(url).origin !== origin) event.preventDefault(); });
     window.once("ready-to-show", () => window.show());
     window.on("closed", () => { if (!quitting) app.quit(); });
-    await window.loadURL(origin);
+    // A reload during the first load supersedes it (ERR_ABORTED); the window keeps loading,
+    // so that is not a startup failure. Real failures (refused, timeout) still reach the catch.
+    await window.loadURL(origin).catch((error) => { if (error?.code !== "ERR_ABORTED") throw error; });
   } catch (error) {
+    // Same pattern as LOCAL_SHUTDOWN: a code-only line, so a blocked modal still leaves evidence.
+    const code = /^[A-Z0-9_:-]{1,80}$/.test(error?.code) ? error.code : "LOCAL_STARTUP_FAILED";
+    console.error(`LOCAL_STARTUP:${code}`);
     dialog.showErrorBox("Não foi possível abrir o jogo", `Falha local (${error.code ?? "LOCAL_STARTUP_FAILED"}). Nenhum save foi apagado.`);
     worker?.kill();
     quitting = true;

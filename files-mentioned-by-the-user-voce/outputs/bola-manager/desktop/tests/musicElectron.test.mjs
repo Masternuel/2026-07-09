@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import electron from 'electron';
@@ -17,9 +18,34 @@ function wav() {
   buffer.writeUInt16LE(16, 34); buffer.write('data', 36); buffer.writeUInt32LE(bytes, 40);
   return buffer; // Silence: deterministic codec fixture, independent of private soundtrack assets.
 }
+// Every launched app is tracked so a hung launch or close cannot outlive the test
+// (a stuck Electron kept the CI job alive until its 30 min timeout).
+const launched = new Set();
+const diagnostics = [];
+async function stopAll() {
+  for (const application of [...launched]) {
+    launched.delete(application);
+    const child = application.process();
+    let timer;
+    const closed = await Promise.race([
+      application.close().then(() => true, () => false),
+      new Promise((resolveClose) => { timer = setTimeout(() => resolveClose(false), 10000); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed && child?.pid && child.exitCode === null) {
+      diagnostics.push(`forced stop of pid ${child.pid}`);
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+      else child.kill('SIGKILL');
+    }
+  }
+}
 async function launch(directory) {
   const application = await _electron.launch({ executablePath: packagedExecutable ? resolve(packagedExecutable) : electron,
     args: [...(packagedExecutable ? [] : ['desktop/main.mjs']), `--desktop-data-dir=${directory}`], env, timeout: 20000 });
+  launched.add(application);
+  const child = application.process();
+  child.stderr?.on('data', (chunk) => { for (const line of String(chunk).split(/\r?\n/)) if (line.trim()) diagnostics.push(`[pid ${child.pid}] ${line.trim().slice(0, 300)}`); });
+  child.once('exit', (code, signal) => diagnostics.push(`[pid ${child.pid}] exited code=${code} signal=${signal}`));
   try {
     let page;
     await expect.poll(() => { page = application.windows().find((item) => item.url().startsWith('http://127.0.0.1:')); return Boolean(page); }, { timeout: 20000 }).toBe(true);
@@ -31,11 +57,13 @@ async function launch(directory) {
       window.Audio = function (...args) { const audio = new NativeAudio(...args); window.__musicPlayers.push(audio); return audio; };
       window.Audio.prototype = NativeAudio.prototype;
     });
+    // Let the app finish its own first load; reloading earlier aborted it (ERR_ABORTED).
+    await page.waitForLoadState("domcontentloaded");
     // Menu readiness is independent of background media's network/load lifecycle.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('navigation', { name: 'Menu principal', exact: true })).toBeVisible();
     return { application, page };
-  } catch (error) { await application.close(); throw error; }
+  } catch (error) { await stopAll(); throw error; }
 }
 const player = (page) => page.evaluate(() => ({ count: window.__musicPlayers.length,
   audible: window.__musicPlayers.filter((item) => !item.paused && item.volume > 0).length,
@@ -46,7 +74,11 @@ test('desktop audio shows only a timed popup, survives navigation and persists r
   let app;
   let phase = 'launch';
   context.signal.addEventListener('abort', () => {
-    if (phase !== 'completed') console.error(`Audio test aborted during: ${phase}`);
+    if (phase !== 'completed') {
+      console.error(`Audio test aborted during: ${phase}`);
+      for (const line of diagnostics.slice(-40)) console.error(`  ${line}`);
+      void stopAll();
+    }
   }, { once: true });
   try {
     app = await launch(directory); const page = app.page;
@@ -129,6 +161,7 @@ test('desktop audio shows only a timed popup, survives navigation and persists r
     assert.deepEqual(errors, []);
     await expect.poll(() => page.evaluate(async () => (await window.bolaDesktop.readPreferences())?.audio?.musicEnabled)).toBe(true);
     phase = 'first shutdown';
+    launched.delete(app.application);
     await app.application.close(); app = null;
     phase = 'restart';
     app = await launch(directory);
@@ -141,10 +174,12 @@ test('desktop audio shows only a timed popup, survives navigation and persists r
     await expect.poll(async () => (await player(app.page)).players.at(-1).volume).toBe(0.3);
   } catch (error) {
     console.error(`Audio test failed during ${phase}: ${error instanceof Error ? error.message : String(error)}`);
+    for (const line of diagnostics.slice(-40)) console.error(`  ${line}`);
     throw error;
   } finally {
     phase = 'cleanup';
-    await app?.application.close();
+    app = null;
+    await stopAll();
     const inside = relative(root, resolve(directory)); assert.ok(inside && !inside.startsWith('..') && !inside.includes(':'));
     await rm(directory, { recursive: true, force: true });
     phase = 'completed';
