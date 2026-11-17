@@ -1631,6 +1631,557 @@ export class RoomError extends Error {
   }
 }
 
+// --- Match completion pipeline (audit Q-02) ---------------------------------
+// RoomStore.completeMatch runs these steps, in order, inside one #mutate
+// transaction. Each step mutates the room draft and returns only what later
+// steps need. The order is part of the rules: do not reorder steps.
+
+const professionalEventRef = (record, type) => ({
+  type,
+  id: record.id,
+  professionalType: record.professionalType,
+  professionalId: record.professionalId,
+  status: record.status,
+});
+
+const coachEventRef = (event) => ({
+  id: event.id,
+  type: event.type,
+  coachId: event.coachId,
+  clubId: event.clubId,
+  occurredAt: event.occurredAt,
+});
+
+const competitionAwardRefs = (awards) => structuredClone(awards.map((award) => ({
+  competitionId: award.competitionId,
+  winnerClubId: award.winnerClubId,
+  amount: award.amount,
+  awarded: award.awarded,
+})));
+
+// 1. Validate that this fixture can complete and capture the match context.
+// `now` is the store clock; it is read at the same points, in the same order, as before.
+function beginMatchCompletion(current, fixtureId, now, aiRosters) {
+  if (current.status !== "active") {
+    throw new RoomError("A sala nao esta ativa", "ROOM_NOT_ACTIVE", 409);
+  }
+  ensureCareerState(current, now());
+  replaceRoom(current, ensureCoachEmploymentState(current, {
+    now: careerDateFor(current, now()),
+  }));
+  ensureClubCareerSystems(current, { now: careerDateFor(current, now()) });
+  if (ensureFixtureSchedule(current)) assertScheduleSize(current);
+  current.completedFixtureIds ??= [];
+  current.completedMatches ??= [];
+  current.leagueMatchResults ??= [];
+  const previousLeagueResultIds = new Set(current.leagueMatchResults
+    .map((entry) => fixtureResultKey(entry?.leagueFixtureId))
+    .filter(Boolean));
+  if (current.completedFixtureIds.some((completedId) => fixtureIdsEqual(completedId, fixtureId))) {
+    throw new RoomError("Esta fixture ja foi concluida", "FIXTURE_ALREADY_COMPLETED", 409);
+  }
+  if (!fixtureIdsEqual(current.currentFixtureId, fixtureId)) {
+    throw new RoomError("Esta fixture nao e a atual", "FIXTURE_NOT_CURRENT", 409);
+  }
+  const humanFixture = current.fixtureSchedule?.find(
+    (fixture) => fixtureIdsEqual(fixture.fixtureId, fixtureId),
+  );
+  const canonicalFixtureId = humanFixture?.fixtureId ?? current.currentFixtureId;
+  const completedAt = now().toISOString();
+  const careerCompletedAt = humanFixture?.scheduledAt ?? careerDateFor(current, completedAt);
+  if (simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters) > 0) {
+    const next = rebuildManagedSchedule(current);
+    if (!fixtureIdsEqual(next?.fixtureId, canonicalFixtureId)) {
+      throw new RoomError("O calendario mudou; prepare a proxima partida novamente", "FIXTURE_NOT_CURRENT", 409);
+    }
+  }
+  return {
+    humanFixture,
+    canonicalFixtureId,
+    completedAt,
+    careerCompletedAt,
+    previousLeagueResultIds,
+    leagueFixtureId: humanFixture?.leagueFixtureId ?? null,
+    lifecycleCallbacks: professionalLifecycleCallbacks(careerCompletedAt),
+  };
+}
+
+// 2. Bring professional leave and club career systems up to the match date.
+function advanceCareerToMatchDate(current, match) {
+  const leaveProgress = processProfessionalLeaveDate(
+    current,
+    match.careerCompletedAt,
+    match.lifecycleCallbacks,
+  );
+  replaceRoom(current, leaveProgress.room);
+  processClubCareerDate(current, match.careerCompletedAt);
+  return leaveProgress;
+}
+
+// 3. Played lineups gain cohesion from the match.
+function updateMatchdayCohesion(current, { humanFixture, careerCompletedAt, completedAt }) {
+  const participatingManagerIds = new Set([
+    ...(humanFixture?.managerIds ?? []),
+    humanFixture?.homeManagerId,
+    humanFixture?.awayManagerId,
+  ].filter(Boolean));
+  current.lineups = (current.lineups ?? []).map((lineup) => {
+    if (!participatingManagerIds.has(lineup.managerId) || lineup.lineupIds?.length !== 11) {
+      return lineup;
+    }
+    const staffEffects = clubCareerPerformanceEffects(current, lineup.clubId, careerCompletedAt).staff;
+    const cohesion = calculateTeamCohesion({
+      previous: lineup.cohesion,
+      lineupIds: lineup.lineupIds,
+      tactics: lineup.tactics,
+      reason: "match",
+      cohesionGainBonus: staffEffects?.cohesionGainBonus,
+      cohesionChangePenaltyMultiplier: staffEffects?.cohesionChangePenaltyMultiplier,
+    });
+    return {
+      ...lineup,
+      cohesion: { ...cohesion, updatedAt: completedAt },
+    };
+  });
+}
+
+// 4. Player progression from the match and the training cycle.
+function applyMatchDevelopment(current, match, result) {
+  const { humanFixture, canonicalFixtureId, completedAt, careerCompletedAt } = match;
+  const previousPlayerStates = structuredClone(current.playerStates ?? []);
+  const progression = applyMatchPlayerProgression(
+    current,
+    humanFixture ?? { fixtureId: canonicalFixtureId },
+    result,
+    completedAt,
+  );
+  let trainingEffects = [];
+  if ((current.careerState?.players ?? []).length > 0
+    && (current.careerState?.trainingPlans ?? []).length > 0) {
+    const training = applyTrainingCycle(current.careerState.players, {
+      seasonNumber: current.currentSeason,
+      plans: current.careerState.trainingPlans,
+      cycleId: `s${current.currentSeason}:${canonicalFixtureId}`,
+      clubEffects: clubCareerEffectsByClub(current, careerCompletedAt),
+    });
+    current.careerState.players = training.players;
+    trainingEffects = training.effects;
+  }
+  return { previousPlayerStates, progression, trainingEffects };
+}
+
+// 5. Record the managed match in its league table (once).
+function recordManagedLeagueResult(current, { humanFixture, canonicalFixtureId, completedAt, leagueFixtureId }, result) {
+  const leagueScore = humanFixture?.leagueFixtureReversed
+    ? [...scorePair(result.score)].reverse()
+    : scorePair(result.score);
+  const matchPossession = possessionPair(result.statistics);
+  const leaguePossession = humanFixture?.leagueFixtureReversed && matchPossession
+    ? [...matchPossession].reverse()
+    : matchPossession;
+  const existingLeagueResult = leagueFixtureId
+    ? resultForLeagueFixture(current, leagueFixtureId)
+    : null;
+  if (leagueFixtureId && !existingLeagueResult) {
+    current.leagueMatchResults.push(compactLeagueResult({
+      id: result.id,
+      fixtureId: leagueFixtureId,
+      managedFixtureId: canonicalFixtureId,
+      leagueFixtureId,
+      leagueId: humanFixture?.leagueId ?? null,
+      round: humanFixture?.round ?? null,
+      source: "manager",
+      score: leagueScore,
+      possession: leaguePossession,
+      completedAt,
+      room: current,
+    }));
+  }
+}
+
+// 6. Competitions, AI fixtures, loans, market, prizes, matchday economy,
+//    recovery and availability for the round.
+function settleRoundEffects(current, match, result, aiRosters, previousPlayerStates) {
+  const { humanFixture, canonicalFixtureId, completedAt, careerCompletedAt, previousLeagueResultIds, leagueFixtureId } = match;
+  recordCompetitionFixture(current, humanFixture, result, completedAt);
+  simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
+  // Avance uma vez cada rodada realmente concluida, inclusive nas ligas
+  // simuladas pela IA. Liquide depois para nao consumir imediatamente uma
+  // rodada de emprestimos fechados neste mesmo ciclo.
+  advanceCompletedLeagueLoanRounds(
+    current,
+    previousLeagueResultIds,
+    current.currentSeason,
+    completedAt,
+  );
+  settleExpiredMarket(current, completedAt);
+  const competitionAwards = awardCompletedCompetitionPrizes(current, {
+    occurredAt: careerCompletedAt,
+  }).filter((award) => award.title?.created || award.prize?.applied);
+  const matchdayEconomies = recordNewLeagueMatchEconomies(
+    current,
+    previousLeagueResultIds,
+    careerCompletedAt,
+  );
+  if (!leagueFixtureId && humanFixture?.homeClubId && humanFixture?.awayClubId) {
+    const economy = recordClubMatchday(current, {
+      fixtureId: canonicalFixtureId,
+      homeClubId: humanFixture.homeClubId,
+      awayClubId: humanFixture.awayClubId,
+      competitionId: humanFixture.competitionId ?? humanFixture.tournamentId,
+      competitionName: humanFixture.competition,
+      stage: humanFixture.stage,
+      round: humanFixture.round,
+      score: result.score,
+      occurredAt: careerCompletedAt,
+    });
+    if (economy) matchdayEconomies.push(economy);
+  }
+  syncMarketCareerSideEffects(current);
+  const recoveryEffects = applyClubRecoveryEffects(current, careerCompletedAt);
+  recordPlayerAvailabilityEvents(current, {
+    fixtureId: canonicalFixtureId,
+    competitionId: humanFixture?.leagueId
+      ?? humanFixture?.competitionId
+      ?? humanFixture?.tournamentId
+      ?? null,
+    seasonNumber: current.currentSeason,
+    previousPlayerStates,
+    occurredAt: careerCompletedAt,
+  });
+  return { competitionAwards, matchdayEconomies, recoveryEffects };
+}
+
+// 7. The match summary returned to clients and archived in history.
+function buildMatchSummary(current, { humanFixture, canonicalFixtureId, completedAt }, result, development, round) {
+  const { progression, trainingEffects } = development;
+  const { competitionAwards, matchdayEconomies, recoveryEffects } = round;
+  return {
+    code: current.code,
+    id: result.id,
+    fixtureId: canonicalFixtureId,
+    homeClubId: humanFixture?.homeClubId ?? result.homeClubId ?? null,
+    awayClubId: humanFixture?.awayClubId ?? result.awayClubId ?? null,
+    homeManagerId: humanFixture?.homeManagerId ?? null,
+    awayManagerId: humanFixture?.awayManagerId ?? null,
+    managerIds: [...(humanFixture?.managerIds ?? [])],
+    homeTeam: result.homeTeam,
+    awayTeam: result.awayTeam,
+    score: structuredClone(result.score),
+    statistics: structuredClone(result.statistics),
+    ...(result.simulationVersion ? { simulationVersion: result.simulationVersion } : {}),
+    ...(Array.isArray(result.events)
+      ? { events: structuredClone(result.events) }
+      : {}),
+    ...(result.playerStatistics
+      ? { playerStatistics: structuredClone(result.playerStatistics) }
+      : {}),
+    ...(progression.playerEffects.length > 0
+      ? { playerEffects: structuredClone(progression.playerEffects) }
+      : {}),
+    ...(trainingEffects.length > 0
+      ? { trainingEffects: structuredClone(trainingEffects) }
+      : {}),
+    ...(matchdayEconomies.length > 0
+      ? { matchdayEconomies: structuredClone(matchdayEconomies) }
+      : {}),
+    ...(recoveryEffects.changed > 0
+      ? { recoveryEffects: structuredClone(recoveryEffects) }
+      : {}),
+    ...(competitionAwards.length > 0
+      ? { competitionAwards: competitionAwardRefs(competitionAwards) }
+      : {}),
+    ...(result.starImpact ? { starImpact: structuredClone(result.starImpact) } : {}),
+    ...(result.strengthProfile ? { strengthProfile: structuredClone(result.strengthProfile) } : {}),
+    ...(result.tacticalMatchup ? { tacticalMatchup: structuredClone(result.tacticalMatchup) } : {}),
+    ...(result.homeFormation ? { homeFormation: result.homeFormation } : {}),
+    ...(result.awayFormation ? { awayFormation: result.awayFormation } : {}),
+    skipped: Boolean(result.skipped),
+    completedAt,
+    seasonNumber: current.currentSeason,
+    seasonYear: current.seasonYear,
+    roomRevision: (current.revision || current.version || 0) + 1,
+    nextFixtureId: null,
+  };
+}
+
+// 8. Mark the fixture completed, rebuild the schedule and store the round summary.
+function commitCompletedFixture(current, { humanFixture, canonicalFixtureId, completedAt }, summary) {
+  current.completedFixtureIds.push(canonicalFixtureId);
+  summary.nextFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
+  // Existing selectors keep compact summaries. The committed outbox below
+  // preserves full sporting details in the separate paginated archive.
+  current.completedMatches.push(compactCompletedMatch(summary));
+  const humanRoundResult = {
+    ...summary,
+    fixtureId: canonicalFixtureId,
+    completedAt,
+  };
+  summary.roundSummary = roundSummaryFor(current, humanFixture, humanRoundResult);
+  current.lastCompletedMatch = summary;
+  current.lastCompletedRound = structuredClone(summary.roundSummary);
+}
+
+// 9. Coach evaluation, then AI and human professional lifecycle for the date.
+function runProfessionalCycles(current, { careerCompletedAt, lifecycleCallbacks }, summary, leaveProgress) {
+  // Atualize primeiro a avaliacao do cargo. O ciclo profissional da IA deve
+  // decidir com base na rodada que acabou de ser persistida, nao na anterior.
+  const coachProgress = processCoachEmploymentDate(
+    current,
+    careerCompletedAt,
+    {
+      ...coachEmploymentCallbacks(careerCompletedAt),
+      minimumGames: 5,
+      autoDismissAI: true,
+      autoDismissHuman: true,
+    },
+  );
+  replaceRoom(current, coachProgress.room);
+  // ensureCoachEmploymentState clona a sala. Reanexe o mesmo resumo para
+  // que os ciclos abaixo e a transicao de temporada persistam este payload.
+  current.lastCompletedMatch = summary;
+  current.lastCompletedRound = structuredClone(summary.roundSummary);
+  if (coachProgress.events.length > 0) {
+    summary.coachCareerEvents = coachProgress.events.map(coachEventRef);
+  }
+
+  const aiLifecycleProgress = runAiProfessionalLifecycleTick(
+    current,
+    careerCompletedAt,
+    lifecycleCallbacks,
+  );
+  replaceRoom(current, aiLifecycleProgress.room);
+  syncProfessionalLifecycleTimeline(current);
+  const lifecycleProgress = processProfessionalLifecycleDate(
+    current,
+    careerCompletedAt,
+    lifecycleCallbacks,
+  );
+  replaceRoom(current, lifecycleProgress.room);
+  syncProfessionalLifecycleTimeline(current);
+  current.lastCompletedMatch = summary;
+  current.lastCompletedRound = structuredClone(summary.roundSummary);
+  if (lifecycleProgress.outcomes.length > 0) {
+    summary.professionalLifecycleEvents = lifecycleProgress.outcomes.map((entry) => ({
+      type: entry.type,
+      id: entry.record?.id ?? null,
+      status: entry.record?.status ?? null,
+      professionalType: entry.record?.professionalType ?? null,
+      professionalId: entry.record?.professionalId ?? null,
+    }));
+  }
+  if (leaveProgress.activated.length > 0 || leaveProgress.completed.length > 0) {
+    summary.professionalLeaveEvents = [
+      ...leaveProgress.activated.map((record) => professionalEventRef(record, "activated")),
+      ...leaveProgress.completed.map((record) => professionalEventRef(record, "completed")),
+    ];
+  }
+  if (aiLifecycleProgress.decisions.length > 0) {
+    summary.professionalLifecycleAiDecisions = aiLifecycleProgress.decisions.map((entry) => ({
+      action: entry.action,
+      professionalType: entry.professionalType,
+      professionalId: entry.professionalId,
+      clubId: entry.clubId,
+      resultStatus: entry.resultStatus,
+      reason: entry.reason,
+    }));
+  }
+  summary.nextFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
+}
+
+// 10. When the round is complete, the AI market runs once; its receipt commits
+//     with the match. Returns the new tick record for telemetry, or null.
+function runRoundAiMarketTick(current, { humanFixture, completedAt }, summary, aiMarketPlayers, execute) {
+  if (!summary.roundSummary.complete || !Number.isInteger(humanFixture?.round)) return null;
+  const aiMarketTick = runRecordedAiMarketTick(current, {
+    players: aiMarketPlayers,
+    seasonNumber: current.currentSeason,
+    round: humanFixture.round,
+    leagueId: humanFixture.leagueId,
+  }, completedAt, { execute });
+  summary.aiMarketTick = structuredClone(aiMarketTick.record);
+  if (aiMarketTick.changed) {
+    const { record: _record, ...transfer } = aiMarketTick;
+    summary.aiMarketTransfer = structuredClone(transfer);
+  }
+  // Rollback restores cloned branches, including lastCompletedMatch.
+  current.lastCompletedMatch = summary;
+  return aiMarketTick.duplicate ? null : aiMarketTick.record;
+}
+
+// 11. With no managed fixture left: finish AI-only rounds, award titles and,
+//     if the season is over, roll it over or close the career.
+function closeRoundOrSeason(current, match, summary, competitionAwards, aiRosters, careerRoster) {
+  const { humanFixture, completedAt, careerCompletedAt } = match;
+  // Odd-sized leagues may leave the manager on a BYE while AI clubs play.
+  // Finish those AI-only rounds before closing or rolling the season.
+  simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
+  competitionAwards.push(...awardCompletedCompetitionPrizes(current, {
+    occurredAt: careerCompletedAt,
+  }).filter((award) => award.title?.created || award.prize?.applied));
+  if (competitionAwards.length > 0) {
+    summary.competitionAwards = competitionAwardRefs(competitionAwards);
+  }
+  // Competition winners can be created while the final AI-only fixtures
+  // are completed above. Process only conduct achievements now so title
+  // reputation is persisted before a finite career closes or rolls over.
+  const titleConductProgress = processCoachEmploymentDate(
+    current,
+    careerCompletedAt,
+    {
+      ...coachEmploymentCallbacks(careerCompletedAt),
+      conductOnly: true,
+    },
+  );
+  replaceRoom(current, titleConductProgress.room);
+  current.lastCompletedMatch = summary;
+  if (titleConductProgress.events.length > 0) {
+    summary.coachCareerEvents = [
+      ...(summary.coachCareerEvents ?? []),
+      ...titleConductProgress.events.map(coachEventRef),
+    ];
+  }
+  summary.nextFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
+  if (!summary.nextFixtureId) closeSeason(current, completedAt, summary, careerRoster);
+}
+
+// 11b. Archive the season and either start the next one or finish the career.
+function closeSeason(current, completedAt, summary, careerRoster) {
+  const seasonNumber = current.currentSeason;
+  const rankingTimeline = compactLeagueRankingTimeline(buildLeagueRankingTimeline({
+    leagues: (current.competitionCatalog ?? []).filter((league) => league?.active !== false),
+    fixtures: current.leagueFixtureSchedule,
+    results: current.leagueMatchResults,
+    managers: current.managers,
+    coachCareerState: current.coachCareerState,
+    seasonNumber,
+    seasonYear: current.seasonYear,
+  }));
+  const managerMatchHistory = archiveManagerMatchHistory(current);
+  const leagueTransition = transitionLeagueDivisions(current);
+  const tournamentWinners = archiveTournamentWinners(current);
+  const historyEntry = {
+    seasonNumber,
+    seasonYear: current.seasonYear,
+    startedAt: current.seasonStartedAt,
+    completedAt,
+    completedFixtureIds: [...current.completedFixtureIds],
+    matchIds: current.completedMatches
+      .filter((match) => (match.seasonNumber ?? seasonNumber) === seasonNumber)
+      .map((match) => match.id),
+    managerMatchHistory,
+    tournamentWinners,
+    promotionMovements: structuredClone(leagueTransition.movements),
+    rankingTimeline,
+  };
+  const nextSeasonNumber = current.currentSeason + 1;
+  returnLoansForSeason(current, nextSeasonNumber, completedAt);
+  if (careerHasNextSeason(current)) {
+    startNextSeason(current, { completedAt, nextSeasonNumber, summary, careerRoster, leagueTransition, historyEntry });
+  } else {
+    current.careerCompleted = true;
+    current.careerCompletedAt = completedAt;
+  }
+  current.seasonHistory.push(historyEntry);
+}
+
+// 11c. Career transition (renewals, youth, retirements) and a fresh season.
+function startNextSeason(current, { completedAt, nextSeasonNumber, summary, careerRoster, leagueTransition, historyEntry }) {
+  processScheduledTransfers(current, nextSeasonNumber, completedAt);
+  const sourceCareerRoster = careerRosterForTransition(current, careerRoster);
+  const minutesByPlayer = Object.fromEntries((current.playerStates ?? []).map((state) => [
+    state.playerId,
+    Number(state.seasonStats?.minutes ?? 0),
+  ]));
+  const nationalities = [...new Set(sourceCareerRoster
+    .map((player) => String(player.nationality ?? "").trim())
+    .filter(Boolean))];
+  const careerTransition = processCareerSeasonTransition(
+    current.careerState ?? { saveId: current.id, currentSeason: current.currentSeason },
+    {
+      toSeason: nextSeasonNumber,
+      roster: sourceCareerRoster,
+      clubs: careerClubs(current),
+      renewals: current.careerState?.pendingRenewals ?? [],
+      trainingPlans: current.careerState?.trainingPlans ?? [],
+      minutesByPlayer,
+      youthCountPerClub: 2,
+      nationalTeams: nationalities.map((country) => ({ id: country, country })),
+      nationalSquadSize: 23,
+      seed: current.id,
+    },
+  );
+  current.careerState = {
+    ...careerTransition.careerState,
+    pendingRenewals: [],
+    // Old retired records stay in season history, not forever in Firestore.
+    players: careerTransition.players.filter((player) => (
+      !player.retired || Number(player.retirementSeason) >= current.currentSeason
+    )),
+  };
+  recordCareerTransitionEvents(current, {
+    summary: careerTransition.summary,
+    previousPlayers: sourceCareerRoster,
+    occurredAt: completedAt,
+  });
+  reconcileMarketCareerState(current, completedAt);
+  historyEntry.careerSummary = structuredClone(careerTransition.summary);
+  current.competitionCatalog = leagueTransition.competitionCatalog;
+  current.currentSeason += 1;
+  current.seasonYear += 1;
+  current.seasonStartedAt = completedAt;
+  current.completedFixtureIds = [];
+  current.leagueMatchResults = [];
+  current.playerStates = (current.playerStates ?? []).map((state) => ({
+    ...state,
+    condition: 100,
+    yellowCardAccumulator: 0,
+    competitionStats: [],
+    seasonStats: {
+      seasonNumber: current.currentSeason,
+      appearances: 0,
+      starts: 0,
+      minutes: 0,
+      goals: 0,
+      assists: 0,
+      yellowCards: 0,
+      redCards: 0,
+      injuries: 0,
+      ratedMatches: 0,
+      ratingTotal: 0,
+    },
+  }));
+  current.playerCompetitionStatsCoverage = [];
+  current.competitionSeason = createRoomCompetitionSeason(current);
+  current.leagueFixtureSchedule = createLeagueFixtureSchedule(current);
+  rebuildManagedSchedule(current);
+  current.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
+  delete current.scheduleCompatibility;
+  current.currentFixtureId = current.fixtureSchedule[0]?.fixtureId ?? null;
+  current.matchReadiness = { fixtureId: current.currentFixtureId, managerIds: [] };
+  current.lineups = [];
+  current.careerCompleted = false;
+  current.careerCompletedAt = null;
+  summary.nextFixtureId = current.currentFixtureId;
+  summary.nextSeasonNumber = current.currentSeason;
+  summary.nextSeasonYear = current.seasonYear;
+  summary.careerSummary = structuredClone(careerTransition.summary);
+  summary.promotionMovements = structuredClone(leagueTransition.movements);
+}
+
+// 12. Final consistency checks and the match history outbox.
+function finalizeMatchCompletion(current, { humanFixture }, summary) {
+  syncMarketCareerSideEffects(current);
+  assertScheduleSize(current);
+  enqueueMatchHistory(current, {
+    ...summary,
+    competition: humanFixture?.competition,
+    competitionId: humanFixture?.competitionId ?? humanFixture?.tournamentId ?? humanFixture?.leagueId ?? null,
+    scheduledAt: humanFixture?.scheduledAt,
+    round: humanFixture?.round,
+  });
+}
+
 export class RoomStore {
   #persistence;
   #codeFactory;
@@ -3442,502 +3993,20 @@ export class RoomStore {
     const room = await this.#mutate(code, (current) => {
       // A CAS retry discards the previous callback's uncommitted telemetry.
       marketTickRecord = null;
-      if (current.status !== "active") {
-        throw new RoomError("A sala nao esta ativa", "ROOM_NOT_ACTIVE", 409);
+      const match = beginMatchCompletion(current, fixtureId, () => this.#now(), aiRosters);
+      const leaveProgress = advanceCareerToMatchDate(current, match);
+      updateMatchdayCohesion(current, match);
+      const development = applyMatchDevelopment(current, match, result);
+      recordManagedLeagueResult(current, match, result);
+      const round = settleRoundEffects(current, match, result, aiRosters, development.previousPlayerStates);
+      const summary = buildMatchSummary(current, match, result, development, round);
+      commitCompletedFixture(current, match, summary);
+      runProfessionalCycles(current, match, summary, leaveProgress);
+      marketTickRecord = runRoundAiMarketTick(current, match, summary, aiMarketPlayers, this.#aiMarketExecutor);
+      if (!summary.nextFixtureId) {
+        closeRoundOrSeason(current, match, summary, round.competitionAwards, aiRosters, careerRoster);
       }
-      ensureCareerState(current, this.#now());
-      replaceRoom(current, ensureCoachEmploymentState(current, {
-        now: careerDateFor(current, this.#now()),
-      }));
-      ensureClubCareerSystems(current, { now: careerDateFor(current, this.#now()) });
-      if (ensureFixtureSchedule(current)) assertScheduleSize(current);
-      current.completedFixtureIds ??= [];
-      current.completedMatches ??= [];
-      current.leagueMatchResults ??= [];
-      const previousLeagueResultIds = new Set(current.leagueMatchResults
-        .map((entry) => fixtureResultKey(entry?.leagueFixtureId))
-        .filter(Boolean));
-      if (current.completedFixtureIds.some((completedId) => fixtureIdsEqual(completedId, fixtureId))) {
-        throw new RoomError("Esta fixture ja foi concluida", "FIXTURE_ALREADY_COMPLETED", 409);
-      }
-      if (!fixtureIdsEqual(current.currentFixtureId, fixtureId)) {
-        throw new RoomError("Esta fixture nao e a atual", "FIXTURE_NOT_CURRENT", 409);
-      }
-      const humanFixture = current.fixtureSchedule?.find(
-        (fixture) => fixtureIdsEqual(fixture.fixtureId, fixtureId),
-      );
-      const canonicalFixtureId = humanFixture?.fixtureId ?? current.currentFixtureId;
-      let upcomingFixtureId = null;
-      const completedAt = this.#now().toISOString();
-      const careerCompletedAt = humanFixture?.scheduledAt ?? careerDateFor(current, completedAt);
-      if (simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters) > 0) {
-        const next = rebuildManagedSchedule(current);
-        if (!fixtureIdsEqual(next?.fixtureId, canonicalFixtureId)) {
-          throw new RoomError("O calendario mudou; prepare a proxima partida novamente", "FIXTURE_NOT_CURRENT", 409);
-        }
-      }
-      const lifecycleCallbacks = professionalLifecycleCallbacks(careerCompletedAt);
-      const leaveProgress = processProfessionalLeaveDate(
-        current,
-        careerCompletedAt,
-        lifecycleCallbacks,
-      );
-      replaceRoom(current, leaveProgress.room);
-      processClubCareerDate(current, careerCompletedAt);
-      const participatingManagerIds = new Set([
-        ...(humanFixture?.managerIds ?? []),
-        humanFixture?.homeManagerId,
-        humanFixture?.awayManagerId,
-      ].filter(Boolean));
-      current.lineups = (current.lineups ?? []).map((lineup) => {
-        if (!participatingManagerIds.has(lineup.managerId) || lineup.lineupIds?.length !== 11) {
-          return lineup;
-        }
-        const staffEffects = clubCareerPerformanceEffects(current, lineup.clubId, careerCompletedAt).staff;
-        const cohesion = calculateTeamCohesion({
-          previous: lineup.cohesion,
-          lineupIds: lineup.lineupIds,
-          tactics: lineup.tactics,
-          reason: "match",
-          cohesionGainBonus: staffEffects?.cohesionGainBonus,
-          cohesionChangePenaltyMultiplier: staffEffects?.cohesionChangePenaltyMultiplier,
-        });
-        return {
-          ...lineup,
-          cohesion: { ...cohesion, updatedAt: completedAt },
-        };
-      });
-      const previousPlayerStates = structuredClone(current.playerStates ?? []);
-      const progression = applyMatchPlayerProgression(
-        current,
-        humanFixture ?? { fixtureId: canonicalFixtureId },
-        result,
-        completedAt,
-      );
-      let trainingEffects = [];
-      if ((current.careerState?.players ?? []).length > 0
-        && (current.careerState?.trainingPlans ?? []).length > 0) {
-        const training = applyTrainingCycle(current.careerState.players, {
-          seasonNumber: current.currentSeason,
-          plans: current.careerState.trainingPlans,
-          cycleId: `s${current.currentSeason}:${canonicalFixtureId}`,
-          clubEffects: clubCareerEffectsByClub(current, careerCompletedAt),
-        });
-        current.careerState.players = training.players;
-        trainingEffects = training.effects;
-      }
-      const leagueFixtureId = humanFixture?.leagueFixtureId ?? null;
-      const leagueScore = humanFixture?.leagueFixtureReversed
-        ? [...scorePair(result.score)].reverse()
-        : scorePair(result.score);
-      const matchPossession = possessionPair(result.statistics);
-      const leaguePossession = humanFixture?.leagueFixtureReversed && matchPossession
-        ? [...matchPossession].reverse()
-        : matchPossession;
-      const existingLeagueResult = leagueFixtureId
-        ? resultForLeagueFixture(current, leagueFixtureId)
-        : null;
-      if (leagueFixtureId && !existingLeagueResult) {
-        current.leagueMatchResults.push(compactLeagueResult({
-          id: result.id,
-          fixtureId: leagueFixtureId,
-          managedFixtureId: canonicalFixtureId,
-          leagueFixtureId,
-          leagueId: humanFixture?.leagueId ?? null,
-          round: humanFixture?.round ?? null,
-          source: "manager",
-          score: leagueScore,
-          possession: leaguePossession,
-          completedAt,
-          room: current,
-        }));
-      }
-
-      recordCompetitionFixture(current, humanFixture, result, completedAt);
-      simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
-      // Avance uma vez cada rodada realmente concluida, inclusive nas ligas
-      // simuladas pela IA. Liquide depois para nao consumir imediatamente uma
-      // rodada de emprestimos fechados neste mesmo ciclo.
-      advanceCompletedLeagueLoanRounds(
-        current,
-        previousLeagueResultIds,
-        current.currentSeason,
-        completedAt,
-      );
-      settleExpiredMarket(current, completedAt);
-      const competitionAwards = awardCompletedCompetitionPrizes(current, {
-        occurredAt: careerCompletedAt,
-      }).filter((award) => award.title?.created || award.prize?.applied);
-      const matchdayEconomies = recordNewLeagueMatchEconomies(
-        current,
-        previousLeagueResultIds,
-        careerCompletedAt,
-      );
-      if (!leagueFixtureId && humanFixture?.homeClubId && humanFixture?.awayClubId) {
-        const economy = recordClubMatchday(current, {
-          fixtureId: canonicalFixtureId,
-          homeClubId: humanFixture.homeClubId,
-          awayClubId: humanFixture.awayClubId,
-          competitionId: humanFixture.competitionId ?? humanFixture.tournamentId,
-          competitionName: humanFixture.competition,
-          stage: humanFixture.stage,
-          round: humanFixture.round,
-          score: result.score,
-          occurredAt: careerCompletedAt,
-        });
-        if (economy) matchdayEconomies.push(economy);
-      }
-      syncMarketCareerSideEffects(current);
-      const recoveryEffects = applyClubRecoveryEffects(current, careerCompletedAt);
-      recordPlayerAvailabilityEvents(current, {
-        fixtureId: canonicalFixtureId,
-        competitionId: humanFixture?.leagueId
-          ?? humanFixture?.competitionId
-          ?? humanFixture?.tournamentId
-          ?? null,
-        seasonNumber: current.currentSeason,
-        previousPlayerStates,
-        occurredAt: careerCompletedAt,
-      });
-
-      const summary = {
-        code: current.code,
-        id: result.id,
-        fixtureId: canonicalFixtureId,
-        homeClubId: humanFixture?.homeClubId ?? result.homeClubId ?? null,
-        awayClubId: humanFixture?.awayClubId ?? result.awayClubId ?? null,
-        homeManagerId: humanFixture?.homeManagerId ?? null,
-        awayManagerId: humanFixture?.awayManagerId ?? null,
-        managerIds: [...(humanFixture?.managerIds ?? [])],
-        homeTeam: result.homeTeam,
-        awayTeam: result.awayTeam,
-        score: structuredClone(result.score),
-        statistics: structuredClone(result.statistics),
-        ...(result.simulationVersion ? { simulationVersion: result.simulationVersion } : {}),
-        ...(Array.isArray(result.events)
-          ? { events: structuredClone(result.events) }
-          : {}),
-        ...(result.playerStatistics
-          ? { playerStatistics: structuredClone(result.playerStatistics) }
-          : {}),
-        ...(progression.playerEffects.length > 0
-          ? { playerEffects: structuredClone(progression.playerEffects) }
-          : {}),
-        ...(trainingEffects.length > 0
-          ? { trainingEffects: structuredClone(trainingEffects) }
-          : {}),
-        ...(matchdayEconomies.length > 0
-          ? { matchdayEconomies: structuredClone(matchdayEconomies) }
-          : {}),
-        ...(recoveryEffects.changed > 0
-          ? { recoveryEffects: structuredClone(recoveryEffects) }
-          : {}),
-        ...(competitionAwards.length > 0
-          ? { competitionAwards: structuredClone(competitionAwards.map((award) => ({
-            competitionId: award.competitionId,
-            winnerClubId: award.winnerClubId,
-            amount: award.amount,
-            awarded: award.awarded,
-          }))) }
-          : {}),
-        ...(result.starImpact ? { starImpact: structuredClone(result.starImpact) } : {}),
-        ...(result.strengthProfile ? { strengthProfile: structuredClone(result.strengthProfile) } : {}),
-        ...(result.tacticalMatchup ? { tacticalMatchup: structuredClone(result.tacticalMatchup) } : {}),
-        ...(result.homeFormation ? { homeFormation: result.homeFormation } : {}),
-        ...(result.awayFormation ? { awayFormation: result.awayFormation } : {}),
-        skipped: Boolean(result.skipped),
-        completedAt,
-        seasonNumber: current.currentSeason,
-        seasonYear: current.seasonYear,
-        roomRevision: (current.revision || current.version || 0) + 1,
-        nextFixtureId: upcomingFixtureId,
-      };
-      current.completedFixtureIds.push(canonicalFixtureId);
-      upcomingFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
-      summary.nextFixtureId = upcomingFixtureId;
-      // Existing selectors keep compact summaries. The committed outbox below
-      // preserves full sporting details in the separate paginated archive.
-      current.completedMatches.push(compactCompletedMatch(summary));
-      const humanRoundResult = {
-        ...summary,
-        fixtureId: canonicalFixtureId,
-        completedAt,
-      };
-      summary.roundSummary = roundSummaryFor(current, humanFixture, humanRoundResult);
-      current.lastCompletedMatch = summary;
-      current.lastCompletedRound = structuredClone(summary.roundSummary);
-
-      // Atualize primeiro a avaliacao do cargo. O ciclo profissional da IA deve
-      // decidir com base na rodada que acabou de ser persistida, nao na anterior.
-      const coachProgress = processCoachEmploymentDate(
-        current,
-        careerCompletedAt,
-        {
-          ...coachEmploymentCallbacks(careerCompletedAt),
-          minimumGames: 5,
-          autoDismissAI: true,
-          autoDismissHuman: true,
-        },
-      );
-      replaceRoom(current, coachProgress.room);
-      // ensureCoachEmploymentState clona a sala. Reanexe o mesmo resumo para
-      // que os ciclos abaixo e a transicao de temporada persistam este payload.
-      current.lastCompletedMatch = summary;
-      current.lastCompletedRound = structuredClone(summary.roundSummary);
-      if (coachProgress.events.length > 0) {
-        summary.coachCareerEvents = coachProgress.events.map((event) => ({
-          id: event.id,
-          type: event.type,
-          coachId: event.coachId,
-          clubId: event.clubId,
-          occurredAt: event.occurredAt,
-        }));
-      }
-
-      const aiLifecycleProgress = runAiProfessionalLifecycleTick(
-        current,
-        careerCompletedAt,
-        lifecycleCallbacks,
-      );
-      replaceRoom(current, aiLifecycleProgress.room);
-      syncProfessionalLifecycleTimeline(current);
-      const lifecycleProgress = processProfessionalLifecycleDate(
-        current,
-        careerCompletedAt,
-        lifecycleCallbacks,
-      );
-      replaceRoom(current, lifecycleProgress.room);
-      syncProfessionalLifecycleTimeline(current);
-      current.lastCompletedMatch = summary;
-      current.lastCompletedRound = structuredClone(summary.roundSummary);
-      if (lifecycleProgress.outcomes.length > 0) {
-        summary.professionalLifecycleEvents = lifecycleProgress.outcomes.map((entry) => ({
-          type: entry.type,
-          id: entry.record?.id ?? null,
-          status: entry.record?.status ?? null,
-          professionalType: entry.record?.professionalType ?? null,
-          professionalId: entry.record?.professionalId ?? null,
-        }));
-      }
-      if (leaveProgress.activated.length > 0 || leaveProgress.completed.length > 0) {
-        summary.professionalLeaveEvents = [
-          ...leaveProgress.activated.map((record) => ({
-            type: "activated",
-            id: record.id,
-            professionalType: record.professionalType,
-            professionalId: record.professionalId,
-            status: record.status,
-          })),
-          ...leaveProgress.completed.map((record) => ({
-            type: "completed",
-            id: record.id,
-            professionalType: record.professionalType,
-            professionalId: record.professionalId,
-            status: record.status,
-          })),
-        ];
-      }
-      if (aiLifecycleProgress.decisions.length > 0) {
-        summary.professionalLifecycleAiDecisions = aiLifecycleProgress.decisions.map((entry) => ({
-          action: entry.action,
-          professionalType: entry.professionalType,
-          professionalId: entry.professionalId,
-          clubId: entry.clubId,
-          resultStatus: entry.resultStatus,
-          reason: entry.reason,
-        }));
-      }
-      const nextAfterCoachChanges = rebuildManagedSchedule(current);
-      upcomingFixtureId = nextAfterCoachChanges?.fixtureId ?? null;
-      summary.nextFixtureId = upcomingFixtureId;
-
-      // Receipt and market effects commit together with the match result.
-      if (summary.roundSummary.complete && Number.isInteger(humanFixture?.round)) {
-        const aiMarketTick = runRecordedAiMarketTick(current, {
-          players: aiMarketPlayers,
-          seasonNumber: current.currentSeason,
-          round: humanFixture.round,
-          leagueId: humanFixture.leagueId,
-        }, completedAt, { execute: this.#aiMarketExecutor });
-        if (!aiMarketTick.duplicate) marketTickRecord = aiMarketTick.record;
-        summary.aiMarketTick = structuredClone(aiMarketTick.record);
-        if (aiMarketTick.changed) {
-          const { record: _record, ...transfer } = aiMarketTick;
-          summary.aiMarketTransfer = structuredClone(transfer);
-        }
-        // Rollback restores cloned branches, including lastCompletedMatch.
-        current.lastCompletedMatch = summary;
-      }
-
-      if (!upcomingFixtureId) {
-        // Odd-sized leagues may leave the manager on a BYE while AI clubs play.
-        // Finish those AI-only rounds before closing or rolling the season.
-        simulateOfficialAiBeforeNextManaged(current, completedAt, aiRosters, humanFixture?.scheduledAt);
-        competitionAwards.push(...awardCompletedCompetitionPrizes(current, {
-          occurredAt: careerCompletedAt,
-        }).filter((award) => award.title?.created || award.prize?.applied));
-        if (competitionAwards.length > 0) {
-          summary.competitionAwards = structuredClone(competitionAwards.map((award) => ({
-            competitionId: award.competitionId,
-            winnerClubId: award.winnerClubId,
-            amount: award.amount,
-            awarded: award.awarded,
-          })));
-        }
-        // Competition winners can be created while the final AI-only fixtures
-        // are completed above. Process only conduct achievements now so title
-        // reputation is persisted before a finite career closes or rolls over.
-        const titleConductProgress = processCoachEmploymentDate(
-          current,
-          careerCompletedAt,
-          {
-            ...coachEmploymentCallbacks(careerCompletedAt),
-            conductOnly: true,
-          },
-        );
-        replaceRoom(current, titleConductProgress.room);
-        current.lastCompletedMatch = summary;
-        if (titleConductProgress.events.length > 0) {
-          summary.coachCareerEvents = [
-            ...(summary.coachCareerEvents ?? []),
-            ...titleConductProgress.events.map((event) => ({
-              id: event.id,
-              type: event.type,
-              coachId: event.coachId,
-              clubId: event.clubId,
-              occurredAt: event.occurredAt,
-            })),
-          ];
-        }
-        upcomingFixtureId = rebuildManagedSchedule(current)?.fixtureId ?? null;
-        summary.nextFixtureId = upcomingFixtureId;
-        if (!upcomingFixtureId) {
-          const seasonNumber = current.currentSeason;
-          const rankingTimeline = compactLeagueRankingTimeline(buildLeagueRankingTimeline({
-            leagues: (current.competitionCatalog ?? []).filter((league) => league?.active !== false),
-            fixtures: current.leagueFixtureSchedule,
-            results: current.leagueMatchResults,
-            managers: current.managers,
-            coachCareerState: current.coachCareerState,
-            seasonNumber,
-            seasonYear: current.seasonYear,
-          }));
-          const managerMatchHistory = archiveManagerMatchHistory(current);
-          const leagueTransition = transitionLeagueDivisions(current);
-          const tournamentWinners = archiveTournamentWinners(current);
-          const historyEntry = {
-            seasonNumber,
-            seasonYear: current.seasonYear,
-            startedAt: current.seasonStartedAt,
-            completedAt,
-            completedFixtureIds: [...current.completedFixtureIds],
-            matchIds: current.completedMatches
-              .filter((match) => (match.seasonNumber ?? seasonNumber) === seasonNumber)
-              .map((match) => match.id),
-            managerMatchHistory,
-            tournamentWinners,
-            promotionMovements: structuredClone(leagueTransition.movements),
-            rankingTimeline,
-          };
-          const nextSeasonNumber = current.currentSeason + 1;
-          returnLoansForSeason(current, nextSeasonNumber, completedAt);
-          if (careerHasNextSeason(current)) {
-            processScheduledTransfers(current, nextSeasonNumber, completedAt);
-            const sourceCareerRoster = careerRosterForTransition(current, careerRoster);
-            const minutesByPlayer = Object.fromEntries((current.playerStates ?? []).map((state) => [
-              state.playerId,
-              Number(state.seasonStats?.minutes ?? 0),
-            ]));
-            const nationalities = [...new Set(sourceCareerRoster
-              .map((player) => String(player.nationality ?? "").trim())
-              .filter(Boolean))];
-            const careerTransition = processCareerSeasonTransition(
-              current.careerState ?? { saveId: current.id, currentSeason: current.currentSeason },
-              {
-                toSeason: nextSeasonNumber,
-                roster: sourceCareerRoster,
-                clubs: careerClubs(current),
-                renewals: current.careerState?.pendingRenewals ?? [],
-                trainingPlans: current.careerState?.trainingPlans ?? [],
-                minutesByPlayer,
-                youthCountPerClub: 2,
-                nationalTeams: nationalities.map((country) => ({ id: country, country })),
-                nationalSquadSize: 23,
-                seed: current.id,
-              },
-            );
-            current.careerState = {
-              ...careerTransition.careerState,
-              pendingRenewals: [],
-              // Old retired records stay in season history, not forever in Firestore.
-              players: careerTransition.players.filter((player) => (
-                !player.retired || Number(player.retirementSeason) >= current.currentSeason
-              )),
-            };
-            recordCareerTransitionEvents(current, {
-              summary: careerTransition.summary,
-              previousPlayers: sourceCareerRoster,
-              occurredAt: completedAt,
-            });
-            reconcileMarketCareerState(current, completedAt);
-            historyEntry.careerSummary = structuredClone(careerTransition.summary);
-            current.competitionCatalog = leagueTransition.competitionCatalog;
-            current.currentSeason += 1;
-            current.seasonYear += 1;
-            current.seasonStartedAt = completedAt;
-            current.completedFixtureIds = [];
-            current.leagueMatchResults = [];
-            current.playerStates = (current.playerStates ?? []).map((state) => ({
-              ...state,
-              condition: 100,
-              yellowCardAccumulator: 0,
-              competitionStats: [],
-              seasonStats: {
-                seasonNumber: current.currentSeason,
-                appearances: 0,
-                starts: 0,
-                minutes: 0,
-                goals: 0,
-                assists: 0,
-                yellowCards: 0,
-                redCards: 0,
-                injuries: 0,
-                ratedMatches: 0,
-                ratingTotal: 0,
-              },
-            }));
-            current.playerCompetitionStatsCoverage = [];
-            current.competitionSeason = createRoomCompetitionSeason(current);
-            current.leagueFixtureSchedule = createLeagueFixtureSchedule(current);
-            rebuildManagedSchedule(current);
-            current.scheduleVersion = FIXTURE_SCHEDULE_VERSION;
-            delete current.scheduleCompatibility;
-            current.currentFixtureId = current.fixtureSchedule[0]?.fixtureId ?? null;
-            current.matchReadiness = { fixtureId: current.currentFixtureId, managerIds: [] };
-            current.lineups = [];
-            current.careerCompleted = false;
-            current.careerCompletedAt = null;
-            summary.nextFixtureId = current.currentFixtureId;
-            summary.nextSeasonNumber = current.currentSeason;
-            summary.nextSeasonYear = current.seasonYear;
-            summary.careerSummary = structuredClone(careerTransition.summary);
-            summary.promotionMovements = structuredClone(leagueTransition.movements);
-          } else {
-            current.careerCompleted = true;
-            current.careerCompletedAt = completedAt;
-          }
-          current.seasonHistory.push(historyEntry);
-        }
-      }
-      syncMarketCareerSideEffects(current);
-      assertScheduleSize(current);
-      enqueueMatchHistory(current, {
-        ...summary,
-        competition: humanFixture?.competition,
-        competitionId: humanFixture?.competitionId ?? humanFixture?.tournamentId ?? humanFixture?.leagueId ?? null,
-        scheduledAt: humanFixture?.scheduledAt,
-        round: humanFixture?.round,
-      });
+      finalizeMatchCompletion(current, match, summary);
       return current;
     }).catch((error) => {
       publishAiMarketCommitFailure(marketTickRecord, error, this.#aiMarketTelemetry);
