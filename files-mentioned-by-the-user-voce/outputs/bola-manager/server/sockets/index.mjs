@@ -7,12 +7,13 @@ import { registerClubCareerHandlers } from "./clubCareerHandlers.mjs";
 import { channelForManager, clientError } from "./helpers.mjs";
 import { coordinationUnavailable } from "../infrastructure/coordinationAvailability.mjs";
 import { installSocketAuthSession } from "./authSession.mjs";
+import { ExpiringSet } from "./expiringSet.mjs";
 
 export function registerSocketHandlers(io, options) {
   const matchSessions = new Map();
   const matchRecoveryLocks = new Map();
   const deletingRooms = new Set();
-  const deletedRooms = new Set();
+  const deletedRooms = new ExpiringSet({ ttlMs: options.deletedRoomTtlMs });
   const matchOptions = {
     ...options,
     matchSessions,
