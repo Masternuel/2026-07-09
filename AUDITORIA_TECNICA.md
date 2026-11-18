@@ -407,7 +407,7 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 | — | ✅ Limpeza de fixtures dos testes do Editor (trabalho do Codex) | branch `test/editor-fixture-cleanup`, PR #5 |
 | 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality`, PR #6 |
 | 3 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa3-reliability`, PR #7 |
-| 4 | 🟡 Q-04, Q-03 e o primeiro subdomínio do Q-02 concluídos; P-02 preparado (ver abaixo) | PRs #8, #9, #10 e o PR do P-02 |
+| 4 | ✅ Q-04, Q-03, Q-02 (4 subdomínios) e o item 5 concluídos; P-02 preparado, aguardando a configuração externa | PRs #8, #9, #10, #12, #13, #14, PR do item 5 e #11 (P-02, por último) |
 
 **Etapa 1, o que foi feito:**
 - **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
@@ -463,8 +463,18 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 **Etapa 4, o que foi feito (um PR por item):**
 - **Q-04 (PR #8):** `shared/formations.mjs` virou a única fonte de ids e papéis das formações. O servidor reexporta a tabela pelo `tactics.mjs`, e o cliente guarda só os dados visuais. Antes da mudança, as duas cópias eram idênticas nas 9 formações, então nenhuma regra mudou.
 - **Q-03 (PR #9):** o parser Brasfoot, o worker, a Java Serialization e a biblioteca do importador foram para `server/import/brasfoot/`, e o catálogo embutido para `server/catalog/`, todos com `git mv`. `scripts/import-brasfoot.mjs` virou só o CLI. O pacote desktop não inclui mais nada de `scripts/`.
-- **Q-02, primeiro subdomínio (PR #10):** o callback de cerca de 500 linhas do `completeMatch` virou 12 etapas nomeadas. Uma caracterização com carreiras de 1 e 2 temporadas, usando relógio e UUIDs determinísticos, produziu hashes **idênticos** de todos os resumos e do estado final antes e depois. Ficam para PRs próprios: `CoachCareerService` (`coachEmployment.mjs`, 7,7 mil linhas) e o mercado (`market.mjs`).
+- **Q-02, concluído em 4 PRs.** Em todos, os corpos foram copiados literalmente por script e a caracterização do `completeMatch` (carreiras de 1 e 2 temporadas, com relógio e UUIDs determinísticos) produziu hashes **idênticos**.
+  - **PR #10:** o callback de cerca de 500 linhas do `completeMatch` virou 12 etapas nomeadas.
+  - **PR #12:** `CoachCareerService`, com os 10 casos de uso da carreira do treinador. O `RoomStore` só delega a ele.
+  - **PR #13:** `MarketService`, com os 7 casos de uso do mercado. Os guardas compartilhados foram para `server/store/roomGuards.mjs`.
+  - **PR #14:** `coachEmployment.mjs` (7.748 linhas) foi dividido em 6 módulos por fluxo, seguindo o grafo de dependências, que não tem ciclos. A fachada mantém as 20 exportações públicas, com código-fonte idêntico ao original.
+  - Resultado: o `roomStore.mjs` caiu de 4.628 para 3.825 linhas.
 - **P-02:** branch `refactor/p02-project-at-root`, com o projeto na raiz do repositório via `git mv` (644 arquivos renomeados). **O merge exige mudar configurações fora do Git.** Veja as instruções no PR.
+- **Item 5 (organização dos testes):**
+  - Os 43 testes de frontend e os 4 harnesses de navegador saíram de `server/tests` para `tests/frontend/`. Só foram reescritas as strings de caminho que apontam para arquivos reais; as chaves de mock de módulos de `src/` não mudaram.
+  - Os testes de servidor ficaram em `server/tests`: o lugar já está certo, e movê-los reescreveria centenas de imports sem ganho.
+  - Antes, `test:server` rodava também os testes de frontend; agora cada suíte roda só os seus.
+  - **Testes que leem código-fonte:** o inventário heurístico encontrou 15 arquivos (12 de frontend, 3 de servidor) que leem fontes como texto e fazem asserções sobre o conteúdo. O maior é `uiClarityUi.test.mjs`, com 51 asserções de texto. Eles devem ser trocados aos poucos por testes de comportamento (renderização ou E2E); essa conversão não foi feita neste PR.
 
 **Etapa 4, limites e observações:**
 - O E2E "partida pausa no intervalo…" falha às vezes quando roda logo depois das suítes pesadas na mesma máquina: o título "Central do clube" não aparece em 15 s. Isso já acontecia antes da Etapa 4, e o teste passa quando roda sozinho. Ainda não foi investigado.

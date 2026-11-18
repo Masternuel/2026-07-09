@@ -31,7 +31,7 @@ Faltava um pipeline que reunisse typecheck, build, testes backend/frontend e smo
 - Configuração: `package.json`, `package-lock.json`, `playwright.config.mjs`, `scripts/test-frontend.mjs`, `scripts/check-encoding.mjs` e `README.md`.
 - E2E: `e2e/server.mjs`, `e2e/AuthProvider.tsx`, `e2e/career.spec.mjs`.
 - Correção de produção: `src/lib/socketRequest.ts`.
-- Novos testes: `server/tests/ciPipeline.test.mjs`, `server/tests/socketRequestClient.test.mjs` e `server/tests/helpers/withTestAuth.mjs`.
+- Novos testes: `server/tests/ciPipeline.test.mjs`, `tests/frontend/socketRequestClient.test.mjs` e `server/tests/helpers/withTestAuth.mjs`.
 - Fixtures/harness: `testHarness`, `socketAuth`, `careerUi`, `marketUi`, `seasonRoundUi`, `roundResultsUi`, `teamThemeColors`, `clubCatalogSafety`, `editorClubRosterUi`, `lobbyLeagueSelector` e `pressConferenceUi`, em `server/tests`.
 
 ## Testes criados

@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
-import { editorCreateSchemas, editorPatchSchemas } from "../editorSchemas.mjs";
-import { buildBuiltinCatalog } from "../catalog/builtinCatalog.mjs";
+import { editorCreateSchemas, editorPatchSchemas } from "../../server/editorSchemas.mjs";
+import { buildBuiltinCatalog } from "../../server/catalog/builtinCatalog.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const clubRecord = {

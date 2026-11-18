@@ -26,7 +26,7 @@ Na validação visual surgiram duas falhas adicionais: filtros de jogadores inac
 - `src/hooks/useRankings.ts`, `src/utils/rankings.ts`: transporte, normalização e tipos.
 - `src/views/season/RankingsView.tsx`, `src/components/rankings/RankingTable.tsx`: estado e renderização.
 - `server/tests/rankingSelection.test.mjs`, `rankingsRoute.test.mjs`, `rankingsUi.test.mjs`: regressões.
-- `server/tests/rankingsBrowserHarness.mjs` e `fixtures/rankingsBrowser*`: reprodução isolada, em memória, com autenticação fictícia.
+- `tests/frontend/rankingsBrowserHarness.mjs` e `fixtures/rankingsBrowser*`: reprodução isolada, em memória, com autenticação fictícia.
 
 ## Verificação
 

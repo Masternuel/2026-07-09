@@ -1,9 +1,9 @@
 // Isolated manual smoke test. Never connects to real authentication or saves.
 import { build, preview } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { MemoryRoomPersistence } from '../store/roomPersistence.mjs';
-import { RoomStore } from '../store/roomStore.mjs';
-import { startTestServer } from './testHarness.mjs';
+import { MemoryRoomPersistence } from '../../server/store/roomPersistence.mjs';
+import { RoomStore } from '../../server/store/roomStore.mjs';
+import { startTestServer } from '../../server/tests/testHarness.mjs';
 
 const persistence = new MemoryRoomPersistence();
 await persistence.create({
@@ -21,7 +21,7 @@ await build({
   root, configFile: false, envFile: false, logLevel: 'error',
   define: { 'import.meta.env.VITE_SERVER_URL': JSON.stringify(backend.url) },
   css: { postcss: { plugins: [] } },
-  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('./fixtures/scoutingBrowser.html', import.meta.url)) } },
+  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('../../server/tests/fixtures/scoutingBrowser.html', import.meta.url)) } },
 });
 const vite = await preview({ root, configFile: false, envFile: false, build: { outDir },
   preview: { host: '127.0.0.1', port: 5187, strictPort: true } });

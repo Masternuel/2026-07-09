@@ -27,7 +27,7 @@ A página compartilhada dos clubes recebia `tacticalIntel: null`, enquanto o end
 - Persistência/API/privacidade: `server/store/roomStore.mjs`, `server/routes/rooms.mjs`, `server/services/roomVisibility.mjs`.
 - Frontend: `src/services/opponentStudyService.ts`, `src/hooks/useOpponentStudy.ts`, `src/components/tactics/OpponentStudyPanel.tsx`, `src/types.ts`, `src/App.tsx`, `src/views/TacticsView.tsx`, `src/views/season/{CompetitionClubPage,CompetitionsView,RankingsView}.tsx`.
 - Testes: `server/tests/{clubTacticalStudy,opponentStudyRoute,opponentStudyUi,competitionClubNavigation,roomStore}.test.mjs`, fixture `server/tests/fixtures/tacticalStudyData.mjs`.
-- Smoke manual: `server/tests/tacticalStudyBrowserHarness.mjs`, `server/tests/fixtures/tacticalStudyBrowser.{html,tsx}`. Compila exclusivamente a página de teste; não entra no bundle normal.
+- Smoke manual: `tests/frontend/tacticalStudyBrowserHarness.mjs`, `server/tests/fixtures/tacticalStudyBrowser.{html,tsx}`. Compila exclusivamente a página de teste; não entra no bundle normal.
 
 Arquivos compartilhados já continham alterações anteriores, preservadas. O diff total não representa somente esta etapa.
 
@@ -40,7 +40,7 @@ Arquivos compartilhados já continham alterações anteriores, preservadas. O di
 - `git diff --check` nos arquivos rastreados desta etapa: passou.
 - Navegador integrado com save descartável: clube OPP inicialmente desconhecido, solicitação profunda, troca para OTHER sem herdar conhecimento, reload conservando o pedido, avanço de dois dias liberando a análise, formação inferida 4-4-2 sem revelar a secreta 5-4-1, erro de catálogo e recuperação confirmados. Layout inspecionado. Limite por comissão também coberto nos testes de API.
 
-Reproduzir: `node server/tests/tacticalStudyBrowserHarness.mjs`. Abrir a URL exibida. Os controles avançam apenas o save de teste em memória. Encerrar com Ctrl+C. Compilados ficam em `.tmp/tactical-study-browser`, já ignorado.
+Reproduzir: `node tests/frontend/tacticalStudyBrowserHarness.mjs`. Abrir a URL exibida. Os controles avançam apenas o save de teste em memória. Encerrar com Ctrl+C. Compilados ficam em `.tmp/tactical-study-browser`, já ignorado.
 
 ## Limites e riscos
 

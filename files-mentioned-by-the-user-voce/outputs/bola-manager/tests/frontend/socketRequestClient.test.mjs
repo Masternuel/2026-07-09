@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { after, before, test } from 'node:test';
 import ts from 'typescript';
 import { io } from 'socket.io-client';
-import { startTestServer } from './testHarness.mjs';
+import { startTestServer } from '../../server/tests/testHarness.mjs';
 
 const source = await readFile(new URL('../../src/lib/socketRequest.ts', import.meta.url), 'utf8');
 const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;

@@ -2,8 +2,8 @@
 import express from 'express';
 import { build, preview } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { createRoomsRouter } from '../routes/rooms.mjs';
-import { room, players } from './fixtures/rankingsBrowserData.mjs';
+import { createRoomsRouter } from '../../server/routes/rooms.mjs';
+import { room, players } from '../../server/tests/fixtures/rankingsBrowserData.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const outDir = '.tmp/rankings-browser';
@@ -25,7 +25,7 @@ app.use((error, _request, response, _next) => response.status(error.status ?? 50
 await build({ root, configFile: false, envFile: false, logLevel: 'error',
   define: { 'import.meta.env.VITE_SERVER_URL': JSON.stringify('http://127.0.0.1:5189') },
   esbuild: { jsx: 'automatic' }, css: { postcss: { plugins: [] } },
-  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('./fixtures/rankingsBrowser.html', import.meta.url)) } },
+  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('../../server/tests/fixtures/rankingsBrowser.html', import.meta.url)) } },
 });
 const vite = await preview({ root, configFile: false, envFile: false, build: { outDir },
   plugins: [{ name: 'ranking-test-api', configurePreviewServer(server) {

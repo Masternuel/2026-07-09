@@ -5,7 +5,7 @@ import {
   currentPlayerClubId,
   listRoomPlayers,
   registrationForPlayer,
-} from "../game/roomRoster.mjs";
+} from "../../server/game/roomRoster.mjs";
 
 function player(id, clubId, overall, extra = {}) {
   return { id, clubId, name: id, overall, active: true, ...extra };

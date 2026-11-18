@@ -27,7 +27,7 @@ O uso do navegador externo respeita a [política Google OAuth sobre agentes inco
 
 A recuperação por JSON continua separada da edição. O launcher também oferece agora o Editor completo das quatro entidades existentes, com mídia e persistência locais; consulte [DESKTOP_EDITOR.md](DESKTOP_EDITOR.md). Migração de carreiras web, recuperação guiada de backup, importação automática sem selecionar arquivo e sincronização entre dispositivos não estão implementadas. O JSON não incorpora arquivos binários das imagens externas.
 
-Regressões: `desktop/tests/catalogImport.test.mjs`, `desktop/tests/catalogImportElectron.test.mjs`, `server/tests/desktopImportUi.test.mjs`. Nenhuma credencial real é necessária nesses testes.
+Regressões: `desktop/tests/catalogImport.test.mjs`, `desktop/tests/catalogImportElectron.test.mjs`, `tests/frontend/desktopImportUi.test.mjs`. Nenhuma credencial real é necessária nesses testes.
 
 ## Validação local deste incremento
 
@@ -39,6 +39,6 @@ Regressões: `desktop/tests/catalogImport.test.mjs`, `desktop/tests/catalogImpor
 
 ### Arquivos deste incremento
 
-Criados: `desktop/catalogImport.mjs`, `desktop/tests/catalogImport.test.mjs`, `desktop/tests/catalogImportElectron.test.mjs`, este guia, `src/components/menu/DesktopCatalogImport.tsx`, `src/views/DesktopExportView.tsx`, `src/styles/desktop-import.css`, `server/tests/desktopImportUi.test.mjs` e `e2e/desktop-export.spec.mjs`.
+Criados: `desktop/catalogImport.mjs`, `desktop/tests/catalogImport.test.mjs`, `desktop/tests/catalogImportElectron.test.mjs`, este guia, `src/components/menu/DesktopCatalogImport.tsx`, `src/views/DesktopExportView.tsx`, `src/styles/desktop-import.css`, `tests/frontend/desktopImportUi.test.mjs` e `e2e/desktop-export.spec.mjs`.
 
 Integração em arquivos existentes: `desktop/localDatabase.mjs`, `desktop/localCatalog.mjs`, `desktop/localBackend.mjs`, `desktop/server-worker.mjs`, `desktop/main.mjs`, `desktop/preload.cjs`, `docs/DESKTOP_MIGRATION.md`, `server/store/catalogStore.mjs` (exportação de dois helpers já existentes), `src/components/menu/EditorAvailabilityPage.tsx`, `src/views/LobbyView.tsx`, `src/lib/desktopClient.ts` e `src/main.tsx`. Alterações anteriores na working tree permanecem separadas deste escopo; nada foi commitado.

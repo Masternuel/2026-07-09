@@ -24,9 +24,9 @@ Esses controles já estavam desabilitados; foram verificados e protegidos por re
 - `src/utils/searchShortcut.ts`, `src/views/SquadView.tsx`: atalho de busca e acessibilidade.
 - `src/views/MatchView.tsx`: navegação da sugestão do auxiliar.
 - `src/components/shared/StarRating.tsx`: remoção de componente sem uso.
-- `server/tests/uiActions.test.mjs`: cinco regressões de ações, foco, ordenação e indisponibilidade explícita.
-- `server/tests/halftimeUi.test.mjs`, `server/tests/renderSafetyUi.test.mjs`: inicialização SSR isolada.
-- `server/tests/uiActionsBrowserHarness.mjs`, `server/tests/fixtures/uiActionsBrowser.html`, `server/tests/fixtures/uiActionsBrowser.tsx`: cenário isolado de navegador reutilizando os componentes reais, sem gravação em saves ou acesso à API. Artefatos em `.tmp`, já ignorado.
+- `tests/frontend/uiActions.test.mjs`: cinco regressões de ações, foco, ordenação e indisponibilidade explícita.
+- `tests/frontend/halftimeUi.test.mjs`, `tests/frontend/renderSafetyUi.test.mjs`: inicialização SSR isolada.
+- `tests/frontend/uiActionsBrowserHarness.mjs`, `server/tests/fixtures/uiActionsBrowser.html`, `server/tests/fixtures/uiActionsBrowser.tsx`: cenário isolado de navegador reutilizando os componentes reais, sem gravação em saves ou acesso à API. Artefatos em `.tmp`, já ignorado.
 
 ## Validação
 
