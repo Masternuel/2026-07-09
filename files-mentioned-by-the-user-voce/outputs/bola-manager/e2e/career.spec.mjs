@@ -32,10 +32,13 @@ async function createCareer(page, name) {
   return { read, code: matches[0].code };
 }
 
-async function resume(page, name) {
+// `landing` is where the app settles after resuming. With a live or paused match the
+// app routes straight to it; "Central do clube" then shows for ~50 ms or not at all,
+// so waiting for it there was flaky under load.
+async function resume(page, name, landing = { name: 'Central do clube', exact: true }) {
   await page.reload();
   await page.locator('.save-manager__card').filter({ hasText: name }).getByRole('button', { name: /Continuar/ }).click();
-  await expect(page.getByRole('heading', { name: 'Central do clube', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', landing)).toBeVisible();
 }
 
 test('criar/carregar carreira, calendário, tática e rankings', async ({ page }) => {
@@ -118,7 +121,7 @@ test('partida pausa no intervalo, recupera sessão e conclui rodada', async ({ p
   const { read, code } = await createCareer(page, 'E2E partida');
   await page.getByRole('button', { name: 'Estou pronto', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Partida pausada para ajustes' })).toBeVisible();
-  await resume(page, 'E2E partida');
+  await resume(page, 'E2E partida', { name: 'Partida pausada para ajustes' });
   await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('button', { name: 'Central da partida' }).click();
   await expect(page.getByRole('heading', { name: 'Partida pausada para ajustes' })).toBeVisible();
   await page.getByRole('button', { name: 'Estou pronto para o 2º tempo' }).click();

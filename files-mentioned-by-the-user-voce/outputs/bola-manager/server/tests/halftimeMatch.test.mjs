@@ -24,7 +24,11 @@ function delay(milliseconds = 30) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function nextEvent(socket, eventName, predicate = () => true, timeoutMs = 2_000) {
+// Halftime/full time arrive only after the simulated half is played (1.0-1.7 s here
+// with matchDelayMs 100), so a 2 s budget failed under load. Other events stay at 2 s.
+const SIMULATED_EVENTS = new Set(["match:halftime", "match:finished"]);
+
+function nextEvent(socket, eventName, predicate = () => true, timeoutMs = SIMULATED_EVENTS.has(eventName) ? 15_000 : 2_000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off(eventName, handler);
