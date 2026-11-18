@@ -13,10 +13,6 @@ concurrency:
   group: bola-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: files-mentioned-by-the-user-voce/outputs/bola-manager
-
 jobs:
   quality:
     name: Typecheck, build, backend e frontend
@@ -28,7 +24,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
@@ -45,7 +41,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
@@ -54,8 +50,8 @@ jobs:
         with:
           name: e2e-report
           path: |
-            files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/report
-            files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/e2e/results
+            .tmp/e2e/report
+            .tmp/e2e/results
           retention-days: 7
   desktop:
     name: Desktop (Windows)
@@ -69,7 +65,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       # pretest:desktop runs typecheck + build:desktop; native tests use the installed Electron.
       - run: npm run test:desktop
@@ -83,14 +79,14 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: files-mentioned-by-the-user-voce/outputs/bola-manager/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run coverage:server
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
           name: server-coverage
-          path: files-mentioned-by-the-user-voce/outputs/bola-manager/.tmp/coverage
+          path: .tmp/coverage
           retention-days: 7
   required:
     name: Bola Manager required
@@ -99,7 +95,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Exigir todas as verificações
-        working-directory: .
         env:
           QUALITY: ${{ needs.quality.result }}
           SMOKE: ${{ needs.smoke.result }}

@@ -6,7 +6,7 @@ import config from '../../playwright.config.mjs';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('CI exige qualidade e E2E sem ignorar falhas', async () => {
-  const workflow = await read('../../../../../.github/workflows/bola-manager-ci.yml');
+  const workflow = await read('../../.github/workflows/bola-manager-ci.yml');
   const { scripts } = JSON.parse(await read('../../package.json'));
   for (const command of ['typecheck', 'build', 'test:server', 'test:frontend', 'test:e2e', 'test:desktop']) {
     assert.ok(scripts[command], command);
@@ -16,6 +16,8 @@ test('CI exige qualidade e E2E sem ignorar falhas', async () => {
   assert.match(workflow, /desktop:\n(?:.*\n)*?\s+runs-on: windows-latest/);
   assert.match(workflow, /test "\$QUALITY" = success && test "\$SMOKE" = success && test "\$DESKTOP" = success/);
   assert.match(workflow, /contents: read/);
+  // The project lives at the repository root (P-02): no nested working directory.
+  assert.doesNotMatch(workflow, /working-directory|files-mentioned-by-the-user-voce/);
   assert.doesNotMatch(workflow, /continue-on-error|pull_request_target|secrets\./);
 });
 
