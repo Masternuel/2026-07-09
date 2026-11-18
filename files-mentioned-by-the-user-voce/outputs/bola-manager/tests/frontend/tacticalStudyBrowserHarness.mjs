@@ -1,10 +1,10 @@
 // Manual browser smoke test with memory-only saves and fake auth. No real user data.
 import { build, preview } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { MemoryRoomPersistence } from '../store/roomPersistence.mjs';
-import { RoomStore } from '../store/roomStore.mjs';
-import { startTestServer } from './testHarness.mjs';
-import { studyRoom, studyRoster } from './fixtures/tacticalStudyData.mjs';
+import { MemoryRoomPersistence } from '../../server/store/roomPersistence.mjs';
+import { RoomStore } from '../../server/store/roomStore.mjs';
+import { startTestServer } from '../../server/tests/testHarness.mjs';
+import { studyRoom, studyRoster } from '../../server/tests/fixtures/tacticalStudyData.mjs';
 
 const persistence = new MemoryRoomPersistence();
 await persistence.create(studyRoom());
@@ -19,7 +19,7 @@ const outDir = '.tmp/tactical-study-browser';
 await build({ root, configFile: false, envFile: false, logLevel: 'error',
   define: { 'import.meta.env.VITE_SERVER_URL': JSON.stringify(backend.url) },
   css: { postcss: { plugins: [] } },
-  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('./fixtures/tacticalStudyBrowser.html', import.meta.url)) } },
+  build: { outDir, emptyOutDir: false, rollupOptions: { input: fileURLToPath(new URL('../../server/tests/fixtures/tacticalStudyBrowser.html', import.meta.url)) } },
 });
 const vite = await preview({ root, configFile: false, envFile: false, build: { outDir },
   plugins: [{ name: 'isolated-study-controls', configurePreviewServer(server) {

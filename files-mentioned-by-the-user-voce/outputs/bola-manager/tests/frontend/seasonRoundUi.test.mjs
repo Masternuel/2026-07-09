@@ -69,7 +69,7 @@ const room = {
   ],
 };
 
-import { withTestAuth } from './helpers/withTestAuth.mjs';
+import { withTestAuth } from '../../server/tests/helpers/withTestAuth.mjs';
 
 let vite;
 let Sidebar;

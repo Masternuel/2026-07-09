@@ -58,7 +58,7 @@ desktop e encerra a sessão no navegador, sem apagar saves.
 ## Validação local
 
 ```text
-node --test server/tests/mainMenuUi.test.mjs
+node --test tests/frontend/mainMenuUi.test.mjs
 npm run test:frontend
 npm run test:desktop
 E2E_CHANNEL=chrome npm run test:e2e
@@ -84,7 +84,7 @@ Criados:
 - `src/components/menu/CreditsPage.tsx`
 - `src/components/menu/ExitMenuModal.tsx`
 - `src/styles/main-menu.css`
-- `server/tests/mainMenuUi.test.mjs`
+- `tests/frontend/mainMenuUi.test.mjs`
 - `e2e/menu.spec.mjs`
 - `desktop/tests/mainMenuElectron.test.mjs`
 - `docs/MAIN_MENU.md`

@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { studyRoom, studyRoster } from './fixtures/tacticalStudyData.mjs';
-import { buildClubTacticalStudy, startTacticalStudy, tacticalStudyContext } from '../game/clubTacticalStudy.mjs';
+import { studyRoom, studyRoster } from '../../server/tests/fixtures/tacticalStudyData.mjs';
+import { buildClubTacticalStudy, startTacticalStudy, tacticalStudyContext } from '../../server/game/clubTacticalStudy.mjs';
 
 let vite, parse, Panel;
 before(async () => {

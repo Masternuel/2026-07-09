@@ -23,7 +23,7 @@ Após timeout, cada chamada criava outro código e outro save. O identificador d
 - `server/schemas.mjs`: IDs opcionais nos contratos existentes.
 - `src/lib/roomCreationOperation.ts`: ID persistente e agrupamento de envios.
 - `src/hooks/useRoom.ts` e `src/types.ts`: integração do cliente.
-- `server/tests/roomCreationIdempotency.test.mjs` e `server/tests/roomCreationClient.test.mjs`: testes novos.
+- `server/tests/roomCreationIdempotency.test.mjs` e `tests/frontend/roomCreationClient.test.mjs`: testes novos.
 - `README.md` e este relatório.
 
 Alterações de etapas anteriores foram preservadas; não fazem parte desta entrega.

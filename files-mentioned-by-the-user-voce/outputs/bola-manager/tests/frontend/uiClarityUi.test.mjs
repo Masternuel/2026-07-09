@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
-import { withTestAuth } from './helpers/withTestAuth.mjs';
+import { withTestAuth } from '../../server/tests/helpers/withTestAuth.mjs';
 
 let vite, HomeView, Header, CareerOverview, EditorAvailabilityPage, MultiplayerPage, InformationDisclosure;
 before(async () => {

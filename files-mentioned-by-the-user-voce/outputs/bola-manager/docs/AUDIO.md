@@ -27,7 +27,7 @@ Efeitos/interface têm ganhos e sons breves de teste via Web Audio. Ainda não e
 
 ## Validação
 
-`server/tests/musicAudioClient.test.mjs`: motor, fades, autoplay, falhas, navegação, shuffle, avanço, concorrência, volumes e fila de preferências. `desktop/tests/musicElectron.test.mjs`: mídia real Chromium com WAV determinístico, navegação sem recriar player, notice/auto-hide, alterações rápidas, gravação no perfil descartável e restart, responsividade. Os testes não dependem das gravações privadas e não acessam o perfil real do usuário.
+`tests/frontend/musicAudioClient.test.mjs`: motor, fades, autoplay, falhas, navegação, shuffle, avanço, concorrência, volumes e fila de preferências. `desktop/tests/musicElectron.test.mjs`: mídia real Chromium com WAV determinístico, navegação sem recriar player, notice/auto-hide, alterações rápidas, gravação no perfil descartável e restart, responsividade. Os testes não dependem das gravações privadas e não acessam o perfil real do usuário.
 
 ## Arquivos do recurso
 

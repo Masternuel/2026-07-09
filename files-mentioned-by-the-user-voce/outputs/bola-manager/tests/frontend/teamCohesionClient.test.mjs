@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { createServer } from "vite";
-import { calculateTeamCohesion } from "../game/teamCohesion.mjs";
-import { DEFAULT_TACTIC_PLAN, FORMATION_ROLES } from "../game/tactics.mjs";
+import { calculateTeamCohesion } from "../../server/game/teamCohesion.mjs";
+import { DEFAULT_TACTIC_PLAN, FORMATION_ROLES } from "../../server/game/tactics.mjs";
 
 let vite;
 let preview;

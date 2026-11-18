@@ -24,8 +24,8 @@ O perfil compartilhado oferecia apenas botões desabilitados para observação, 
 
 - Novos: `server/game/scouting.mjs`, `server/routes/scouting.mjs`, `src/services/scoutingService.ts`, `src/hooks/useScouting.ts`.
 - Integração: `server/index.mjs`, `server/store/roomStore.mjs`, `server/services/roomVisibility.mjs`, `src/components/player/PlayerProfileHost.tsx`, `src/components/rankings/RankingEntityProfiles.tsx`.
-- Testes: `server/tests/scouting.test.mjs`, `server/tests/scoutingUi.test.mjs`; expectativas atualizadas em `roomStore.test.mjs` e `competitionClubNavigation.test.mjs`.
-- Smoke visual reutilizável: `server/tests/scoutingBrowserHarness.mjs` e `server/tests/fixtures/scoutingBrowser.{html,tsx}`. Autenticação falsa e save em memória, exclusivamente para teste; não integra o bundle normal do jogo.
+- Testes: `server/tests/scouting.test.mjs`, `tests/frontend/scoutingUi.test.mjs`; expectativas atualizadas em `roomStore.test.mjs` e `competitionClubNavigation.test.mjs`.
+- Smoke visual reutilizável: `tests/frontend/scoutingBrowserHarness.mjs` e `server/tests/fixtures/scoutingBrowser.{html,tsx}`. Autenticação falsa e save em memória, exclusivamente para teste; não integra o bundle normal do jogo.
 
 Os arquivos compartilhados já continham alterações de etapas anteriores, preservadas. O diff total desses arquivos não representa somente scouting.
 
@@ -38,7 +38,7 @@ Os arquivos compartilhados já continham alterações de etapas anteriores, pres
 - Navegador integrado, perfil real com dados de teste: observar, demonstrar interesse, contato, reload, remoção das marcações e reabertura confirmados. Layout inspecionado; data corrigida confirmada em novo build (10/07 e 13/07).
 - Agent-browser não estava instalado. O modo dev do harness encontrou restrição de leitura no esbuild mesmo após permissão; o smoke usa build/preview local, sem alterar a configuração de produção nem instalar dependências.
 
-Reproduzir smoke: `node server/tests/scoutingBrowserHarness.mjs`. Abrir a URL exibida; encerrar com Ctrl+C. Arquivos compilados ficam em `.tmp/scouting-browser`, já ignorado pelo Git. Reiniciar esse harness apaga apenas seu save descartável em memória.
+Reproduzir smoke: `node tests/frontend/scoutingBrowserHarness.mjs`. Abrir a URL exibida; encerrar com Ctrl+C. Arquivos compilados ficam em `.tmp/scouting-browser`, já ignorado pelo Git. Reiniciar esse harness apaga apenas seu save descartável em memória.
 
 ## Limites e riscos
 

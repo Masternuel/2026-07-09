@@ -22,7 +22,7 @@ A autenticação no handshake não acompanhava todo o tempo de vida da conexão.
 - Sessão e autorização: `server/sockets/authSession.mjs` (novo), `server/auth.mjs`, `server/sockets/helpers.mjs`, `server/sockets/index.mjs`.
 - Inicialização e configuração: `server/index.mjs`, `server/config.mjs`, `.env.example`.
 - Cliente: `src/lib/socketSession.ts` (novo), `src/hooks/useSocket.ts`, `src/auth/AuthContext.tsx`, `src/types.ts`.
-- Testes: `server/tests/socketSessionAuth.test.mjs` e `server/tests/socketSessionClient.test.mjs` (novos); `server/tests/testHarness.mjs` fornece expiração no token simulado.
+- Testes: `server/tests/socketSessionAuth.test.mjs` e `tests/frontend/socketSessionClient.test.mjs` (novos); `server/tests/testHarness.mjs` fornece expiração no token simulado.
 - Documentação: `README.md` e este relatório.
 
 Alterações anteriores nesses arquivos foram preservadas. A lista não atribui todo o diff acumulado a esta etapa.
