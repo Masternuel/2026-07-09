@@ -8,11 +8,15 @@ import { createServer } from 'vite';
 
 let vite;
 let BrandLogo;
+let Sidebar;
+let MainMenuLayout;
 before(async () => {
   vite = await createServer({ root: fileURLToPath(new URL('../..', import.meta.url)), configFile: false,
     envDir: false, esbuild: { jsx: 'automatic' }, optimizeDeps: { noDiscovery: true, include: [] },
     appType: 'custom', logLevel: 'silent', server: { middlewareMode: true } });
   ({ BrandLogo } = await vite.ssrLoadModule('/src/components/shared/BrandLogo.tsx'));
+  ({ Sidebar } = await vite.ssrLoadModule('/src/components/layout/Sidebar.tsx'));
+  ({ MainMenuLayout } = await vite.ssrLoadModule('/src/components/menu/MainMenuLayout.tsx'));
 });
 after(async () => { await vite?.close(); });
 
@@ -40,17 +44,39 @@ test('branding supports integration classes without changing artwork or accessib
   assert.match(html, /aria-label="Bola Manager"/);
 });
 
-test('every app wordmark surface reuses the shared logo without replacing club marks', async () => {
-  const files = ['components/menu/MainMenuLayout.tsx', 'components/layout/Sidebar.tsx', 'views/EntryView.tsx',
-    'views/LobbyView.tsx', 'views/editor/EditorView.tsx', 'views/DesktopExportView.tsx'];
+const brandCount = (html) => (html.match(/class="brand-logo brand-logo--[a-z]+" role="img" aria-label="Bola Manager"/g) ?? []).length;
+
+test('sidebar and main menu render the shared logo once, and the sidebar keeps the club mark', () => {
+  const noop = () => {};
+  const club = { id: 'AUR', code: 'AUR', name: 'Aurora FC', color: '#123456', leagueName: 'Liga', division: 'Série A' };
+  const sidebar = renderToStaticMarkup(React.createElement(Sidebar, {
+    activeRoute: 'home', club, room: null, onNavigate: noop, open: false, onClose: noop, onExit: noop,
+  }));
+  assert.equal(brandCount(sidebar), 1);
+  assert.match(sidebar, /brand-logo--compact/);
+  assert.match(sidebar, /class="club-mark[^"]*"[^>]*aria-label="AUR"/);
+  assert.doesNotMatch(sidebar, /wordmark-glyph/);
+
+  const menu = renderToStaticMarkup(React.createElement(MainMenuLayout, {
+    identity: { uid: 'u', displayName: 'Manager', email: null, photoURL: null, mode: 'local' },
+    page: 'career', connectionState: 'connected', canContinue: true, continueReason: '', pending: false,
+    sessionSelected: false, onNavigate: noop, onExit: noop, children: null,
+  }));
+  assert.equal(brandCount(menu), 1);
+  assert.match(menu, /brand-logo--menu/);
+  assert.doesNotMatch(menu, /wordmark-glyph/);
+});
+
+// These views need the auth context or data hooks to render, so they are still
+// checked at source level until a render harness with providers exists.
+test('views that need app context still import the shared logo', async () => {
+  const files = ['views/EntryView.tsx', 'views/LobbyView.tsx', 'views/editor/EditorView.tsx', 'views/DesktopExportView.tsx'];
   for (const file of files) {
     const source = await readFile(new URL(`../../src/${file}`, import.meta.url), 'utf8');
     assert.match(source, /import \{ BrandLogo \}/, file);
     assert.match(source, /<BrandLogo(?:\s|\s*\/)/, file);
     assert.doesNotMatch(source, /className="wordmark-glyph"/, file);
   }
-  const sidebar = await readFile(new URL('../../src/components/layout/Sidebar.tsx', import.meta.url), 'utf8');
-  assert.match(sidebar, /<ClubMark[^>]*imageUrl=/);
 });
 
 test('shared branding retains aspect ratio and explicitly adapts menu/entry branding for narrow screens', async () => {
