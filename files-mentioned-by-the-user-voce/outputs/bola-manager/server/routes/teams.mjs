@@ -17,7 +17,7 @@ import { catalogForRequest, rosterScopeForRequest } from "../store/catalogScope.
 const querySchema = z.object({
   country: z.string().trim().min(2).max(60).optional(),
   division: z.string().trim().min(1).max(60).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(40),
+  limit: z.coerce.number().int().min(1).max(100).prefault(40),
   cursor: z.string().trim().min(1).max(128).optional(),
   roomCode: z.string().trim().min(4).max(12).optional(),
 }).strict();

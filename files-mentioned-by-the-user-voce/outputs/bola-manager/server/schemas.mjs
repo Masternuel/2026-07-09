@@ -16,10 +16,10 @@ export const createRoomSchema = z.object({
   creatorId: legacyIdentifier,
   creatorName: z.string().trim().min(2).max(60).optional(),
   clubId: clubIdentifier.optional(),
-  activeLeagues: z.array(z.string().trim().min(2).max(40)).min(1).max(24).default(["BR-A", "BR-B"]),
-  seasonLength: z.coerce.number().int().min(1).max(20).default(1),
-  unlimitedSeasons: z.boolean().default(false),
-  maxManagers: z.coerce.number().int().min(1).max(16).default(6),
+  activeLeagues: z.array(z.string().trim().min(2).max(40)).min(1).max(24).prefault(["BR-A", "BR-B"]),
+  seasonLength: z.coerce.number().int().min(1).max(20).prefault(1),
+  unlimitedSeasons: z.boolean().prefault(false),
+  maxManagers: z.coerce.number().int().min(1).max(16).prefault(6),
 }).strict();
 
 export const joinRoomSchema = z.object({
@@ -30,7 +30,7 @@ export const joinRoomSchema = z.object({
 
 export const readyRoomSchema = z.object({
   managerId: legacyIdentifier,
-  ready: z.boolean().default(true),
+  ready: z.boolean().prefault(true),
   clubId: clubIdentifier.optional(),
 }).strict();
 
@@ -51,7 +51,7 @@ export const matchStartSchema = z.object({
 export const matchReadySchema = z.object({
   code: roomCodeSchema,
   fixtureId: z.string().trim().min(1).max(160).optional(),
-  ready: z.boolean().default(true),
+  ready: z.boolean().prefault(true),
   managerId: legacyIdentifier,
 }).strict();
 
@@ -128,7 +128,7 @@ export const matchHalftimePlanSchema = z.object({
 export const matchHalftimeReadySchema = z.object({
   code: roomCodeSchema,
   matchId: z.string().trim().min(1).max(128),
-  ready: z.boolean().default(true),
+  ready: z.boolean().prefault(true),
 }).strict();
 
 export const lineupSaveSchema = z.object({
@@ -293,7 +293,7 @@ export const clubStaffHireSchema = z.object({
   clubId: clubIdentifier,
   staffId: clubCareerIdentifierSchema,
   requestId: clubCareerRequestIdSchema,
-  years: z.coerce.number().int().min(1).max(8).default(3),
+  years: z.coerce.number().int().min(1).max(8).prefault(3),
   wage: staffMoneySchema.optional(),
   signingBonus: z.coerce.number().int().min(0).max(100_000_000).optional(),
 }).strict();
@@ -311,7 +311,7 @@ export const clubStaffRenewSchema = z.object({
   clubId: clubIdentifier,
   staffId: clubCareerIdentifierSchema,
   requestId: clubCareerRequestIdSchema,
-  years: z.coerce.number().int().min(1).max(8).default(3),
+  years: z.coerce.number().int().min(1).max(8).prefault(3),
   wage: staffMoneySchema,
   renewalBonus: z.coerce.number().int().min(0).max(100_000_000).optional(),
 }).strict();
@@ -351,7 +351,7 @@ const professionalLifecycleTermsSchema = z.object({
 
 const professionalStaffPackageMemberSchema = z.object({
   staffId: clubCareerIdentifierSchema,
-  years: z.coerce.number().int().min(1).max(8).default(3),
+  years: z.coerce.number().int().min(1).max(8).prefault(3),
   wage: staffMoneySchema.optional(),
   signingBonus: z.coerce.number().int().min(0).max(100_000_000).optional(),
   affiliationType: z.enum([
@@ -559,7 +559,7 @@ export const careerTrainingPlanSchema = z.object({
   playerId: careerPlayerIdSchema,
   focus: z.enum(["balanced", "technical", "attacking", "defending", "physical", "goalkeeping", "recovery"]),
   intensity: z.enum(["low", "normal", "high"]),
-  active: z.boolean().default(true),
+  active: z.boolean().prefault(true),
 }).strict();
 
 export const careerContractRenewalSchema = z.object({
@@ -570,7 +570,7 @@ export const careerContractRenewalSchema = z.object({
 
 export const careerAcademyPromotionSchema = z.object({
   playerId: careerPlayerIdSchema,
-  years: z.coerce.number().int().min(1).max(8).default(3),
+  years: z.coerce.number().int().min(1).max(8).prefault(3),
   wage: z.coerce.number().finite().min(0).max(10_000_000).optional(),
 }).strict();
 
@@ -578,6 +578,7 @@ const coachCareerRequestIdSchema = z.string().trim().min(8).max(128);
 const coachCareerRecordIdSchema = z.string().trim().min(1).max(160);
 const coachSalarySchema = z.coerce.number().int().min(1_000).max(50_000_000);
 const coachBonusesSchema = z.record(
+  z.string(),
   z.coerce.number().int().min(0).max(2_000_000_000),
 ).refine((value) => Object.keys(value).length <= 20, "Informe no maximo 20 bonus");
 const coachSportingTargetsSchema = z.array(z.string().trim().min(2).max(160)).max(20);
@@ -669,7 +670,7 @@ export const coachBoardProposalResponseSchema = z.object({
   objectives: coachSportingTargetsSchema.optional(),
   specialClauses: coachSpecialClausesSchema.optional(),
   informationRequest: z.string().trim().min(2).max(1_000).optional(),
-  guaranteeResolutions: z.array(coachGuaranteeResolutionSchema).max(20).default([]),
+  guaranteeResolutions: z.array(coachGuaranteeResolutionSchema).max(20).prefault([]),
 }).strict().superRefine((value, context) => {
   if (value.action === "new_offer"
     && value.salary === undefined
@@ -716,7 +717,7 @@ export const coachInterviewResponseSchema = z.object({
 
 export const coachInterviewStartSchema = z.object({
   requestId: coachCareerRequestIdSchema,
-  depth: z.enum(["quick", "standard", "deep"]).default("standard"),
+  depth: z.enum(["quick", "standard", "deep"]).prefault("standard"),
 }).strict();
 
 export const coachInterviewTurnSchema = z.object({
@@ -759,7 +760,7 @@ export const coachResignationSchema = z.object({
 
 export const coachJobSearchSchema = z.object({
   requestId: coachCareerRequestIdSchema,
-  active: z.boolean().default(true),
+  active: z.boolean().prefault(true),
 }).strict();
 
 const socialSourceTypeSchema = z.enum(["imprensa", "clube", "jogador", "torcida"]);

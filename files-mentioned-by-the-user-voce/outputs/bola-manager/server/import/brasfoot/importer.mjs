@@ -12,7 +12,7 @@ import { commitCatalogGeneration } from "../../store/catalogImportTransaction.mj
 import { createGlobalCatalogGenerationFirestore } from "../../store/catalogScope.mjs";
 import { parseBrasfootSource } from "./binary.mjs";
 
-const attributeSchema = z.record(z.coerce.number().finite()).default({});
+const attributeSchema = z.record(z.string(), z.coerce.number().finite()).prefault({});
 const playerPositionSchema = z.enum(["GOL", "ZAG", "LD", "LE", "VOL", "MC", "MEI", "PD", "PE", "ATA"]);
 const recordIdSchema = z.union([z.string(), z.number()])
   .transform(String)
@@ -21,11 +21,11 @@ const clubSchema = z.object({
   id: recordIdSchema,
   name: z.string().trim().min(1),
   abbreviation: z.string().trim().max(8).optional(),
-  colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i, "cor deve usar #RRGGBB")).max(4).default([]),
-  stadium: z.string().default("A definir"),
-  reputation: z.coerce.number().int().min(1).max(20).default(10),
-  division: z.string().default("Sem divisão"),
-  country: z.string().default("Brasil"),
+  colors: z.array(z.string().regex(/^#[0-9a-f]{6}$/i, "cor deve usar #RRGGBB")).max(4).prefault([]),
+  stadium: z.string().prefault("A definir"),
+  reputation: z.coerce.number().int().min(1).max(20).prefault(10),
+  division: z.string().prefault("Sem divisão"),
+  country: z.string().prefault("Brasil"),
   state: z.string().nullable().optional(),
 }).passthrough();
 const playerSchema = z.object({
@@ -34,28 +34,28 @@ const playerSchema = z.object({
   name: z.string().trim().min(1),
   position: playerPositionSchema,
   age: z.coerce.number().int().min(14).max(60),
-  nationality: z.string().default("Brasil"),
+  nationality: z.string().prefault("Brasil"),
   shirtNumber: z.coerce.number().int().min(0).max(99).nullable().optional(),
   overall: z.coerce.number().finite().optional(),
   attributes: attributeSchema,
-  isStar: z.boolean().default(false),
+  isStar: z.boolean().prefault(false),
 }).passthrough();
 const competitionSchema = z.object({
   id: recordIdSchema,
   name: z.string().trim().min(1),
 }).passthrough();
 const leagueSchema = competitionSchema.extend({
-  country: z.string().trim().min(1).max(60).default("Brasil"),
-  level: z.coerce.number().int().min(1).max(20).default(1),
-  division: z.string().trim().min(1).max(60).default("Primeira divisao"),
-  active: z.boolean().default(true),
+  country: z.string().trim().min(1).max(60).prefault("Brasil"),
+  level: z.coerce.number().int().min(1).max(20).prefault(1),
+  division: z.string().trim().min(1).max(60).prefault("Primeira divisao"),
+  active: z.boolean().prefault(true),
 });
 const datasetSchema = z.object({
-  version: z.string().default("1"),
-  clubs: z.array(clubSchema).default([]),
-  players: z.array(playerSchema).default([]),
-  leagues: z.array(leagueSchema).default([]),
-  cups: z.array(competitionSchema).default([]),
+  version: z.string().prefault("1"),
+  clubs: z.array(clubSchema).prefault([]),
+  players: z.array(playerSchema).prefault([]),
+  leagues: z.array(leagueSchema).prefault([]),
+  cups: z.array(competitionSchema).prefault([]),
 }).strict();
 
 export function parseArguments(argv) {
