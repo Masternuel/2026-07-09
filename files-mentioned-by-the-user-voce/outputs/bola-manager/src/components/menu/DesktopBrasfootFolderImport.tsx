@@ -16,14 +16,18 @@ export const countryLabel = (code: string) => COUNTRY_NAMES[code] ?? code;
 
 type Action = 'preview' | 'cancel' | 'commit';
 
-export function DesktopBrasfootFolderImport({ bridge, disabled = false }: { bridge: DesktopBridge; disabled?: boolean }) {
+export const hasBrasfootFolderImport = (bridge: DesktopBridge | null | undefined): bridge is DesktopBridge =>
+  Boolean(bridge?.brasfootFolderPreview && bridge.brasfootFolderCommit);
+
+// compact: only the button + country dialog (Editor toolbar); otherwise a full launcher section.
+export function DesktopBrasfootFolderImport({ bridge, disabled = false, compact = false, label = 'Selecionar pasta do Brasfoot' }: { bridge: DesktopBridge; disabled?: boolean; compact?: boolean; label?: string }) {
   const [preview, setPreview] = useState<DesktopBrasfootPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
 
-  if (!bridge.brasfootFolderPreview || !bridge.brasfootFolderCommit) return null;
+  if (!hasBrasfootFolderImport(bridge)) return null;
 
   async function run(action: Action, task: () => Promise<void>) {
     if (busy.current) return;
@@ -65,15 +69,9 @@ export function DesktopBrasfootFolderImport({ bridge, disabled = false }: { brid
     return next;
   });
 
-  return (
-    <section className="desktop-catalog-import__active" aria-labelledby="desktop-brasfoot-folder-title">
-      <header><span id="desktop-brasfoot-folder-title"><FolderOpen size={16} aria-hidden="true" /> Importar do Brasfoot instalado</span><Badge tone="info">Com escudos</Badge></header>
-      <p className="catalog-subtle">Lê direto a pasta do Brasfoot neste computador: clubes nas divisões certas, elencos e escudos. Você escolhe os países; as notas são geradas pelo Bola Manager.</p>
-      <Button icon={<FolderOpen size={16} aria-hidden="true" />} loading={pending === 'preview'} disabled={disabled || Boolean(pending)} onClick={() => void choose()}>Selecionar pasta do Brasfoot</Button>
-      {pending === 'preview' && <p className="catalog-subtle" role="status">Lendo os times do Brasfoot… pode levar alguns segundos.</p>}
-      {error && !preview && <p className="catalog-feedback catalog-feedback--error" role="alert">{error}</p>}
-
-      <Modal open={Boolean(preview)} title="Escolha os países" eyebrow="IMPORTAR DO BRASFOOT" onClose={() => void close()} footer={<><Button disabled={Boolean(pending)} loading={pending === 'cancel'} onClick={() => void close()}>Cancelar</Button><Button variant="primary" icon={<Check size={16} aria-hidden="true" />} disabled={!selected.size || tooLarge || Boolean(pending)} loading={pending === 'commit'} onClick={() => void commit()}>Importar {selected.size} país(es)</Button></>}>
+  const trigger = <Button variant={compact ? 'secondary' : undefined} icon={<FolderOpen size={compact ? 15 : 16} aria-hidden="true" />} loading={pending === 'preview'} disabled={disabled || Boolean(pending)} onClick={() => void choose()}>{label}</Button>;
+  const dialog = (
+    <Modal open={Boolean(preview)} title="Escolha os países" eyebrow="IMPORTAR DO BRASFOOT" onClose={() => void close()} footer={<><Button disabled={Boolean(pending)} loading={pending === 'cancel'} onClick={() => void close()}>Cancelar</Button><Button variant="primary" icon={<Check size={16} aria-hidden="true" />} disabled={!selected.size || tooLarge || Boolean(pending)} loading={pending === 'commit'} onClick={() => void commit()}>Importar {selected.size} país(es)</Button></>}>
         {preview && <div className="catalog-confirmation" aria-busy={pending === 'commit'}>
           <p className="catalog-confirmation__intro">Somente clubes que estão em alguma divisão nacional aparecem aqui.</p>
           <div className="brasfoot-countries" role="group" aria-label="Países do Brasfoot">
@@ -90,6 +88,22 @@ export function DesktopBrasfootFolderImport({ bridge, disabled = false }: { brid
           {pending === 'commit' && <p className="catalog-feedback" role="status">Importando clubes e escudos. O launcher reinicia ao terminar…</p>}
         </div>}
       </Modal>
+  );
+
+  if (compact) return <>
+    {trigger}
+    {error && !preview && <span className="catalog-feedback catalog-feedback--error" role="alert">{error}</span>}
+    {dialog}
+  </>;
+
+  return (
+    <section className="desktop-catalog-import__active" aria-labelledby="desktop-brasfoot-folder-title">
+      <header><span id="desktop-brasfoot-folder-title"><FolderOpen size={16} aria-hidden="true" /> Importar do Brasfoot instalado</span><Badge tone="info">Com escudos</Badge></header>
+      <p className="catalog-subtle">Lê direto a pasta do Brasfoot neste computador: clubes nas divisões certas, elencos e escudos. Você escolhe os países; as notas são geradas pelo Bola Manager.</p>
+      {trigger}
+      {pending === 'preview' && <p className="catalog-subtle" role="status">Lendo os times do Brasfoot… pode levar alguns segundos.</p>}
+      {error && !preview && <p className="catalog-feedback catalog-feedback--error" role="alert">{error}</p>}
+      {dialog}
     </section>
   );
 }

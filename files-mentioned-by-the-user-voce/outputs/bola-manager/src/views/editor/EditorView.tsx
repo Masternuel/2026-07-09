@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Building2, Database, Download, Plus, RefreshCw, Shield, ShieldAlert, TriangleAlert, Trophy, Upload, UploadCloud, UsersRound } from 'lucide-react';
 import { BrasfootImportModal } from '../../components/editor/BrasfootImportModal';
+import { DesktopBrasfootFolderImport, hasBrasfootFolderImport } from '../../components/menu/DesktopBrasfootFolderImport';
+import { desktopBridge } from '../../lib/desktopClient';
 import { EditorBulkDeleteModal } from '../../components/editor/EditorBulkDeleteModal';
 import { EditorClubRosterPanel, EditorClubTabs, type EditorClubInspectorTab } from '../../components/editor/EditorClubRosterPanel';
 import { EditorDeleteModal } from '../../components/editor/EditorDeleteModal';
@@ -531,7 +533,10 @@ export function EditorView({ identity, getIdToken, onBack, onToast }: EditorView
                     disabled={editor.loading || editor.pending || editor.databaseAction !== null}
                     onClick={() => databaseInputRef.current?.click()}
                   >{editor.databaseAction === 'importing' && databaseProgress !== null ? `Importando ${databaseProgress}%` : 'Importar base'}</Button>
-                  <Button variant="secondary" icon={<UploadCloud size={15} />} disabled={editor.loading || editor.pending || editor.databaseAction !== null} onClick={() => setImportOpen(true)}>Importar Brasfoot</Button>
+                  {hasBrasfootFolderImport(desktopBridge)
+                    // Desktop: read the installed Brasfoot folder directly (crests, divisions, no upload limit).
+                    ? <DesktopBrasfootFolderImport bridge={desktopBridge} compact label="Importar Brasfoot" disabled={editor.loading || editor.pending || editor.databaseAction !== null} />
+                    : <Button variant="secondary" icon={<UploadCloud size={15} />} disabled={editor.loading || editor.pending || editor.databaseAction !== null} onClick={() => setImportOpen(true)}>Importar Brasfoot</Button>}
                   <Button variant="primary" icon={<Plus size={15} />} disabled={editor.loading || editor.pending || editor.databaseAction !== null} onClick={() => { setSelected(null); setMode('create'); resetClubInspector(); revealInspector(); }}>Adicionar</Button>
                 </div>
               </header>

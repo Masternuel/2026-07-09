@@ -89,3 +89,16 @@ test('the section is hidden when the launcher has no folder import', async () =>
   const container = await render({});
   assert.equal(container.textContent, '');
 });
+
+test('compact mode (Editor toolbar) is just the "Importar Brasfoot" button opening the same country dialog', async () => {
+  const bridge = { brasfootFolderPreview: async () => preview, brasfootFolderCancel: async () => undefined, brasfootFolderCommit: async () => undefined };
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  mounted.push(root);
+  await React.act(async () => root.render(React.createElement(DesktopBrasfootFolderImport, { bridge, compact: true, label: 'Importar Brasfoot' })));
+  assert.equal(container.querySelector('section'), null);
+  assert.doesNotMatch(container.textContent, /Lê direto a pasta/);
+  await React.act(async () => { button('Importar Brasfoot').click(); });
+  assert.equal(document.querySelectorAll('input[type="checkbox"]').length, 3);
+});
