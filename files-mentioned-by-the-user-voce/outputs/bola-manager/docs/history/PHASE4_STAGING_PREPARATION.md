@@ -5,7 +5,7 @@ Nenhuma infraestrutura isolada foi fornecida ou acessada. A regressão local com
 
 ## O que está pronto
 
-- Inventário de configuração por serviço e instruções externas em [STAGING_SECURITY_SETUP.md](STAGING_SECURITY_SETUP.md).
+- Inventário de configuração por serviço e instruções externas em [STAGING_SECURITY_SETUP.md](../STAGING_SECURITY_SETUP.md).
 - `.env.staging.example` somente com campos vazios/comentários. `.env.local`, `.env.staging`, `.env.staging.local` e `.tmp/*` seguem ignorados.
 - Preflight offline com `PASS`, `MISSING`, `INVALID`, `NOT CONFIGURED`; secrets aparecem apenas como configurados/não configurados. Nenhum arquivo de ambiente é carregado implicitamente.
 - Confirmação por serviço vinculada ao alvo e, para Firebase/Cloudinary/Gemini, às credenciais de staging. Inventário de produção revisado, denylist e evidência de isolamento obrigatórios.
