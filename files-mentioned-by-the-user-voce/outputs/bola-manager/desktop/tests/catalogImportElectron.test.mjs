@@ -80,8 +80,11 @@ test("Electron import: native chooser, cancel, confirmation, engine reload and p
     assert.equal(checked.status.preservedCareers, 1);
     assert.equal(checked.http, 200);
     assert.notEqual(checked.name, source.records.players[0].name);
-    const backups = await readdir(join(directory, "saves/backups"));
+    // backups/rotation holds the per-session copies; the import backup is the only file here.
+    const entries = await readdir(join(directory, "saves/backups"), { withFileTypes: true });
+    const backups = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
     assert.equal(backups.length, 1);
+    assert.ok((await readdir(join(directory, "saves/backups/rotation"))).some((name) => name.endsWith(".bolasave")));
     assert.deepEqual(await readFile(join(directory, "saves/backups", backups[0])), before);
     await page.getByRole("navigation", { name: "Menu principal", exact: true }).getByRole("button", { name: "Editor", exact: true }).click();
     await openImportDisclosure();

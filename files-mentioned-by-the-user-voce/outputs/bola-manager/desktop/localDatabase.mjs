@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { serialize, deserialize } from "node:v8";
 import { setTimeout as delay } from "node:timers/promises";
@@ -59,7 +59,37 @@ function decode(bytes) {
   return envelope.state;
 }
 
-export async function openLocalDatabase(directory, initialState, { atomicWrite, renameFile } = {}) {
+const ROTATION_FILE = /^career-\d{8}T\d{9}Z-[0-9a-f]{8}\.bolasave$/;
+
+/**
+ * Keeps a copy of the save as it was when this session opened, so a logic bug
+ * that corrupts state cannot overwrite the only copy. Writes the exact
+ * committed bytes, keeps the newest `keep` copies and only ever deletes its
+ * own files (strict name pattern) inside backups/rotation.
+ */
+export async function rotateSessionBackup(root, bytes, { keep = 5, now = () => new Date(), renameFile } = {}) {
+  if (!Number.isInteger(keep) || keep < 1) throw failure("LOCAL_SAVE_ROTATION_INVALID", "Quantidade de backups invalida.");
+  const directory = join(root, "backups", "rotation");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const stamp = now().toISOString().replace(/[-:.]/g, "");
+  const name = `career-${stamp}-${randomUUID().slice(0, 8)}.bolasave`;
+  const temporary = join(directory, `${name}.pending`);
+  let handle;
+  try {
+    handle = await open(temporary, "wx", 0o600);
+    await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = null;
+    await renameWithRetry(temporary, join(directory, name), { renameFile });
+  } finally {
+    await handle?.close();
+    await unlink(temporary).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
+  const own = (await readdir(directory)).filter((file) => ROTATION_FILE.test(file)).sort();
+  const removed = own.slice(0, Math.max(0, own.length - keep));
+  for (const file of removed) await unlink(join(directory, file));
+  return { file: name, kept: own.length - removed.length, removed: removed.length };
+}
+
+export async function openLocalDatabase(directory, initialState, { atomicWrite, renameFile, rotateBackups = null } = {}) {
   const root = resolve(directory);
   await mkdir(root, { recursive: true, mode: 0o700 });
   const lockPath = join(root, "session.lock");
@@ -86,6 +116,7 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
   const path = join(root, "career.bolasave");
   let state;
   let committedBytes;
+  let openedExisting = false;
   let queue = Promise.resolve();
   let closed = false;
   let closePromise;
@@ -116,6 +147,7 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
         if ((await handle.stat()).size > MAX_BYTES + 40) throw failure("LOCAL_SAVE_TOO_LARGE", "Save local grande demais.");
         committedBytes = await handle.readFile();
         state = decode(committedBytes);
+        openedExisting = true;
       } finally { await handle.close(); }
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -126,6 +158,12 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
     }
   } catch (error) { await release(); throw error; }
   deepFreeze(state);
+  // Only an existing save is rotated; a brand-new one has nothing to protect yet.
+  let rotation = null;
+  if (rotateBackups && openedExisting) {
+    try { rotation = await rotateSessionBackup(root, committedBytes, { ...rotateBackups, renameFile }); }
+    catch (error) { rotation = { error: error.code ?? "LOCAL_SAVE_ROTATION_FAILED" }; }
+  }
 
   function enqueue(operation) {
     if (closed) return Promise.reject(failure("LOCAL_SAVE_CLOSED", "Save local fechado."));
@@ -135,6 +173,8 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
   }
   return {
     path,
+    // Result of the per-session backup rotation (null when disabled or new save).
+    rotation,
     // Readers see the frozen committed state; only their result is cloned (D-01).
     read: (operation) => enqueue(async () => structuredClone(await operation(state))),
     transaction: (operation, { backup = false } = {}) => enqueue(async () => {
