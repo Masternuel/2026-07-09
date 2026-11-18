@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiFootballError, createApiFootballClient, createFileCache } from "../server/import/apiFootball/client.mjs";
-import { buildCatalogRecords, divisionFor } from "../server/import/apiFootball/catalogBuilder.mjs";
+import { buildCatalogRecords, divisionFor, standingsByTeam } from "../server/import/apiFootball/catalogBuilder.mjs";
 import { createCatalogDatabasePackage } from "../server/services/catalogDatabase.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -55,27 +55,38 @@ export async function downloadDivisions(client, season, { partial = false, log =
   }
   if (!divisions.length) throw new ApiFootballError(`Nenhuma Serie A-D encontrada para ${season}`, "API_FOOTBALL_EMPTY");
   divisions.sort((a, b) => a.level - b.level);
+  // Once the daily quota is gone, keep going from the cache only, so everything already
+  // downloaded is still used and no request is wasted.
   let quota = null;
-  for (const entry of divisions) {
-    entry.teams = [];
-    entry.squads = new Map();
-    try {
-      entry.teams = await client.get("/teams", { league: entry.league.id, season });
-    } catch (error) {
+  const fetchStep = async (path, params) => {
+    if (quota) return client.get(path, params, { cacheOnly: true });
+    try { return await client.get(path, params); }
+    catch (error) {
       if (error.code !== "API_FOOTBALL_QUOTA") throw error;
-      quota = error; break;
+      quota = error;
+      return null;
     }
-    log(`${entry.division}: ${entry.teams.length} clubes`);
+  };
+  for (const entry of divisions) {
+    entry.teams = (await fetchStep("/teams", { league: entry.league.id, season })) ?? [];
+    entry.squads = new Map();
+    if (entry.teams.length) log(`${entry.division}: ${entry.teams.length} clubes`);
   }
-  outer: for (const entry of divisions) {
+  // Final table ranks club strength; optional, so a missing table only falls back to stadium size.
+  for (const entry of divisions) {
+    entry.standings = new Map();
+    if (!entry.teams.length) continue;
+    try {
+      entry.standings = standingsByTeam((await fetchStep("/standings", { league: entry.league.id, season })) ?? []);
+    } catch (error) {
+      if (!["API_FOOTBALL_PLAN", "API_FOOTBALL_FAILED"].includes(error.code)) throw error;
+      log(`${entry.division}: classificacao indisponivel (${error.message})`);
+    }
+  }
+  for (const entry of divisions) {
     for (const { team } of entry.teams) {
-      try {
-        const [squad] = await client.get("/players/squads", { team: team.id });
-        entry.squads.set(team.id, squad?.players ?? []);
-      } catch (error) {
-        if (error.code !== "API_FOOTBALL_QUOTA") throw error;
-        quota = error; break outer;
-      }
+      const response = await fetchStep("/players/squads", { team: team.id });
+      if (response) entry.squads.set(team.id, response[0]?.players ?? []);
     }
   }
   const totalTeams = divisions.reduce((sum, entry) => sum + entry.teams.length, 0);
@@ -99,7 +110,8 @@ async function main() {
   for (const league of report.leagues) console.log(`  ${league.division}: ${league.clubs} clubes, ${league.players} jogadores`);
   console.log(`Elencos baixados: ${downloaded}/${totalTeams}. Jogadores gerados para completar elencos: ${report.generatedPlayers}.`);
   if (report.missingSquads.length) console.log(`Clubes sem elenco da API: ${report.missingSquads.length}`);
-  console.log(`Consultas usadas: ${client.stats.requests} (cache: ${client.stats.cacheHits})${client.stats.remaining == null ? "" : `, restantes hoje: ${client.stats.remaining}`}`);
+  // The API's remaining-requests header does not track the daily quota reliably; don't show it.
+  console.log(`Consultas usadas nesta execucao: ${client.stats.requests} (respondidas pelo cache: ${client.stats.cacheHits})`);
   console.log(`Base gerada: ${options.out}`);
   console.log("Importe em Editor da Base -> Selecionar base exportada.");
 }

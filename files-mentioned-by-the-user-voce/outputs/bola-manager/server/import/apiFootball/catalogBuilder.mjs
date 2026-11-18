@@ -81,8 +81,7 @@ export function targetOverall({ level, clubOffset = 0, age = 24, seed }) {
   return clamp(Math.round(base + clubOffset + ageAdjustment(age) + variance), 3, 19);
 }
 
-// Bigger stadium -> stronger club inside its division, from -1.5 to +1.5.
-export function clubOffsets(teams) {
+function capacityOffsets(teams) {
   const capacities = teams.map((item) => Number(item.venue?.capacity) || 0);
   const known = capacities.filter((value) => value > 0).sort((a, b) => a - b);
   const median = known.length ? known[Math.floor(known.length / 2)] : 0;
@@ -91,8 +90,40 @@ export function clubOffsets(teams) {
   return teams.map((_, index) => {
     if (sorted.length < 2 || sorted[0] === sorted.at(-1)) return 0;
     const rank = sorted.indexOf(values[index]) + sorted.lastIndexOf(values[index]);
-    return Number(((rank / (2 * (sorted.length - 1)) - 0.5) * 3).toFixed(2));
+    return (rank / (2 * (sorted.length - 1)) - 0.5) * 3;
   });
+}
+
+// Club strength inside its division, from -1.5 to +1.5: mostly the final position in the
+// season's table (rank inside its group for Serie D), plus stadium size; stadium only
+// when the table is unavailable.
+export function clubOffsets(teams, standings = new Map()) {
+  const capacity = capacityOffsets(teams);
+  return teams.map((item, index) => {
+    const row = standings.get(item.team?.id);
+    const value = row && row.groupSize > 1
+      ? 0.75 * ((1 - (row.rank - 1) / (row.groupSize - 1) - 0.5) * 3) + 0.25 * capacity[index]
+      : capacity[index];
+    return Number(clamp(value, -1.5, 1.5).toFixed(2));
+  });
+}
+
+// standings response -> Map(teamId -> { rank, groupSize }).
+export function standingsByTeam(response) {
+  const rows = new Map();
+  for (const item of response ?? []) {
+    for (const group of item?.league?.standings ?? []) {
+      for (const entry of group ?? []) {
+        if (entry?.team?.id != null && !rows.has(entry.team.id)) rows.set(entry.team.id, { rank: Number(entry.rank) || group.length, groupSize: group.length });
+      }
+    }
+  }
+  return rows;
+}
+
+// API names come in mixed case ("Vasco DA Gama"): keep Portuguese particles lowercase.
+export function clubName(name) {
+  return String(name).trim().replace(/(?<=\s)(DA|DE|DO|DAS|DOS|E)(?=\s)/g, (particle) => particle.toLowerCase());
 }
 
 function abbreviation(team) {
@@ -155,7 +186,7 @@ export function buildCatalogRecords(divisions, { fillSquads = true } = {}) {
   const report = { leagues: [], generatedPlayers: 0, missingSquads: [], duplicateTeams: 0, duplicatePlayers: 0 };
   for (const entry of [...divisions].sort((a, b) => a.level - b.level)) {
     const leagueId = `af-l${entry.league.id}`;
-    const offsets = clubOffsets(entry.teams);
+    const offsets = clubOffsets(entry.teams, entry.standings);
     let clubCount = 0;
     let playerCount = 0;
     entry.teams.forEach(({ team, venue }, index) => {
@@ -163,9 +194,9 @@ export function buildCatalogRecords(divisions, { fillSquads = true } = {}) {
       seenTeams.add(team.id);
       const clubId = `af-c${team.id}`;
       const clubOffset = offsets[index];
-      const reputation = clamp(Math.round(19 - (entry.level - 1) * 3 + clubOffset), 1, 20);
+      const reputation = clamp(Math.round(18 - (entry.level - 1) * 3 + clubOffset * 1.4), 1, 20);
       const club = {
-        id: clubId, name: String(team.name).trim(), abbreviation: abbreviation(team),
+        id: clubId, name: clubName(team.name), abbreviation: abbreviation(team),
         colors: [CLUB_COLORS[hashText(clubId) % CLUB_COLORS.length]],
         stadium: String(venue?.name ?? "").trim() || "A definir",
         stadiumCapacity: clamp(Number(venue?.capacity) || 0, 0, 500_000),

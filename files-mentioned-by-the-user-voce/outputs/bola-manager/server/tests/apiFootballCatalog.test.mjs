@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ApiFootballError, createApiFootballClient, createFileCache, createMemoryCache } from "../import/apiFootball/client.mjs";
-import { assignPositions, buildCatalogRecords, clubOffsets, divisionFor, targetOverall } from "../import/apiFootball/catalogBuilder.mjs";
+import { assignPositions, buildCatalogRecords, clubName, clubOffsets, divisionFor, standingsByTeam, targetOverall } from "../import/apiFootball/catalogBuilder.mjs";
 import { parseCatalogDatabase, createCatalogDatabasePackage } from "../services/catalogDatabase.mjs";
 import { downloadDivisions, parseArguments } from "../../scripts/catalog-update.mjs";
 
@@ -37,6 +37,12 @@ function fakeApi({ teamsPerLeague = 3, squadSize = 25, quota = Infinity, season 
         team: { id: league * 100 + index, name: `Clube ${league}-${index}`, code: index === 0 ? null : `C${index}` },
         venue: { name: `Estadio ${index}`, city: "Cidade", capacity: (index + 1) * 10_000 },
       })));
+    }
+    if (path === "/standings") {
+      const league = Number(url.searchParams.get("league"));
+      // Reverse order: the last club by id wins the table.
+      const rows = Array.from({ length: teamsPerLeague }, (_, index) => ({ rank: teamsPerLeague - index, team: { id: league * 100 + index } }));
+      return body([{ league: { id: league, standings: [rows] } }]);
     }
     if (path === "/players/squads") {
       const team = Number(url.searchParams.get("team"));
@@ -122,13 +128,13 @@ test("short squads are completed with generated players up to a playable size", 
 test("quota exhaustion stops with progress; cache lets the next run resume", async () => {
   const directory = await mkdtemp(join(tmpdir(), "api-football-cache-"));
   try {
-    const first = fakeApi({ quota: 8 });
+    const first = fakeApi({ quota: 12 });
     await assert.rejects(downloadDivisions(fastClient(first.fetchImpl, createFileCache(directory)), 2026), (error) => {
       assert.equal(error.code, "API_FOOTBALL_QUOTA");
       assert.match(error.message, /3 de 12 elencos/);
       return true;
     });
-    assert.ok((await readdir(directory)).length >= 8);
+    assert.ok((await readdir(directory)).length >= 12);
     const cacheText = (await Promise.all((await readdir(directory)).map((name) => readFile(join(directory, name), "utf8")))).join("");
     assert.ok(!cacheText.includes(KEY), "the API key must never be cached");
     const second = fakeApi();
@@ -141,7 +147,7 @@ test("quota exhaustion stops with progress; cache lets the next run resume", asy
 });
 
 test("partial mode returns what was downloaded and fills missing squads", async () => {
-  const api = fakeApi({ quota: 8 });
+  const api = fakeApi({ quota: 12 });
   const result = await downloadDivisions(fastClient(api.fetchImpl), 2026, { partial: true });
   assert.equal(result.incomplete, true);
   const { records, report } = buildCatalogRecords(result.divisions);
@@ -177,4 +183,45 @@ test("CLI arguments default to the current season and validate input", () => {
   assert.equal(parseArguments(["--season", "2025", "--partial"]).partial, true);
   assert.throws(() => parseArguments(["--season", "abc"]));
   assert.throws(() => parseArguments(["--bogus"]));
+});
+
+test("DNS falls back to public resolvers only when the system lookup cannot resolve", async () => {
+  const { createFallbackLookup } = await import("../import/apiFootball/client.mjs");
+  const notFound = (host, options, callback) => callback(Object.assign(new Error("nx"), { code: "ENOTFOUND" }));
+  const servers = [];
+  const resolver = { setServers: (value) => servers.push(...value), resolve4: (host, callback) => callback(null, ["104.20.39.36"]) };
+  const lookup = createFallbackLookup({ systemLookup: notFound, resolver });
+  assert.deepEqual(servers, ["1.1.1.1", "8.8.8.8"]);
+  assert.deepEqual(await new Promise((done) => lookup("v3.football.api-sports.io", {}, (...args) => done(args))), [null, "104.20.39.36", 4]);
+  assert.deepEqual(await new Promise((done) => lookup("x", { all: true }, (...args) => done(args))), [null, [{ address: "104.20.39.36", family: 4 }]]);
+  const system = createFallbackLookup({ systemLookup: (host, options, callback) => callback(null, "10.0.0.1", 4), resolver: { setServers() {}, resolve4: () => assert.fail("must not use fallback") } });
+  assert.deepEqual(await new Promise((done) => system("h", {}, (...args) => done(args))), [null, "10.0.0.1", 4]);
+});
+
+test("final table position drives club strength; names keep particles lowercase", async () => {
+  const api = fakeApi();
+  const result = await downloadDivisions(fastClient(api.fetchImpl), 2026);
+  const serieA = result.divisions[0];
+  assert.equal(serieA.standings.get(7102).rank, 1);
+  const { records } = buildCatalogRecords(result.divisions);
+  const clubs = records.clubs.filter((club) => club.leagueId === "af-l71");
+  assert.ok(clubs.find((club) => club.id === "af-c7102").reputation > clubs.find((club) => club.id === "af-c7100").reputation);
+  const groups = standingsByTeam([{ league: { standings: [[{ rank: 1, team: { id: 1 } }, { rank: 2, team: { id: 2 } }], [{ rank: 1, team: { id: 3 } }, { rank: 2, team: { id: 4 } }]] } }]);
+  assert.deepEqual(groups.get(3), { rank: 1, groupSize: 2 });
+  const offsets = clubOffsets([{ team: { id: 1 }, venue: {} }, { team: { id: 2 }, venue: {} }], groups);
+  assert.ok(offsets[0] > offsets[1]);
+  assert.equal(clubName("Vasco DA Gama"), "Vasco da Gama");
+  assert.equal(clubName("Brasil DE Pelotas"), "Brasil de Pelotas");
+  assert.equal(clubName("DE Sao Paulo"), "DE Sao Paulo");
+});
+
+test("hitting the quota on a table still uses every squad already in the cache", async () => {
+  const cache = createMemoryCache();
+  await downloadDivisions(fastClient(fakeApi().fetchImpl, cache), 2026);
+  for (const key of [...cache.entries.keys()]) if (key.startsWith("/standings")) cache.entries.delete(key);
+  const exhausted = fakeApi({ quota: 0 });
+  const result = await downloadDivisions(fastClient(exhausted.fetchImpl, cache), 2026, { partial: true });
+  assert.equal(result.downloaded, 12);
+  assert.equal(result.incomplete, true);
+  assert.equal(exhausted.calls.length, 1, "after the first refusal nothing else goes to the network");
 });

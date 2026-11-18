@@ -22,7 +22,8 @@ O arquivo sai em `.tmp/api-football/bola-manager-base-<temporada>.json`. Importe
 ## Como os dados são montados
 
 - **Da API:** nome do clube, estádio, cidade e capacidade; nome, idade, número e posição geral (goleiro/defensor/meio/atacante) de cada jogador.
-- **Gerado pelo jogo:** posição específica (ZAG/LD/LE, VOL/MC/MEI, ATA/PD/PE, distribuídas de forma estável), atributos, nota, valor de mercado, reputação e orçamento. A nota depende da divisão (Série A ≈ 13 de 20, Série D ≈ 8), do tamanho do estádio dentro da divisão e da idade (pico entre 23 e 30), com uma variação fixa por jogador: rodar de novo não muda os números.
+- **Também da API:** a classificação final da temporada, que define a força de cada clube dentro da divisão (o campeão fica mais forte que o lanterna; na Série D, pela posição no grupo).
+- **Gerado pelo jogo:** posição específica (ZAG/LD/LE, VOL/MC/MEI, ATA/PD/PE, distribuídas de forma estável), atributos, nota, valor de mercado, reputação e orçamento. A nota depende da divisão (Série A ≈ 13 de 20, Série D ≈ 8), da posição do clube na tabela (e, em menor peso, do tamanho do estádio) e da idade (pico entre 23 e 30), com uma variação fixa por jogador: rodar de novo não muda os números.
 - **Elencos curtos** (comuns na Série D) são completados com jogadores fictícios até 22, com pelo menos 2 goleiros; eles ficam marcados como `generated`.
 - Ligas com mais de 24 clubes (Série D) ficam em turno único.
 
@@ -30,5 +31,6 @@ O arquivo sai em `.tmp/api-football/bola-manager-base-<temporada>.json`. Importe
 
 - A API não informa nacionalidade nem o pé no elenco: todos entram como "Brasil". Ajuste no Editor quando importar.
 - Cores e escudos não vêm da API (escudos são marcas dos clubes); cada clube recebe uma cor provisória.
-- O plano grátis pode não liberar a temporada atual em algumas consultas; nesse caso o comando mostra a mensagem da API (por exemplo, quais temporadas o plano permite).
+- **O plano grátis só libera as temporadas 2022 a 2024** (verificado em 18/11/2026). Com ele, use `--season 2024`: as divisões e a classificação são de 2024, mas os elencos são os atuais (essa consulta não depende de temporada). Para as divisões da temporada atual, é preciso um plano pago.
+- As notas dos jogadores não usam desempenho real: dentro do mesmo clube, um titular pode sair com nota parecida com a de um reserva. Ajuste os destaques no Editor.
 - Confira os [termos da API-Football](https://www.api-football.com/terms) antes de distribuir uma base gerada junto com o jogo.

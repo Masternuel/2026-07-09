@@ -2,6 +2,8 @@
 // The key is only sent as a request header and never logged; successful responses are
 // cached on disk so a run interrupted by the daily quota resumes without spending it again.
 import { createHash } from "node:crypto";
+import dns from "node:dns";
+import https from "node:https";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -44,6 +46,48 @@ export function createFileCache(directory) {
   };
 }
 
+// Some Brazilian ISP resolvers return NXDOMAIN for api-sports.io. Resolve with the system
+// first and only fall back to public resolvers (Cloudflare, Google) for this host; the
+// system DNS settings are never changed.
+const PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8"];
+
+export function createFallbackLookup({ systemLookup = dns.lookup, resolver = new dns.Resolver() } = {}) {
+  resolver.setServers?.(PUBLIC_RESOLVERS);
+  return (hostname, options, callback) => {
+    systemLookup(hostname, options, (error, address, family) => {
+      if (!error) return callback(null, address, family);
+      if (!["ENOTFOUND", "EAI_AGAIN", "ESERVFAIL"].includes(error.code)) return callback(error);
+      resolver.resolve4(hostname, (fallbackError, addresses) => {
+        if (fallbackError || !addresses?.length) return callback(error);
+        if (options?.all) return callback(null, addresses.map((value) => ({ address: value, family: 4 })));
+        callback(null, addresses[0], 4);
+      });
+    });
+  };
+}
+
+// fetch-compatible subset (GET + JSON) over node:https using the fallback lookup.
+export function createHttpsFetch({ lookup = createFallbackLookup(), timeoutMs = 30_000 } = {}) {
+  return (url, { headers = {} } = {}) => new Promise((resolvePromise, reject) => {
+    const request = https.get(url, { headers, lookup, timeout: timeoutMs }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolvePromise({
+          ok: response.statusCode >= 200 && response.statusCode < 300,
+          status: response.statusCode,
+          headers: { get: (name) => response.headers[String(name).toLowerCase()] ?? null },
+          json: async () => JSON.parse(text),
+        });
+      });
+      response.on("error", reject);
+    });
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", reject);
+  });
+}
+
 // API-Football reports most failures as HTTP 200 with a non-empty `errors` object/array.
 function responseErrors(body) {
   const errors = body?.errors;
@@ -62,7 +106,7 @@ function classify(errors) {
 }
 
 export function createApiFootballClient({
-  key, fetchImpl = globalThis.fetch, cache = createMemoryCache(), minIntervalMs = 6_500,
+  key, fetchImpl = createHttpsFetch(), cache = createMemoryCache(), minIntervalMs = 6_500,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), maxRequests = Infinity,
 } = {}) {
   if (typeof key !== "string" || !key.trim()) throw new ApiFootballError("Chave da API-Football ausente", "API_FOOTBALL_KEY_MISSING");
@@ -100,10 +144,12 @@ export function createApiFootballClient({
 
   return {
     stats,
-    async get(path, params = {}) {
+    // cacheOnly: answer from the cache or return null, without spending a request.
+    async get(path, params = {}, { cacheOnly = false } = {}) {
       const keyText = cacheKey(path, params);
       const cached = await cache.get(keyText);
       if (cached) { stats.cacheHits += 1; return cached.response ?? []; }
+      if (cacheOnly) return null;
       const body = await request(path, params);
       await cache.set(keyText, body);
       return body.response ?? [];
