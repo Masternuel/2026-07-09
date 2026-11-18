@@ -61,8 +61,21 @@ test("Electron: two sandboxed launchers exchange a real WebRTC channel, persist 
     assert.equal(created.status, 201);
     roomCode = created.data.room.code;
     phase = "WebRTC pairing";
+    let started = Date.now();
     const offer = await host.page.evaluate((code) => window.bolaDesktop.peerCreateOffer(code), roomCode);
+    const offerMs = Date.now() - started;
+    started = Date.now();
     const answer = await guest.page.evaluate((value) => window.bolaDesktop.peerCreateAnswer(value), offer);
+    const answerMs = Date.now() - started;
+    // Candidate types show whether public STUN answered on this machine (srflx);
+    // not asserted, since CI networks may block UDP to the internet.
+    for (const [label, value, ms] of [["offer", offer, offerMs], ["answer", answer, answerMs]]) {
+      const sdp = JSON.parse(Buffer.from(value.slice("BOLA-P2P1.".length), "base64url").toString()).description.sdp;
+      const types = [...sdp.matchAll(/ typ (host|srflx|prflx|relay)/g)].map((match) => match[1]);
+      assert.ok(types.includes("host"), `${label} has local candidates`);
+      assert.ok(ms < 15_000, `${label} gathering stays within the budget (${ms} ms)`);
+      context.diagnostic(`${label}: ${ms} ms, candidates ${JSON.stringify(Object.fromEntries(["host", "srflx", "relay"].map((type) => [type, types.filter((item) => item === type).length])))}`);
+    }
     await host.page.evaluate((value) => window.bolaDesktop.peerAcceptAnswer(value), answer);
     await waitFor(async () => (await guest.page.evaluate(() => window.bolaDesktop.peerStatus())).connected);
     const hostStatus = await host.page.evaluate(() => window.bolaDesktop.peerStatus());
