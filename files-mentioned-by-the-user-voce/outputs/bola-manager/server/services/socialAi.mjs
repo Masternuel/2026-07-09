@@ -27,12 +27,12 @@ const emptyNewsArticle = () => ({
 });
 
 const generatedNewsArticleSchema = z.object({
-  publish: z.boolean().default(false),
-  source: z.string().trim().max(60).default(""),
-  sourceType: z.enum(["imprensa", "clube"]).default("imprensa"),
-  headline: z.string().trim().max(180).default(""),
-  body: z.string().trim().max(800).default(""),
-  tag: z.string().trim().max(40).default(""),
+  publish: z.boolean().prefault(false),
+  source: z.string().trim().max(60).prefault(""),
+  sourceType: z.enum(["imprensa", "clube"]).prefault("imprensa"),
+  headline: z.string().trim().max(180).prefault(""),
+  body: z.string().trim().max(800).prefault(""),
+  tag: z.string().trim().max(40).prefault(""),
 }).strict();
 
 const generatedBundleSchema = z.object({
@@ -41,7 +41,7 @@ const generatedBundleSchema = z.object({
     postId: z.string().trim().min(1).max(80),
     comments: z.array(generatedCommentSchema).min(1).max(2),
   }).strict()).max(8),
-  newsArticle: generatedNewsArticleSchema.optional().default(emptyNewsArticle),
+  newsArticle: generatedNewsArticleSchema.optional().prefault(emptyNewsArticle),
 }).strict();
 
 const SYSTEM_INSTRUCTION = [

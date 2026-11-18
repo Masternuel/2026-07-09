@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const editorEntitySchema = z.enum(["leagues", "clubs", "players", "tournaments"]);
 
-const editorPageLimitSchema = z.coerce.number().int().min(1).max(200).default(50);
+const editorPageLimitSchema = z.coerce.number().int().min(1).max(200).prefault(50);
 
 export const editorCatalogQuerySchema = z.object({
   limit: editorPageLimitSchema,
@@ -15,15 +15,16 @@ export const editorListQuerySchema = z.object({
   clubId: z.string().trim().min(1).max(128).optional(),
 }).strict();
 
-export const brasfootImportSessionIdSchema = z.string().uuid();
+// z.guid() keeps the permissive 8-4-4-4-12 check of zod 3; z.uuid() is RFC-strict in zod 4.
+export const brasfootImportSessionIdSchema = z.guid();
 
 export const brasfootImportFileQuerySchema = z.object({
   path: z.string().trim().min(1).max(512),
 }).strict();
 
 export const brasfootImportCommitSchema = z.object({
-  allowPartial: z.boolean().default(false),
-  importAssets: z.boolean().default(false),
+  allowPartial: z.boolean().prefault(false),
+  importAssets: z.boolean().prefault(false),
 }).strict();
 
 export const editorRecordIdSchema = z.union([z.string(), z.number()])
@@ -81,13 +82,13 @@ const attributesSchema = z.object({
   passe: playerAttributeSchema,
   peBom: playerAttributeSchema,
   peRuim: playerAttributeSchema,
-  forca: playerAttributeSchema.default(10),
-  resistencia: playerAttributeSchema.default(10),
-  impulsao: playerAttributeSchema.default(10),
-  reflexos: playerAttributeSchema.default(10),
-  posicionamentoGol: playerAttributeSchema.default(10),
-  saidaGol: playerAttributeSchema.default(10),
-  penaltis: playerAttributeSchema.default(10),
+  forca: playerAttributeSchema.prefault(10),
+  resistencia: playerAttributeSchema.prefault(10),
+  impulsao: playerAttributeSchema.prefault(10),
+  reflexos: playerAttributeSchema.prefault(10),
+  posicionamentoGol: playerAttributeSchema.prefault(10),
+  saidaGol: playerAttributeSchema.prefault(10),
+  penaltis: playerAttributeSchema.prefault(10),
 }).strict();
 
 const competitionLegsSchema = z.enum(["single", "double"]);
@@ -254,57 +255,57 @@ export const editorCreateSchemas = {
   leagues: z.object({
     id: editorRecordIdSchema,
     ...leagueFields,
-    country: leagueFields.country.default("Brasil"),
-    level: leagueFields.level.default(1),
-    division: leagueFields.division.default("Primeira divisao"),
-    legs: leagueFields.legs.default("double"),
-    prizeMoney: leagueFields.prizeMoney.default(0),
-    active: leagueFields.active.default(true),
+    country: leagueFields.country.prefault("Brasil"),
+    level: leagueFields.level.prefault(1),
+    division: leagueFields.division.prefault("Primeira divisao"),
+    legs: leagueFields.legs.prefault("double"),
+    prizeMoney: leagueFields.prizeMoney.prefault(0),
+    active: leagueFields.active.prefault(true),
   }).strict(),
   clubs: z.object({
     id: editorRecordIdSchema,
     ...clubFields,
-    abbreviation: clubFields.abbreviation.default(""),
-    colors: clubFields.colors.default([]),
-    darkThemeColor: clubFields.darkThemeColor.optional().default(null),
-    lightThemeColor: clubFields.lightThemeColor.optional().default(null),
-    stadium: clubFields.stadium.default("A definir"),
-    stadiumCapacity: clubFields.stadiumCapacity.default(0),
-    reputation: clubFields.reputation.default(10),
-    division: clubFields.division.default("Sem divisao"),
-    country: clubFields.country.default("Brasil"),
-    state: clubFields.state.optional().default(null),
-    city: clubFields.city.optional().default(null),
-    leagueId: clubFields.leagueId.optional().default(null),
-    budget: clubFields.budget.default(0),
-    crestImageUrl: clubFields.crestImageUrl.optional().default(null),
-    crestImagePath: clubFields.crestImagePath.optional().default(null),
-    active: clubFields.active.default(true),
+    abbreviation: clubFields.abbreviation.prefault(""),
+    colors: clubFields.colors.prefault([]),
+    darkThemeColor: clubFields.darkThemeColor.optional().prefault(null),
+    lightThemeColor: clubFields.lightThemeColor.optional().prefault(null),
+    stadium: clubFields.stadium.prefault("A definir"),
+    stadiumCapacity: clubFields.stadiumCapacity.prefault(0),
+    reputation: clubFields.reputation.prefault(10),
+    division: clubFields.division.prefault("Sem divisao"),
+    country: clubFields.country.prefault("Brasil"),
+    state: clubFields.state.optional().prefault(null),
+    city: clubFields.city.optional().prefault(null),
+    leagueId: clubFields.leagueId.optional().prefault(null),
+    budget: clubFields.budget.prefault(0),
+    crestImageUrl: clubFields.crestImageUrl.optional().prefault(null),
+    crestImagePath: clubFields.crestImagePath.optional().prefault(null),
+    active: clubFields.active.prefault(true),
   }).strict(),
   players: z.object({
     id: editorRecordIdSchema,
     ...playerFields,
-    nationality: playerFields.nationality.default("Brasil"),
-    shirtNumber: playerFields.shirtNumber.optional().default(null),
-    overall: playerFields.overall.default(10),
+    nationality: playerFields.nationality.prefault("Brasil"),
+    shirtNumber: playerFields.shirtNumber.optional().prefault(null),
+    overall: playerFields.overall.prefault(10),
     attributes: playerFields.attributes,
-    isStar: playerFields.isStar.default(false),
-    avatarImageUrl: playerFields.avatarImageUrl.optional().default(null),
-    avatarImagePath: playerFields.avatarImagePath.optional().default(null),
-    active: playerFields.active.default(true),
+    isStar: playerFields.isStar.prefault(false),
+    avatarImageUrl: playerFields.avatarImageUrl.optional().prefault(null),
+    avatarImagePath: playerFields.avatarImagePath.optional().prefault(null),
+    active: playerFields.active.prefault(true),
   }).strict(),
   tournaments: tournamentConsistency(z.object({
     id: editorRecordIdSchema,
     ...tournamentFields,
-    format: tournamentFields.format.default("league"),
-    teamCount: tournamentFields.teamCount.default(2),
-    legs: tournamentFields.legs.default("single"),
-    tiebreakers: tournamentFields.tiebreakers.default(["goal_difference", "goals_scored", "head_to_head"]),
-    teamIds: tournamentFields.teamIds.default([]),
-    trophyImageUrl: tournamentFields.trophyImageUrl.optional().default(null),
-    trophyImagePath: tournamentFields.trophyImagePath.optional().default(null),
-    prizeMoney: tournamentFields.prizeMoney.default(0),
-    active: tournamentFields.active.default(true),
+    format: tournamentFields.format.prefault("league"),
+    teamCount: tournamentFields.teamCount.prefault(2),
+    legs: tournamentFields.legs.prefault("single"),
+    tiebreakers: tournamentFields.tiebreakers.prefault(["goal_difference", "goals_scored", "head_to_head"]),
+    teamIds: tournamentFields.teamIds.prefault([]),
+    trophyImageUrl: tournamentFields.trophyImageUrl.optional().prefault(null),
+    trophyImagePath: tournamentFields.trophyImagePath.optional().prefault(null),
+    prizeMoney: tournamentFields.prizeMoney.prefault(0),
+    active: tournamentFields.active.prefault(true),
   }).strict()),
 };
 

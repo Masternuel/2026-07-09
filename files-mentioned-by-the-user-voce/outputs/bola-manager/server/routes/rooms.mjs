@@ -33,7 +33,7 @@ const rankingsQuerySchema = rankingQuerySchema.extend({
 }).strict();
 
 const opponentStudyQuerySchema = z.object({
-  depth: z.enum(["quick", "standard", "deep"]).default("standard"),
+  depth: z.enum(["quick", "standard", "deep"]).prefault("standard"),
   clubId: editorRecordIdSchema.optional(),
 }).strict();
 const opponentStudyStartSchema = opponentStudyQuerySchema.extend({

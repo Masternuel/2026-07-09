@@ -391,8 +391,10 @@ test("schema normalizado exige posicao canonica, reputacao inteira e completa li
     { country: normalized.leagues[0].country, level: normalized.leagues[0].level, division: normalized.leagues[0].division, active: normalized.leagues[0].active },
     { country: "Brasil", level: 1, division: "Primeira divisao", active: true },
   );
-  assert.throws(() => normalizeDataset({ ...raw, clubs: [{ ...raw.clubs[0], reputation: 10.5 }] }), /integer/);
-  assert.throws(() => normalizeDataset({ ...raw, players: [{ ...raw.players[0], position: "QUALQUER" }] }), /Invalid enum/);
+  // Assert on the rejected field, not on zod's wording (it changed between zod 3 and 4).
+  const rejects = (path) => (error) => error.issues?.some((issue) => issue.path.join(".") === path);
+  assert.throws(() => normalizeDataset({ ...raw, clubs: [{ ...raw.clubs[0], reputation: 10.5 }] }), rejects("clubs.0.reputation"));
+  assert.throws(() => normalizeDataset({ ...raw, players: [{ ...raw.players[0], position: "QUALQUER" }] }), rejects("players.0.position"));
 });
 
 test("commit registra progresso e conclusao em documento por execucao", async () => {
