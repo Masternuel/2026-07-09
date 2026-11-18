@@ -10,6 +10,7 @@ import {
 import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
+import { DesktopBrasfootFolderImport } from './DesktopBrasfootFolderImport';
 
 type ImportAction = 'browser' | 'preview' | 'bundled' | 'cancel' | 'commit';
 const countLabels = { leagues: 'Ligas', clubs: 'Clubes', players: 'Jogadores', tournaments: 'Torneios' } as const;
@@ -178,6 +179,8 @@ export function DesktopCatalogImport({ bridge = desktopBridge }: { bridge?: Desk
         <p className="catalog-subtle">Este instalador traz os clubes e elencos reais das Séries A, B, C e D, com atributos gerados. Use-a para as próximas carreiras; as existentes continuam com a base atual.</p>
         <Button variant="primary" icon={<Check size={16} aria-hidden="true" />} loading={pending === 'bundled'} disabled={Boolean(pending) || statusLoading} onClick={() => void selectFile('bundled')}>Usar base do Brasil incluída</Button>
       </section>}
+
+      <DesktopBrasfootFolderImport bridge={bridge} disabled={statusLoading || statusFailed || !status} />
 
       <ol className="desktop-catalog-import__steps">
         <li><span className="catalog-step-index" aria-hidden="true">01</span><div>

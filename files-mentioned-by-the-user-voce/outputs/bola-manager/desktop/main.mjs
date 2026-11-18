@@ -203,6 +203,26 @@ else {
           } finally { await handle.close(); }
         } finally { catalogDialogOpen = false; }
       },
+      async brasfootFolderPreview() {
+        if (catalogDialogOpen) throw new Error("LOCAL_IMPORT_BUSY");
+        catalogDialogOpen = true;
+        try {
+          if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
+          // The folder comes only from this native dialog; the renderer never sends a path.
+          const selection = await dialog.showOpenDialog(window, { title: "Selecionar a pasta do Brasfoot", properties: ["openDirectory"] });
+          if (selection.canceled || selection.filePaths.length !== 1) return null;
+          return await request("brasfootFolderPreview", selection.filePaths[0]);
+        } finally { catalogDialogOpen = false; }
+      },
+      brasfootFolderCancel: (id) => request("brasfootFolderCancel", typeof id === "string" ? id : ""),
+      async brasfootFolderCommit(value) {
+        const countries = Array.isArray(value?.countries) ? value.countries.filter((item) => typeof item === "string" && item.length <= 16).slice(0, 300) : [];
+        const result = await request("brasfootFolderCommit", { id: typeof value?.id === "string" ? value.id : "", countries });
+        origin = result.origin;
+        if (result.error) await dialog.showMessageBox(window, { type: "error", title: "Importação não concluída",
+          message: "A base anterior foi preservada. Confira a seleção de países e tente novamente." });
+        await window.loadURL(origin);
+      },
       async catalogCommit(id) {
         const value = await request("catalogCommit", id);
         origin = value.origin;

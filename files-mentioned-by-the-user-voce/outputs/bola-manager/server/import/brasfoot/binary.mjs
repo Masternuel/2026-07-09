@@ -180,22 +180,86 @@ function characteristicAttributes(player, overall, position) {
   ]));
 }
 
-function estimatedPlayerOverall(player, teamLevel) {
-  // O .ban da base traz nivel do time e marcadores do jogador, mas nao grava
-  // a forca/habilidades numericas criadas pelo motor ao iniciar uma carreira.
-  const age = clamp(Math.round(Number(field(player, "d", 27))), 16, 40);
-  const starterMultiplier = Number(field(player, "f", 0)) === 1 ? 1.2 : 1;
-  const fameMultiplier = field(player, "j", false) === true
-    ? 1.53
-    : field(player, "b", false) === true ? 1.28 : 1;
-  const rawHash = Number(field(player, "hash", 5));
-  const hashVariation = Math.max(-5, Math.min(5, (Number.isFinite(rawHash) ? rawHash : 5) - 5));
-  const rawStrength = Math.floor(
-    2.17 * teamLevel * starterMultiplier * fameMultiplier
-      - 0.28 * (age - 27) ** 2
-      + hashVariation,
-  );
-  return clamp(Math.round(clamp(rawStrength, 1, 100) / 5), 1, 20);
+// Bola Manager's own rating model for Brasfoot data. The .ban stores no numeric skills,
+// only the team level (1-25), age, position, the "craque" (b) and world-class (j) markers
+// and a 0-10 per-player seed (hash). Field f is NOT a starter flag (it is set on ~41% of
+// players, teenagers included), so it does not affect ratings.
+export function brasfootPlayerOverall({ teamLevel, age, position, craque = false, worldClass = false, youth = false, hash = 5 }) {
+  const level = clamp(teamLevel, 1, 25);
+  const peakEnd = position === "GOL" ? 33 : 30;
+  const ageDelta = age < 24 ? -(24 - age) * 0.6 : age > peakEnd ? -(age - peakEnd) * 0.55 : 0;
+  const seed = Number.isFinite(Number(hash)) ? Math.max(0, Math.min(10, Number(hash))) : 5;
+  const value = 1 + level * 0.55
+    + (worldClass ? 4.5 : craque ? 2.5 : 0)
+    + ageDelta
+    + (youth ? -1 : 0)
+    + (seed - 5) * 0.25;
+  return clamp(Math.round(value), 1, 20);
+}
+
+function estimatedPlayerOverall(player, teamLevel, { position, youth }) {
+  return brasfootPlayerOverall({
+    teamLevel,
+    age: clamp(Math.round(Number(field(player, "d", 27))), 14, 45),
+    position,
+    craque: field(player, "b", false) === true,
+    worldClass: field(player, "j", false) === true,
+    youth,
+    hash: field(player, "hash", 5),
+  });
+}
+
+export const MAX_STARS_PER_CLUB = 3;
+export const STAR_MIN_OVERALL = 15;
+
+// Brasfoot bases mark many players as "craque" (14 at Flamengo, 40-year-olds, academy kids).
+// A star in Bola Manager boosts matches and sponsors, so only world-class players and the
+// best senior "craques" of each club (rated 15+, at most 3 per club) become stars.
+export function selectClubStars(players) {
+  const eligible = players
+    .filter((player) => player.brasfootRoster !== "youth"
+      && (player.worldClass || (player.brasfootCraque && player.overall >= STAR_MIN_OVERALL)))
+    .sort((left, right) => Number(right.worldClass) - Number(left.worldClass) || right.overall - left.overall || left.age - right.age);
+  return new Set(eligible.slice(0, MAX_STARS_PER_CLUB).map((player) => player.id));
+}
+
+// The .ban files carry no division. Brasfoot base authors order each country's clubs by
+// strength (team field c, with fan base g as tie-break) so that filling the national
+// leagues in level order with their configured sizes (nTimes) yields the real divisions.
+export function assignClubsToLeagues(clubs, leagues) {
+  const byCountry = new Map();
+  for (const league of leagues) {
+    const size = Number(league.brasfootRaw?.nTimes);
+    if (!league.country || !Number.isInteger(size) || size < 2) continue;
+    if (!byCountry.has(league.country)) byCountry.set(league.country, []);
+    byCountry.get(league.country).push(league);
+  }
+  let assigned = 0;
+  for (const [country, countryLeagues] of byCountry) {
+    const candidates = clubs
+      .filter((club) => club.country === country && club.active !== false && !club.leagueId)
+      .sort((left, right) => (Number(right.brasfootRaw?.c) || 0) - (Number(left.brasfootRaw?.c) || 0)
+        || (Number(right.brasfootRaw?.g) || 0) - (Number(left.brasfootRaw?.g) || 0)
+        || String(left.name).localeCompare(String(right.name), "pt-BR"));
+    // Bases often keep two files for one club ("Bangu" twice); place only the strongest copy.
+    const seenNames = new Set();
+    const unique = candidates.filter((club) => {
+      const name = String(club.name).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
+      if (seenNames.has(name)) return false;
+      seenNames.add(name);
+      return true;
+    });
+    let cursor = 0;
+    for (const league of [...countryLeagues].sort((left, right) => left.level - right.level)) {
+      for (const club of unique.slice(cursor, cursor + Number(league.brasfootRaw.nTimes))) {
+        club.leagueId = league.id;
+        club.division = league.division;
+        assigned += 1;
+      }
+      cursor += Number(league.brasfootRaw.nTimes);
+    }
+  }
+  return assigned;
 }
 
 function uniqueRoster(team) {
@@ -246,11 +310,11 @@ export function mapBrasfootTeam(team, context = {}) {
   };
   const roster = uniqueRoster(team);
   const shirtNumbers = allocateShirtNumbers(roster);
-  const players = roster.map(({ player, rosterName }, index) => {
-    const isStar = field(player, "b", false) === true;
+  const mappedPlayers = roster.map(({ player, rosterName }, index) => {
+    const craque = field(player, "b", false) === true;
     const worldStar = field(player, "j", false) === true;
-    const overall = estimatedPlayerOverall(player, strength);
     const position = mapPosition(player);
+    const overall = estimatedPlayerOverall(player, strength, { position, youth: rosterName === "m" });
     return {
       id: `${clubId}-${playerIdentity(player)}`,
       clubId,
@@ -261,8 +325,10 @@ export function mapBrasfootTeam(team, context = {}) {
       shirtNumber: shirtNumbers[index],
       overall,
       attributes: characteristicAttributes(player, overall, position),
-      isStar,
+      isStar: false,
       worldStar,
+      worldClass: worldStar,
+      brasfootCraque: craque,
       starter: Number(field(player, "f", 0)) === 1,
       preferredSide: Number(field(player, "i", 0)) === 1 ? "Esquerdo" : "Direito",
       characteristics: [field(player, "g"), field(player, "h")]
@@ -274,6 +340,8 @@ export function mapBrasfootTeam(team, context = {}) {
       brasfootRaw: rawFields(player),
     };
   });
+  const stars = selectClubStars(mappedPlayers);
+  const players = mappedPlayers.map((player) => (stars.has(player.id) ? { ...player, isStar: true } : player));
   return { club, players };
 }
 
@@ -550,8 +618,10 @@ export async function parseBrasfootSource(inputPath, options = {}) {
       reportError(report, filePath, error, error instanceof JavaSerializationError);
     }
   }
+  const clubsInLeagues = assignClubsToLeagues(clubs, leagues);
   report.success = {
     clubs: clubs.length,
+    clubsInLeagues,
     players: players.length,
     seniorPlayers,
     youthPlayers,
