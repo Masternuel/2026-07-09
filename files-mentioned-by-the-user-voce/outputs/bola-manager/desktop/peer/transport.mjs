@@ -3,10 +3,18 @@ import { createFrameDecoder, encodeFrames } from "./framing.mjs";
 const bridge = window.peerNetwork;
 const peers = new Map();
 const LIMIT = 8 * 1024 * 1024;
+// Free public STUN servers only tell each PC its public address so two players on
+// different home networks can connect directly. No game data goes through them and
+// there is no relay (TURN): restrictive NATs (CGNAT, mobile) need a gaming VPN.
+const ICE_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
+const ICE_GATHERING_BUDGET_MS = 8_000;
+const PUBLIC_ADDRESS_SETTLE_MS = 400;
+// Internet links can drop briefly and recover on their own; only a lasting loss closes.
+const DISCONNECT_GRACE_MS = 8_000;
 function close(id) {
   const entry = peers.get(id);
   if (!entry) return;
-  peers.delete(id); clearTimeout(entry.pumpTimer); clearTimeout(entry.connectTimer);
+  peers.delete(id); clearTimeout(entry.pumpTimer); clearTimeout(entry.connectTimer); clearTimeout(entry.graceTimer);
   entry.decoder.clear(); entry.queue.length = 0;
   entry.channel?.close(); entry.connection.close(); bridge.closed(id);
 }
@@ -46,26 +54,52 @@ function attach(entry, channel) {
 }
 function create(id, proof) {
   if (!/^[a-f0-9-]{36}$/.test(id) || peers.has(id) || peers.size >= 7) throw new Error("PEER_LIMIT");
-  // No external signaling, STUN or TURN is contacted in the direct LAN/VPN increment.
-  const connection = new RTCPeerConnection({ iceServers: [], bundlePolicy: "max-bundle" });
+  // Signaling stays manual (invite/answer pasted by the players); STUN only discovers addresses.
+  const connection = new RTCPeerConnection({ iceServers: ICE_SERVERS, bundlePolicy: "max-bundle" });
   const entry = { id, connection, proof, channel: null, decoder: createFrameDecoder(), queue: [], bytes: 0, pumpTimer: null,
-    connectTimer: setTimeout(() => close(id), 300_000) };
+    graceTimer: null, connectTimer: setTimeout(() => close(id), 300_000) };
   peers.set(id, entry);
   connection.onconnectionstatechange = () => {
     if (["failed", "closed"].includes(connection.connectionState)) close(id);
   };
   connection.oniceconnectionstatechange = () => {
-    if (connection.iceConnectionState === "disconnected") close(id);
+    const state = connection.iceConnectionState;
+    if (state === "disconnected" && !entry.graceTimer) {
+      entry.graceTimer = setTimeout(() => close(id), DISCONNECT_GRACE_MS);
+    } else if (state === "connected" || state === "completed") {
+      clearTimeout(entry.graceTimer); entry.graceTimer = null;
+    } else if (state === "failed" || state === "closed") close(id);
   };
   connection.ondatachannel = ({ channel }) => attach(entry, channel);
   return entry;
 }
 async function localDescription(entry) {
-  if (entry.connection.iceGatheringState !== "complete") await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error("PEER_ICE_TIMEOUT")); }, 10_000);
-    const change = () => { if (entry.connection.iceGatheringState === "complete") { cleanup(); resolve(); } };
-    const cleanup = () => { clearTimeout(timer); entry.connection.removeEventListener("icegatheringstatechange", change); };
-    entry.connection.addEventListener("icegatheringstatechange", change); change();
+  // Over the internet Chromium rarely reports gathering "complete" (it keeps waiting on
+  // extra interfaces), so the code is ready once a public (STUN) address arrives, after
+  // a short settle for further ones. A blocked STUN server falls back to the local
+  // candidates after the budget instead of failing the whole invitation.
+  const connection = entry.connection;
+  const sdp = () => connection.localDescription?.sdp ?? "";
+  if (connection.iceGatheringState !== "complete") await new Promise((resolve, reject) => {
+    let settle = null;
+    const finish = () => { cleanup(); resolve(); };
+    const timer = setTimeout(() => {
+      cleanup();
+      if (sdp().includes("a=candidate:")) resolve();
+      else reject(new Error("PEER_ICE_TIMEOUT"));
+    }, ICE_GATHERING_BUDGET_MS);
+    const check = () => {
+      if (connection.iceGatheringState === "complete") finish();
+      else if (!settle && / typ (srflx|relay)/.test(sdp())) settle = setTimeout(finish, PUBLIC_ADDRESS_SETTLE_MS);
+    };
+    const cleanup = () => {
+      clearTimeout(timer); clearTimeout(settle);
+      connection.removeEventListener("icegatheringstatechange", check);
+      connection.removeEventListener("icecandidate", check);
+    };
+    connection.addEventListener("icegatheringstatechange", check);
+    connection.addEventListener("icecandidate", check);
+    check();
   });
   const description = entry.connection.localDescription;
   return { type: description.type, sdp: description.sdp };

@@ -2,7 +2,22 @@
 
 ## Use
 
-Run `npm run desktop` on each computer. For this increment, use the same LAN, a VPN providing peer reachability, or otherwise mutually reachable networks. There are no external ICE servers, signaling service or Steam relay; arbitrary internet/NAT connectivity is not guaranteed.
+Run the game (`Bola Manager Desktop.exe`, or `npm run desktop` from source) on each computer.
+
+### Jogar pela internet (guia rápido)
+
+1. O anfitrião cria uma carreira nova com 4, 6 ou 8 managers e clica em **Gerar convite** (leva de 1 a 3 segundos).
+2. Ele copia o convite e manda **em particular** para o amigo (WhatsApp, Discord…). O convite vale por 5 minutos e serve para um amigo só.
+3. O amigo cola o convite em **Receba o convite**, clica em **Gerar resposta** e manda a resposta de volta.
+4. O anfitrião cola a resposta em **Aceite a resposta**. Quando conectar, o amigo clica em **Entrar na carreira** e escolhe o clube.
+
+Funciona entre casas diferentes na maioria das redes domésticas: o jogo usa servidores STUN públicos e gratuitos (Google e Cloudflare) **só para descobrir o endereço de internet** de cada PC. Nenhum dado do jogo passa por eles, e não há servidor do jogo nem relay.
+
+**Se não conectar** (internet de operadora com NAT restritivo/CGNAT, internet móvel, rede corporativa) ou se o painel avisar que o computador **não descobriu seu endereço de internet**: instalem nos dois PCs a mesma VPN de jogos gratuita — **Radmin VPN**, **ZeroTier** ou **Tailscale** —, entrem na mesma rede dela e repitam o pareamento com um convite novo. Para o jogo, isso equivale a jogar na mesma rede local.
+
+Na mesma casa (mesma rede local), funciona sem VPN.
+
+### Details
 
 1. The host creates a **new** career with 4, 6 or 8 managers. Existing single-manager saves are not silently expanded.
 2. In the lobby, or **Configurações → Multiplayer P2P** during an active career, the host generates an invitation and sends it privately.
@@ -15,7 +30,7 @@ The host must stay running. Disconnecting the host stops guest access instead of
 
 ## Architecture and boundaries
 
-- `desktop/peer/transport.mjs` runs native, ordered/reliable WebRTC DataChannels in a hidden sandboxed Electron renderer. It owns the connection independently of React views. Manual SDP pairing pins DTLS fingerprints; data is encrypted by the browser's WebRTC implementation.
+- `desktop/peer/transport.mjs` runs native, ordered/reliable WebRTC DataChannels in a hidden sandboxed Electron renderer. ICE uses public STUN servers (Google, Cloudflare) only to learn each PC's public address; there is no TURN relay. The invite/answer is ready as soon as a public (srflx) address is found (plus a 400 ms settle), or after an 8 s budget with local candidates if STUN is blocked. A brief ICE `disconnected` state gets an 8 s grace before the peer is closed. It owns the connection independently of React views. Manual SDP pairing pins DTLS fingerprints; data is encrypted by the browser's WebRTC implementation.
 - The host's existing engine stays bound to `127.0.0.1` on an ephemeral port. No public HTTP listener, Redis proxy, firewall rule or port-forwarding is added.
 - `hostGateway.mjs` proxies only an allowlist of operations for the invited room into the real HTTP/Socket.IO handlers. Existing authorization still decides club/ownership/game actions using the authenticated device-derived UID, not IDs supplied by the guest.
 - `guestRelay.mjs` exposes a separate loopback-only frontend gateway protected by a per-connection capability and exact Host/Origin policy. Unauthorized/other-room/catalog-edit/save-creation/deletion operations are rejected. The renderer receives no Node, filesystem, shell or general network API.
@@ -27,7 +42,7 @@ The host must stay running. Disconnecting the host stops guest access instead of
 
 `npm run test:desktop` builds the desktop renderer, then tests bounded framing, device proof/stability, room/API scope, RPC abort/deadline, real engine authorization, shared tactics/match events and host-loss/reconnect. It also launches two actual Electron applications and tests a real WebRTC channel, shared save/roster flow, UI reload, fail-closed loss, host restart and absence of a guest career copy. Test profiles are disposable and created only below `.tmp`.
 
-The automated direct-transport validation uses two instances on one Windows machine. Cross-computer LAN/VPN, firewalls, sleep/resume and varying NAT topology still need user-environment validation. This increment does not claim public competitive anti-cheat, Steam authentication/Cloud/lobbies, installers, code signing, updating, internet relay or host migration. A local host can inspect/modify its own career and is not a trusted public authority.
+The automated direct-transport validation uses two instances on one Windows machine. Cross-computer LAN/VPN, firewalls, sleep/resume and varying NAT topology still need user-environment validation. This increment does not claim public competitive anti-cheat, Steam authentication/Cloud/lobbies, code signing, updating, a TURN relay or host migration. Internet play relies on STUN plus, for restrictive NATs, a gaming VPN chosen by the players. A local host can inspect/modify its own career and is not a trusted public authority.
 
 ### Local results — 2026-10-07
 

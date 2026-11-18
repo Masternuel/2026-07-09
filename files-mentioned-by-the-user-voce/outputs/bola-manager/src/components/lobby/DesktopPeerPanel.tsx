@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, Copy, Link2, Radio, RefreshCw, ShieldCheck, Unplug, Users } from 'lucide-react';
 import { desktopBridge, type DesktopBridge, type DesktopPeerStatus } from '../../lib/desktopClient';
+import { signalReachability } from '../../lib/peerSignal';
 import type { ManagerIdentity, Room } from '../../types';
 import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
@@ -37,6 +38,10 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
   const canHost = Boolean(room && owner && room.maxManagers > 1 && identity.mode === 'local');
   const connectedGuest = status?.mode === 'guest' && status.connected;
   const busy = action !== null;
+  // A host invitation with only LAN/VPN addresses means STUN was blocked on the host's
+  // network. The guest's answer is not checked: on the same LAN it legitimately stops at
+  // local addresses because the direct local path is found immediately.
+  const localOnly = !guest && Boolean(invitation) && signalReachability(invitation) === 'local-only';
 
   useEffect(() => {
     mounted.current = true;
@@ -207,10 +212,11 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
         </ol>
       )}
 
+      {localOnly && <p className="desktop-peer-panel__error" role="status">Este computador não descobriu seu endereço de internet (o STUN foi bloqueado pela rede). A conexão só deve funcionar na mesma rede local ou por VPN: para jogar pela internet, use uma VPN de jogos gratuita (Radmin VPN, ZeroTier ou Tailscale) nos dois computadores e gere um novo convite.</p>}
       {error && <p className="desktop-peer-panel__error" role="alert">{error}</p>}
       {notice && <p className="desktop-peer-panel__notice" role="status" aria-live="polite">{notice}</p>}
       <div className="desktop-peer-panel__privacy"><ShieldCheck size={15} aria-hidden="true" /><p>Convites e respostas contêm dados privados de pareamento e rede. Compartilhe só com amigos de confiança.</p></div>
-      <p className="desktop-peer-panel__network-note">WebRTC direto, sem servidor pago. Use LAN/VPN ou redes alcançáveis. Ainda sem STUN/TURN ou relay Steam; conexões pela internet com NAT não são garantidas. O anfitrião precisa ficar online: sem ele, a carreira remota para. Sem migração de anfitrião.</p>
+      <p className="desktop-peer-panel__network-note">Conexão direta entre os computadores (WebRTC), sem servidor pago. Funciona pela internet na maioria das redes domésticas, com STUN gratuito apenas para descobrir os endereços; não há relay TURN. Em redes restritivas (NAT de operadora, internet móvel, redes corporativas) ou se a conexão não abrir, usem uma VPN de jogos gratuita (Radmin VPN, ZeroTier ou Tailscale) e repitam o pareamento. O anfitrião precisa ficar online: sem ele, a carreira remota para. Sem migração de anfitrião.</p>
       {(identity.mode === 'peer' || status?.mode === 'guest' || status?.mode === 'host') && <Button className="desktop-peer-panel__disconnect" size="sm" variant="ghost" loading={action === 'disconnect'} disabled={busy} onClick={disconnect} icon={<Unplug size={13} />}>{guest ? 'Sair do P2P e voltar ao perfil local' : 'Encerrar P2P dos convidados'}</Button>}
     </section>
   );
