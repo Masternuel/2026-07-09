@@ -10,8 +10,9 @@ import {
 import { Badge } from '../shared/Badge';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
+import { DesktopBrasfootFolderImport } from './DesktopBrasfootFolderImport';
 
-type ImportAction = 'browser' | 'preview' | 'cancel' | 'commit';
+type ImportAction = 'browser' | 'preview' | 'bundled' | 'cancel' | 'commit';
 const countLabels = { leagues: 'Ligas', clubs: 'Clubes', players: 'Jogadores', tournaments: 'Torneios' } as const;
 
 export function localCatalogOrigin(value: string): string | null {
@@ -109,10 +110,10 @@ export function DesktopCatalogImport({ bridge = desktopBridge }: { bridge?: Desk
     }
   }
 
-  async function selectFile() {
-    if (!bridge || !startAction('preview')) return;
+  async function selectFile(source?: 'bundled') {
+    if (!bridge || !startAction(source ?? 'preview')) return;
     try {
-      const next = await bridge.catalogPreview();
+      const next = await bridge.catalogPreview(source);
       if (!mounted.current) {
         if (next) void bridge.catalogCancel(next.id).catch(() => undefined);
         return;
@@ -172,6 +173,14 @@ export function DesktopCatalogImport({ bridge = desktopBridge }: { bridge?: Desk
           <p className="catalog-subtle">{status.source === 'local-import' ? `Importada em ${catalogDate(status.importedAt)}.` : 'Catálogo inicial do launcher.'} {status.preservedCareers.toLocaleString('pt-BR')} carreira(s) preservada(s) neste computador.</p>
         </> : <p className="catalog-subtle">Nenhuma informação de catálogo disponível.</p>}
       </section>
+
+      {status?.bundledAvailable && <section className="desktop-catalog-import__active" aria-labelledby="desktop-catalog-bundled-title">
+        <header><span id="desktop-catalog-bundled-title"><Database size={16} aria-hidden="true" /> Base do Brasil incluída</span><Badge tone="info">Série A a D</Badge></header>
+        <p className="catalog-subtle">Este instalador traz os clubes e elencos reais das Séries A, B, C e D, com atributos gerados. Use-a para as próximas carreiras; as existentes continuam com a base atual.</p>
+        <Button variant="primary" icon={<Check size={16} aria-hidden="true" />} loading={pending === 'bundled'} disabled={Boolean(pending) || statusLoading} onClick={() => void selectFile('bundled')}>Usar base do Brasil incluída</Button>
+      </section>}
+
+      <DesktopBrasfootFolderImport bridge={bridge} disabled={statusLoading || statusFailed || !status} />
 
       <ol className="desktop-catalog-import__steps">
         <li><span className="catalog-step-index" aria-hidden="true">01</span><div>

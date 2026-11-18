@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { encodeSignal, parseSignal } from "./peer/identity.mjs";
 import { catalogExportAddress } from "./catalogImport.mjs";
+import { BUNDLED_CATALOG_RELATIVE_PATH, readBundledCatalogBytes } from "./bundledCatalog.mjs";
 import { MAX_CATALOG_DATABASE_BYTES } from "../server/services/catalogDatabase.mjs";
 import { createAiSettingsStore } from "./aiSettings.mjs";
 
@@ -97,7 +98,9 @@ else {
         app.quit();
       }
     });
-    ({ origin } = await request("start", undefined, { directory: join(app.getPath("userData"), "saves"), staticDirectory: join(root, "dist-desktop"), socialAiConfig }));
+    ({ origin } = await request("start", undefined, { directory: join(app.getPath("userData"), "saves"), staticDirectory: join(root, "dist-desktop"), socialAiConfig,
+      // Installed builds only: source runs and tests keep the deterministic starter catalog.
+      bundledCatalogPath: app.isPackaged ? join(root, BUNDLED_CATALOG_RELATIVE_PATH) : null }));
     networkWindow = new BrowserWindow({ show: false, webPreferences: {
       preload: join(root, "desktop/peer-network-preload.cjs"), partition: "bola-peer-network",
       nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
@@ -176,11 +179,17 @@ else {
         if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
         await shell.openExternal(address);
       },
-      async catalogPreview() {
+      async catalogPreview(source) {
         if (catalogDialogOpen) throw new Error("LOCAL_IMPORT_BUSY");
         catalogDialogOpen = true;
         try {
           if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
+          if (source === "bundled") {
+            // Only the database shipped with this build; the renderer never supplies a path.
+            const bytes = readBundledCatalogBytes(join(root, BUNDLED_CATALOG_RELATIVE_PATH));
+            if (!bytes) throw new Error("LOCAL_IMPORT_BUNDLED_MISSING");
+            return await request("catalogPreview", bytes);
+          }
           const selection = await dialog.showOpenDialog(window, { title: "Selecionar base exportada do Bola Manager",
             properties: ["openFile"], filters: [{ name: "Base Bola Manager", extensions: ["json"] }] });
           if (selection.canceled || selection.filePaths.length !== 1) return null;
@@ -193,6 +202,26 @@ else {
             return await request("catalogPreview", bytes);
           } finally { await handle.close(); }
         } finally { catalogDialogOpen = false; }
+      },
+      async brasfootFolderPreview() {
+        if (catalogDialogOpen) throw new Error("LOCAL_IMPORT_BUSY");
+        catalogDialogOpen = true;
+        try {
+          if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
+          // The folder comes only from this native dialog; the renderer never sends a path.
+          const selection = await dialog.showOpenDialog(window, { title: "Selecionar a pasta do Brasfoot", properties: ["openDirectory"] });
+          if (selection.canceled || selection.filePaths.length !== 1) return null;
+          return await request("brasfootFolderPreview", selection.filePaths[0]);
+        } finally { catalogDialogOpen = false; }
+      },
+      brasfootFolderCancel: (id) => request("brasfootFolderCancel", typeof id === "string" ? id : ""),
+      async brasfootFolderCommit(value) {
+        const countries = Array.isArray(value?.countries) ? value.countries.filter((item) => typeof item === "string" && item.length <= 16).slice(0, 300) : [];
+        const result = await request("brasfootFolderCommit", { id: typeof value?.id === "string" ? value.id : "", countries });
+        origin = result.origin;
+        if (result.error) await dialog.showMessageBox(window, { type: "error", title: "Importação não concluída",
+          message: "A base anterior foi preservada. Confira a seleção de países e tente novamente." });
+        await window.loadURL(origin);
       },
       async catalogCommit(id) {
         const value = await request("catalogCommit", id);

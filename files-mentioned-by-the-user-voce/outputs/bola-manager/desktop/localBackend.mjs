@@ -8,17 +8,21 @@ import { createDisabledRedisRuntime } from "../server/infrastructure/redisRuntim
 import { openLocalDatabase } from "./localDatabase.mjs";
 import { createFileStores } from "./fileStores.mjs";
 import { createStarterCatalog } from "./localCatalog.mjs";
+import { loadBundledCatalog } from "./bundledCatalog.mjs";
 import { LocalEditorCatalog } from "./localEditorCatalog.mjs";
 import { LocalEditorMedia } from "./localEditorMedia.mjs";
 import { createLocalBrasfootImport } from "./localBrasfootImport.mjs";
 import { catalogCounts } from "./catalogImport.mjs";
 import { createDesktopSocialAi } from "./socialAi.mjs";
 
-export async function startLocalBackend({ directory, staticDirectory, logger = console, socialAiConfig, socialAiFetch } = {}) {
+export async function startLocalBackend({ directory, staticDirectory, logger = console, socialAiConfig, socialAiFetch, bundledCatalogPath = null } = {}) {
   if (staticDirectory) await access(join(staticDirectory, "index.html"));
+  // A build with the real-club database starts new profiles with it; existing profiles keep
+  // their catalog and can switch from Editor da Base (same validated import + backup flow).
+  const bundledCatalog = loadBundledCatalog(bundledCatalogPath, logger);
   const database = await openLocalDatabase(directory, {
     profile: { uid: `local-${randomUUID()}`, displayName: "Manager", preferences: null },
-    catalog: createStarterCatalog(),
+    catalog: bundledCatalog ?? createStarterCatalog(),
     rooms: { rooms: [], deletedCodes: [], creationReceipts: [], history: [] },
     matches: [],
     news: { posts: [], operations: [] },
@@ -116,7 +120,8 @@ export async function startLocalBackend({ directory, staticDirectory, logger = c
       readPreferences: () => database.read((state) => state.profile.preferences),
       catalogStatus: () => database.read((state) => ({ counts: catalogCounts(state.catalog),
         source: state.catalogImport ? "local-import" : "local-starter", importedAt: state.catalogImport?.importedAt ?? null,
-        preservedCareers: state.rooms.rooms.filter((room) => Object.hasOwn(state.catalogArchives ?? {}, room.catalogOwnerId)).length })),
+        preservedCareers: state.rooms.rooms.filter((room) => Object.hasOwn(state.catalogArchives ?? {}, room.catalogOwnerId)).length,
+        bundledAvailable: Boolean(bundledCatalog) })),
       async writePreferences(value) {
         // Only a small JSON DTO may cross IPC; no paths, commands or SDK objects.
         const bytes = JSON.stringify(value);

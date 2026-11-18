@@ -89,9 +89,12 @@ test("mapeia clube, elenco senior e juniores com IDs estaveis", () => {
   assert.equal(result.players[0].position, "ATA");
   assert.equal(result.players[0].shirtNumber, 9);
   assert.equal(result.players[0].starter, true);
-  assert.equal(result.players[0].overall, 12);
+  assert.equal(result.players[0].overall, 13);
+  // Rated 13 (< 15): a "craque" marker alone does not make a star.
+  assert.equal(result.players[0].isStar, false);
+  assert.equal(result.players[0].brasfootCraque, true);
   assert.deepEqual(result.players[0].characteristics, ["Finalizacao", "Velocidade"]);
-  assert.deepEqual(result.players[0].attributes, { chute: 14, velocidade: 14 });
+  assert.deepEqual(result.players[0].attributes, { chute: 15, velocidade: 15 });
   assert.equal(result.players[0].brasfootRoster, "senior");
   assert.equal(result.players[1].position, "LE");
   assert.equal(result.players[1].shirtNumber, 6);
@@ -173,23 +176,23 @@ test("preserva sinais de goleiro e fisicos em atributos especificos", () => {
 
   const result = mapBrasfootTeam(team, { filenameStem: "clube_traits" });
   assert.deepEqual(result.players[0].attributes, {
-    defesa: 13,
-    nocao: 13,
-    posicionamentoGol: 12,
-    reflexos: 12,
+    defesa: 15,
+    nocao: 15,
+    posicionamentoGol: 14,
+    reflexos: 14,
   });
   assert.deepEqual(result.players[1].attributes, {
-    defesa: 11,
-    nocao: 11,
-    penaltis: 10,
-    saidaGol: 10,
+    defesa: 14,
+    nocao: 14,
+    penaltis: 13,
+    saidaGol: 13,
   });
   assert.deepEqual(result.players[2].attributes, {
-    nocao: 12,
-    chute: 12,
-    impulsao: 12,
-    forca: 12,
-    resistencia: 12,
+    nocao: 14,
+    chute: 14,
+    impulsao: 14,
+    forca: 14,
+    resistencia: 14,
   });
 
   const normalized = normalizeDataset({
@@ -224,45 +227,59 @@ test("cabeceio de zagueiro fortalece defesa sem criar chute de atacante", () => 
   assert.ok(first.attributes.chute <= Math.ceil(first.overall * 0.6));
 });
 
-test("estima forca variada sem saturar elencos fortes e limita clubes fracos", () => {
+test("notas: forca do time, craque, idade e base definem a nota; campo f nao altera", () => {
   const player = (name, fields = {}) => javaObject("e.g", {
     a: name, b: false, c: 29, d: 27, e: 3, f: 0, g: 4, h: 11, hash: 5, i: 0, j: false,
     ...fields,
   });
-  const strongPlayers = [
-    player("Reserva normal"),
-    player("Titular normal", { f: 1 }),
-    player("Reserva estrela", { b: true }),
-    player("Titular estrela", { b: true, f: 1 }),
-    player("Top mundial", { j: true }),
-    player("Top e estrela", { b: true, j: true }),
-    player("Top titular", { f: 1, j: true }),
-  ];
   const strongTeam = javaObject("e.t", {
-    a: 29, c: 25, d: "forte", e: "Forte FC", l: javaList(strongPlayers), m: javaList([]),
+    a: 29, c: 22, d: "forte", e: "Forte FC",
+    l: javaList([
+      player("Normal"), player("Normal marcado f", { f: 1 }), player("Craque", { b: true }),
+      player("Top mundial", { j: true }), player("Veterano craque", { b: true, d: 40 }), player("Garoto", { d: 18 }),
+    ]),
+    m: javaList([player("Base", { d: 17 })]),
   });
-  const strong = mapBrasfootTeam(strongTeam, { filenameStem: "forte" }).players;
-
-  assert.deepEqual(strong.map(({ overall }) => overall), [11, 13, 14, 17, 17, 17, 20]);
-  assert.ok(new Set(strong.map(({ overall }) => overall)).size >= 5);
-  assert.equal(strong.find(({ name }) => name === "Top mundial").overall, 17);
-  assert.equal(strong.find(({ name }) => name === "Top e estrela").overall, 17);
-  assert.ok(strong.some(({ overall }) => overall < 20));
+  const byName = Object.fromEntries(mapBrasfootTeam(strongTeam, { filenameStem: "forte" }).players.map((item) => [item.name, item]));
+  assert.equal(byName.Normal.overall, byName["Normal marcado f"].overall, "field f is not a starter flag");
+  assert.ok(byName.Craque.overall > byName.Normal.overall);
+  assert.ok(byName["Top mundial"].overall > byName.Craque.overall);
+  assert.ok(byName["Veterano craque"].overall < byName.Craque.overall - 3);
+  assert.ok(byName.Garoto.overall < byName.Normal.overall);
+  assert.ok(byName.Base.overall < byName.Garoto.overall);
+  assert.equal(byName.Normal.overall, 13);
+  assert.equal(byName["Top mundial"].overall, 18);
 
   const weakTeam = javaObject("e.t", {
-    a: 29,
-    c: 1,
-    d: "fraco",
-    e: "Fraco FC",
-    l: javaList([
-      player("Fraco normal", { hash: 0 }),
-      player("Fraco top titular", { f: 1, j: true, hash: 10 }),
-    ]),
+    a: 29, c: 1, d: "fraco", e: "Fraco FC",
+    l: javaList([player("Fraco normal", { hash: 0 }), player("Fraco craque", { b: true, hash: 10 })]),
     m: javaList([]),
   });
   const weak = mapBrasfootTeam(weakTeam, { filenameStem: "fraco" }).players;
-  assert.deepEqual(weak.map(({ overall }) => overall), [1, 2]);
-  assert.ok(weak.every(({ overall }) => overall >= 1 && overall <= 2));
+  assert.ok(weak.every(({ overall }) => overall >= 1 && overall <= 6));
+  assert.ok(weak.every(({ isStar }) => isStar === false));
+});
+
+test("estrelas: so craques nota 15+ e craques mundiais, no maximo 3 por clube, nunca da base", () => {
+  const player = (name, fields = {}) => javaObject("e.g", {
+    a: name, b: true, c: 29, d: 27, e: 3, f: 0, g: 4, h: 11, hash: 5, i: 0, j: false,
+    ...fields,
+  });
+  const team = javaObject("e.t", {
+    a: 29, c: 22, d: "estrelas", e: "Estrelas FC",
+    l: javaList([
+      ...Array.from({ length: 8 }, (_, index) => player(`Craque ${index}`, { hash: index })),
+      player("Craque idoso", { d: 40 }),
+      player("Mundial fraco de nota", { b: false, j: true, d: 36 }),
+    ]),
+    m: javaList([player("Craque da base", { d: 17, hash: 10 })]),
+  });
+  const players = mapBrasfootTeam(team, { filenameStem: "estrelas" }).players;
+  const stars = players.filter((item) => item.isStar);
+  assert.equal(stars.length, 3);
+  assert.ok(stars.some((item) => item.name === "Mundial fraco de nota"), "world-class players always rank first");
+  assert.ok(stars.every((item) => item.worldClass || item.overall >= 15));
+  assert.ok(!stars.some((item) => ["Craque idoso", "Craque da base"].includes(item.name)));
 });
 
 test("mapeia configuracao nacional e preserva regras cruas", () => {
@@ -597,4 +614,30 @@ test("runImport grava relatorio final mesmo quando a entrada falha", async () =>
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("divisoes: clubes de cada pais preenchem as ligas por forca, sem copias duplicadas", async () => {
+  const { assignClubsToLeagues } = await import("../import/brasfoot/binary.mjs");
+  const club = (id, name, country, c, g = 0) => ({ id, name, country, active: true, leagueId: null, division: "Sem divisao", brasfootRaw: { c, g } });
+  const clubs = [
+    club("fra", "Fraco", "BRA", 5), club("gra", "Grande", "BRA", 22, 50_000), club("med", "Medio", "BRA", 15),
+    club("gra2", "Grande", "BRA", 21), club("emp", "Empate menor torcida", "BRA", 15, 10), club("emp2", "Empate maior torcida", "BRA", 15, 900),
+    club("arg", "Argentino", "ARG", 20), club("sem", "Sem liga", "XYZ", 25),
+  ];
+  const leagues = [
+    { id: "BRA-2", country: "BRA", level: 2, division: "Serie B", brasfootRaw: { nTimes: 2 } },
+    { id: "BRA-1", country: "BRA", level: 1, division: "Serie A", brasfootRaw: { nTimes: 2 } },
+    { id: "ARG-1", country: "ARG", level: 1, division: "Primera", brasfootRaw: { nTimes: 20 } },
+  ];
+  assert.equal(assignClubsToLeagues(clubs, leagues), 5);
+  const byId = Object.fromEntries(clubs.map((item) => [item.id, item]));
+  assert.equal(byId.gra.leagueId, "BRA-1");
+  assert.equal(byId.emp2.leagueId, "BRA-1", "same strength: bigger fan base first");
+  assert.equal(byId.med.leagueId, "BRA-2");
+  assert.equal(byId.emp.leagueId, "BRA-2");
+  assert.equal(byId.emp.division, "Serie B");
+  assert.equal(byId.gra2.leagueId, null, "a duplicate copy of a club is not placed twice");
+  assert.equal(byId.fra.leagueId, null, "clubs beyond the configured sizes stay out of the leagues");
+  assert.equal(byId.arg.leagueId, "ARG-1");
+  assert.equal(byId.sem.leagueId, null);
 });

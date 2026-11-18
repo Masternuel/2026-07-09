@@ -2,11 +2,13 @@ import { startLocalBackend } from "./localBackend.mjs";
 import { createPeerRuntime } from "./peer/runtime.mjs";
 import { openLocalDatabase } from "./localDatabase.mjs";
 import { prepareCatalogImport, previewCatalogImport, commitCatalogImport, requireCatalogImportMode } from "./catalogImport.mjs";
+import { prepareBrasfootFolder, previewBrasfootFolder, commitBrasfootFolder } from "./brasfootFolderImport.mjs";
 
 let backend;
 let peers;
 let backendOptions;
 let candidate;
+let brasfootCandidate;
 let importOperation;
 let importing = false;
 async function initialize(options) {
@@ -23,6 +25,16 @@ async function applyImport(id) {
   if (!candidate || candidate.id !== id || Date.now() >= candidate.expiresAt) throw Object.assign(new Error(), { code: "LOCAL_IMPORT_EXPIRED" });
   const selected = candidate;
   candidate = null;
+  return restartWithCommit((database) => commitCatalogImport(database, selected));
+}
+async function applyBrasfootImport({ id, countries } = {}) {
+  await requireCatalogImportMode(backend, peers);
+  if (!brasfootCandidate || brasfootCandidate.id !== id || Date.now() >= brasfootCandidate.expiresAt) throw Object.assign(new Error(), { code: "LOCAL_IMPORT_EXPIRED" });
+  const selected = brasfootCandidate;
+  brasfootCandidate = null;
+  return restartWithCommit((database) => commitBrasfootFolder(database, selected, countries));
+}
+async function restartWithCommit(commit) {
   // Quiesce HTTP/matches before pinning old career catalogs; restart from committed disk.
   await peers.close();
   await backend.close();
@@ -32,7 +44,7 @@ async function applyImport(id) {
   let database;
   try {
     database = await openLocalDatabase(backendOptions.directory);
-    result = await commitCatalogImport(database, selected);
+    result = await commit(database);
   } catch (failure) { error = { code: failure.code ?? "LOCAL_IMPORT_FAILED" }; }
   finally { await database?.close(); }
   await initialize(backendOptions);
@@ -65,6 +77,18 @@ const handlers = {
     return previewCatalogImport(candidate, await backend.database.read((state) => state.rooms.rooms.length));
   },
   catalogCancel(id) { if (candidate?.id === id) candidate = null; },
+  async brasfootFolderPreview(path) {
+    await requireCatalogImportMode(backend, peers);
+    brasfootCandidate = null;
+    brasfootCandidate = await prepareBrasfootFolder(path);
+    return previewBrasfootFolder(brasfootCandidate);
+  },
+  brasfootFolderCancel(id) { if (brasfootCandidate?.id === id) brasfootCandidate = null; },
+  brasfootFolderCommit(value) {
+    importing = true;
+    importOperation = applyBrasfootImport(value).finally(() => { importing = false; });
+    return importOperation;
+  },
   catalogCommit(id) {
     importing = true;
     importOperation = applyImport(id).finally(() => { importing = false; });
@@ -77,7 +101,7 @@ const handlers = {
   peerStatus: () => peers.status(),
   peerEnterGuest: () => peers.activateGuest(),
   peerDisconnect: () => peers.disconnect(),
-  close: async () => { await importOperation?.catch(() => undefined); candidate = null; await peers.close(); await backend?.close(); backend = null; },
+  close: async () => { await importOperation?.catch(() => undefined); candidate = null; brasfootCandidate = null; await peers.close(); await backend?.close(); backend = null; },
 };
 process.parentPort.on("message", async ({ data }) => {
   try {
