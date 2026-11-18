@@ -38,7 +38,7 @@ export default [
   }),
   // Code that also runs in a page: Playwright evaluate callbacks and the WebRTC transport.
   {
-    files: ["e2e/**", "src/**/*.test.{ts,tsx}", "desktop/tests/*Electron.test.mjs", "desktop/peer/transport.mjs"],
+    files: ["e2e/**", "src/**/*.test.{ts,tsx}", "tests/frontend/**", "desktop/tests/*Electron.test.mjs", "desktop/peer/transport.mjs"],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 ];
