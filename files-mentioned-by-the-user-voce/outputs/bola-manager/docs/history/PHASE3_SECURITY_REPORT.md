@@ -141,7 +141,7 @@ O runbook propõe backup diário, retenção de 30 diários/12 mensais e exercí
 
 Restore documentado somente para projeto isolado, sem chamadas a provedores reais, com ordem de restauração, validação de mídia/propriedade, autenticação, quotas, carreira e partidas; rollback interrompe o laboratório e reinicia de backup em destino vazio. Nenhum comando de backup/restore foi executado nesta fase.
 
-Detalhamento: [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+Detalhamento: [BACKUP_RESTORE.md](../BACKUP_RESTORE.md).
 
 ## Validação final
 

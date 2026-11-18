@@ -408,6 +408,7 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
 | 2 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa2-quality`, PR #6 |
 | 3 | ✅ Concluída, com os limites listados abaixo | branch `chore/etapa3-reliability`, PR #7 |
 | 4 | ✅ Q-04, Q-03, Q-02 (4 subdomínios) e o item 5 concluídos; P-02 preparado, aguardando a configuração externa | PRs #8, #9, #10, #12, #13, #14, PR do item 5 e #11 (P-02, por último) |
+| 5 | ✅ Itens com benefício concreto concluídos; o resto foi decidido ou depende de você (ver abaixo) | PRs #16, #17 e o PR de docs |
 
 **Etapa 1, o que foi feito:**
 - **Dependências:** express 4.22.3 (proxy-addr 2.0.8, body-parser 1.20.9), override `qs` 6.17.1, sharp 0.35.5, electron 44.10.2, vite 6.4.5, concurrently 9.2.5 e transitivas. `npm audit` caiu de 20 para 7 achados. Restam `zod` (exige v4, breaking) e `minimatch` dentro do electron-builder (só no build).
@@ -475,6 +476,25 @@ As dependências entre etapas estão indicadas com "→". Cada etapa deve termin
   - Os testes de servidor ficaram em `server/tests`: o lugar já está certo, e movê-los reescreveria centenas de imports sem ganho.
   - Antes, `test:server` rodava também os testes de frontend; agora cada suíte roda só os seus.
   - **Testes que leem código-fonte:** o inventário heurístico encontrou 15 arquivos (12 de frontend, 3 de servidor) que leem fontes como texto e fazem asserções sobre o conteúdo. O maior é `uiClarityUi.test.mjs`, com 51 asserções de texto. Eles devem ser trocados aos poucos por testes de comportamento (renderização ou E2E); essa conversão não foi feita neste PR.
+
+**Etapa 5, o que foi feito:**
+- **zod 4 (PR #16):** fecha o último alerta alto com correção disponível. O comportamento foi preservado: `.default()` virou `.prefault()` (a semântica do zod 3) em 103 pontos, `z.record` passou a ter 2 argumentos e o ID de sessão usa `z.guid()`. Só muda a redação das mensagens padrão do zod, em inglês. O `fast-xml-parser` foi para a 5.12.1.
+- **Rotação de saves do desktop (PR #17):** cada abertura de um save existente copia os bytes exatos para `saves/backups/rotation/` e mantém as 5 cópias mais recentes. O save nunca é alterado, e uma falha na rotação não impede a abertura.
+- **Documentação:** os 20 relatórios `ETAPA_*`/`PHASE*` foram para `docs/history/`, com `docs/README.md` como índice da documentação atual. Os 45 links relativos dos Markdown foram verificados e resolvem.
+
+**Etapa 5, decidido não fazer ou dependente de você:**
+- **Express 5, React 19 e Vite 7:** não há alerta nem necessidade concreta, que é a regra da etapa.
+- **Tailwind `@theme` (Q-08):** exigiria mexer em `src/styles.css`, que o documento de continuidade pede para manter intacto (cores dos clubes). Só com a sua confirmação.
+- **Assinatura de código:** depende de um certificado.
+- **`npm audit` restante:** `picomatch` (alerta novo de ReDoS, sem versão corrigida publicada) e `minimatch`, ambos só em ferramentas de build.
+
+**Testes instáveis observados (não investigados):**
+- E2E "partida pausa no intervalo…" sob carga.
+- `halftimeMatch` ("reconexão no segundo tempo"): cerca de 2 s, sob carga.
+- "Redis obrigatório cai após conectar" no job de cobertura do PR #16.
+- "Redis lifecycle TCP real" (sockets residuais).
+
+Todos passam quando rodam sozinhos e já apareceram em código anterior às mudanças.
 
 **Etapa 4, limites e observações:**
 - O E2E "partida pausa no intervalo…" falha às vezes quando roda logo depois das suítes pesadas na mesma máquina: o título "Central do clube" não aparece em 15 s. Isso já acontecia antes da Etapa 4, e o teste passa quando roda sozinho. Ainda não foi investigado.

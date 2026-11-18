@@ -58,7 +58,7 @@ O workflow `Bola Manager CI`, em `.github/workflows/bola-manager-ci.yml` na raiz
 
 O E2E usa as telas, HTTP, Socket.IO e regras reais, substituindo somente autenticação externa e armazenamento por adaptadores em memória. Não carrega `.env` nem usa saves existentes. Relatórios ficam em `.tmp/e2e/`; no CI são retidos por sete dias. Para usar Edge instalado no Windows: `$env:E2E_CHANNEL = 'msedge'; npm run test:e2e`.
 
-Cobertura, limites e validação: [ETAPA_CI_E2E.md](docs/ETAPA_CI_E2E.md).
+Cobertura, limites e validação: [ETAPA_CI_E2E.md](docs/history/ETAPA_CI_E2E.md).
 
 ## Firebase e dados
 
@@ -73,7 +73,7 @@ Com Firebase Admin configurado, o backend verifica o ID token no REST e no hands
 - O cliente verifica o token a cada 60 segundos e envia `auth:refresh` quando necessário, mantendo a conexão e o mesmo UID. Após desconexão por expiração, tenta renovar o token antes de reconectar. Comandos do jogo não são repetidos automaticamente.
 - Logout fecha imediatamente as conexões locais e invalida verificações pendentes. `auth:logout` não revoga globalmente os tokens das outras sessões do usuário. Operações já admitidas antes do logout podem terminar.
 - Comandos encaminhados entre réplicas também autenticam as credenciais no destino. O canal Redis deve ser privado, autenticado e protegido por TLS em produção; não registre tokens em logs.
-- Implementação, testes e limites: [relatório da etapa](./docs/ETAPA_AUTENTICACAO_SOCKET.md).
+- Implementação, testes e limites: [relatório da etapa](./docs/history/ETAPA_AUTENTICACAO_SOCKET.md).
 
 O importador administrativo em `scripts/import-brasfoot.mjs` aceita JSON normalizado, `.ban`, `.cfg`, a pasta `teams` ou a raiz do Brasfoot. O parser lê Java Serialization como dados e nunca carrega classes da origem. Faça primeiro um `--dry-run --report`, confira corrompidos/duplicidades e consulte [scripts/BRASFOOT_IMPORT.md](./scripts/BRASFOOT_IMPORT.md) antes do commit.
 
@@ -99,7 +99,7 @@ No Editor, **Exportar base** gera um pacote JSON versionado com ligas, clubes, j
 
 O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootClubs` ainda está vazio ou indisponível, a interface identifica e usa os quatro clubes fictícios apenas como fallback de demonstração. Consulte [data/README.md](./data/README.md) antes de preparar uma importação. O Editor aceita escudos, avatares e troféus pelo backend. Para usar Cloudinary sem Firebase Storage, defina `MEDIA_STORAGE_PROVIDER=cloudinary` e `CLOUDINARY_URL` somente no Railway; o segredo nunca vai para o navegador. Firebase Storage continua disponível como alternativa com `FIREBASE_STORAGE_BUCKET`.
 
-Imagens externas passam por `/api/media/image`: somente HTTPS de Cloudinary (`image/upload`), Firebase Storage (`alt=media`) e avatares Google (`lh3.googleusercontent.com`). PNG/JPEG/WebP são decodificados e regravados, com teto de 5 MB, 4096 pixels por lado e 16 milhões de pixels; SVG/GIF e redirecionamentos são bloqueados. Links antigos de outras origens permanecem nos saves, mas exibem fallback; reenvie o arquivo pelo Editor. CSP bloqueia carregamento externo direto. Publique frontend e backend juntos; o frontend usa `VITE_SERVER_URL` ou o proxy `/api` existente. Limites, testes e operação: [segurança de imagens](./docs/ETAPA_IMAGENS_EXTERNAS.md).
+Imagens externas passam por `/api/media/image`: somente HTTPS de Cloudinary (`image/upload`), Firebase Storage (`alt=media`) e avatares Google (`lh3.googleusercontent.com`). PNG/JPEG/WebP são decodificados e regravados, com teto de 5 MB, 4096 pixels por lado e 16 milhões de pixels; SVG/GIF e redirecionamentos são bloqueados. Links antigos de outras origens permanecem nos saves, mas exibem fallback; reenvie o arquivo pelo Editor. CSP bloqueia carregamento externo direto. Publique frontend e backend juntos; o frontend usa `VITE_SERVER_URL` ou o proxy `/api` existente. Limites, testes e operação: [segurança de imagens](./docs/history/ETAPA_IMAGENS_EXTERNAS.md).
 
 ## Deploy
 
@@ -122,7 +122,7 @@ Imagens externas passam por `/api/media/image`: somente HTTPS de Cloudinary (`im
 - Adicione Redis/Valkey compartilhado, configure `REDIS_URL` e use duas ou mais réplicas. O health check é `/ready`; detalhes em [docs/MULTI_REPLICA.md](./docs/MULTI_REPLICA.md).
 - Configure Cloudinary por **um** método: `CLOUDINARY_URL` ou o trio `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Se uma chave aparecer em chat, log ou arquivo rastreável, gere outra, atualize Railway/`.env.local`, teste e revogue a antiga.
 - Para monitoramento, configure `METRICS_TOKEN` exclusivo no backend/coletor. `/metrics` fica desativado sem segredo; exige Bearer próprio, limita coletas e séries, sem códigos de sala nos labels. `/health` e `/ready` permanecem públicos. Consulte [coleta privada de métricas](./docs/MULTI_REPLICA.md#coleta-privada-de-métricas).
-- Mercado autônomo: recibos em `marketState.aiTickRuns`, logs `ai_market.*` e métricas `ai_market_*`. Falhas de integridade são registradas sem repetir; erros transitórios reconhecidos têm até 3 tentativas com rollback. Efeitos e recibo são gravados junto com a partida. Consulte [operação e testes do mercado IA](./docs/ETAPA_MERCADO_IA.md).
+- Mercado autônomo: recibos em `marketState.aiTickRuns`, logs `ai_market.*` e métricas `ai_market_*`. Falhas de integridade são registradas sem repetir; erros transitórios reconhecidos têm até 3 tentativas com rollback. Efeitos e recibo são gravados junto com a partida. Consulte [operação e testes do mercado IA](./docs/history/ETAPA_MERCADO_IA.md).
 
 ## Limites desta vertical slice
 

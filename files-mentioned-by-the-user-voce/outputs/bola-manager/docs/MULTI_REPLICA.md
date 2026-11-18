@@ -55,7 +55,7 @@ O registro preserva o formato de contadores, gauges e sumários, mas passa a ace
 
 Limites por instância: 2048 séries no total e 256 por métrica. Nomes/tipos desconhecidos, amostras inválidas e novas séries acima do teto são descartados; séries existentes continuam atualizando. `registry.series`, `maxSeries`, `maxSeriesPerMetric` e `droppedSamples` aparecem no JSON; alerte sobre crescimento de `droppedSamples`. Não existe fila de amostras descartadas. Novas instrumentações precisam ser declaradas na política; opções internas do registro têm tetos absolutos de 4096/512. Reinício ou `reset()` zera métricas; não são dados persistidos da carreira.
 
-Resultados desta correção: [etapa `/metrics`](./ETAPA_METRICS.md).
+Resultados desta correção: [etapa `/metrics`](./history/ETAPA_METRICS.md).
 
 ## Riscos residuais
 

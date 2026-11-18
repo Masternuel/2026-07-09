@@ -43,7 +43,7 @@ Validação final: 67/67 aprovados, reunindo os dois arquivos novos e `infrastru
 
 ## Riscos restantes e operação
 
-- Configurar `METRICS_TOKEN` no backend/coletor é uma ação de implantação ainda não executada. Sem isso, `/metrics` retorna `404`. Usar segredo aleatório, HTTPS/rede privada e rotação conforme [manual operacional](./MULTI_REPLICA.md#coleta-privada-de-métricas).
+- Configurar `METRICS_TOKEN` no backend/coletor é uma ação de implantação ainda não executada. Sem isso, `/metrics` retorna `404`. Usar segredo aleatório, HTTPS/rede privada e rotação conforme [manual operacional](../MULTI_REPLICA.md#coleta-privada-de-métricas).
 - Dashboards que filtravam recursos individuais ou rotas completas precisam adotar as categorias novas. Novas instrumentações devem entrar na política explícita; monitorar `registry.droppedSamples` para detectar descarte.
 - Limite de coletas é por instância, não global ao cluster. Proteção volumétrica de tentativas não autorizadas permanece responsabilidade do proxy/rede. Réplicas possuem métricas independentes e devem ser coletadas individualmente.
 - Validação usou HTTP/Express reais localmente e clientes de dependências simulados. Não houve deploy, coletor externo, Redis real ou teste de carga de produção. A suíte completa não foi executada; a falha preexistente de simulação documentada na etapa Socket não foi reavaliada aqui.
