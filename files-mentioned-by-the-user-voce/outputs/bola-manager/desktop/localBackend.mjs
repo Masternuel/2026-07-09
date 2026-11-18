@@ -22,7 +22,8 @@ export async function startLocalBackend({ directory, staticDirectory, logger = c
     rooms: { rooms: [], deletedCodes: [], creationReceipts: [], history: [] },
     matches: [],
     news: { posts: [], operations: [] },
-  });
+  }, { rotateBackups: { keep: 5 } });
+  if (database.rotation?.error) logger.warn?.(`Rotacao de backup do save falhou: ${database.rotation.error}`);
   let server;
   try {
     const profile = await database.read((state) => state.profile);
