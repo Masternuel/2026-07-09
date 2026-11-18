@@ -1,7 +1,7 @@
 {
   "name": "bola-manager",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "type": "module",
   "main": "desktop/main.mjs",
   "description": "Bola Manager — carreira local e multiplayer P2P",
