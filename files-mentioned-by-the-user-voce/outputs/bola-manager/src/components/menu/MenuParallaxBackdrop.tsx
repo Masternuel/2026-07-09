@@ -1,22 +1,28 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 
 const PARTICLES = Array.from({ length: 14 }, (_, index) => ({
   left: `${8 + (index * 67) % 88}%`,
   top: `${40 + (index * 37) % 58}%`,
-  animationDelay: `${-(index * 0.7).toFixed(1)}s`,
-}));
+  // A variable, not animation-delay: forced-on motion re-applies the animation with !important.
+  '--delay': `${-(index * 0.7).toFixed(1)}s`,
+}) as CSSProperties);
 
 /**
  * Main-menu scenery: stadium, floodlight glow, drifting particles and the player cut-out move
  * at different depths with the pointer (CSS variables --mx/--my, one rAF per frame, no React
- * re-render). Decorative only; disabled when the system asks for reduced motion.
+ * re-render). Decorative only; `motion` comes from useMenuMotion (OS preference or the player's choice).
  */
-export function MenuParallaxBackdrop({ showPlayer }: { showPlayer: boolean }) {
+export function MenuParallaxBackdrop({ showPlayer, motion = true }: { showPlayer: boolean; motion?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const node = ref.current;
-    if (!node || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (!node) return undefined;
+    if (!motion) {
+      node.style.setProperty('--mx', '0');
+      node.style.setProperty('--my', '0');
+      return undefined;
+    }
     let frame = 0;
     let x = 0;
     let y = 0;
@@ -41,10 +47,10 @@ export function MenuParallaxBackdrop({ showPlayer }: { showPlayer: boolean }) {
       document.documentElement.removeEventListener('pointerleave', reset);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [motion]);
 
   return (
-    <div ref={ref} className={`menu-parallax${showPlayer ? ' menu-parallax--home' : ''}`} aria-hidden="true">
+    <div ref={ref} className={`menu-parallax${showPlayer ? ' menu-parallax--home' : ''}${motion ? ' menu-parallax--motion' : ''}`} aria-hidden="true">
       <div className="menu-parallax__layer menu-parallax__stadium"><div className="menu-parallax__stadium-image" /></div>
       <div className="menu-parallax__layer menu-parallax__lights" />
       <div className="menu-parallax__layer menu-parallax__particles">

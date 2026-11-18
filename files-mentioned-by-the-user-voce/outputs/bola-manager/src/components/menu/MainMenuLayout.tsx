@@ -5,6 +5,7 @@ import type { ManagerIdentity } from '../../types';
 import { getMenuCapabilities, mainMenuPages, type MainMenuPageId } from './mainMenuModel';
 import { BrandLogo } from '../shared/BrandLogo';
 import { MenuParallaxBackdrop } from './MenuParallaxBackdrop';
+import { useMenuMotion } from './useMenuMotion';
 
 const pageIcons = { career: Gamepad2, 'new-game': Plus, continue: Play, multiplayer: Users, editor: Database, settings: Settings2, profile: UserRound, history: BarChart3, credits: BookOpen };
 
@@ -25,14 +26,15 @@ interface MainMenuLayoutProps {
 
 export function MainMenuLayout(props: MainMenuLayoutProps) {
   const capabilities = getMenuCapabilities(props.identity.mode);
+  const motion = useMenuMotion();
   const connected = props.connectionState === 'connected';
   const connectionLabel = props.identity.mode === 'demo' ? 'Modo demonstração'
     : connected ? props.identity.mode === 'local' ? 'Local' : props.identity.mode === 'peer' ? 'Anfitrião conectado' : 'Conectado'
       : props.connectionState === 'connecting' ? 'Conectando…' : props.identity.mode === 'peer' ? 'Anfitrião desconectado' : 'Conexão indisponível';
 
   return (
-    <div className="main-menu main-menu--scene">
-      <MenuParallaxBackdrop showPlayer={props.page === 'career' && !props.sessionSelected} />
+    <div className={`main-menu main-menu--scene${motion.enabled ? ' main-menu--motion' : ''}`}>
+      <MenuParallaxBackdrop showPlayer={props.page === 'career' && !props.sessionSelected} motion={motion.enabled} />
       <a className="main-menu__skip" href="#main-menu-content">Pular para o conteúdo</a>
       <aside className="main-menu__rail">
         <div className="main-menu__brand"><BrandLogo variant="menu" /></div>
@@ -64,7 +66,7 @@ export function MainMenuLayout(props: MainMenuLayoutProps) {
         </div>
       </aside>
       <div className="main-menu__workspace">
-        <header className="main-menu__topbar"><span><strong>{props.sessionSelected ? 'Temporada selecionada' : 'Menu principal'}</strong></span><span className={`main-menu__connection${connected ? ' is-connected' : ''}`}><Radio size={14} aria-hidden="true" />{connectionLabel}</span></header>
+        <header className="main-menu__topbar"><span><strong>{props.sessionSelected ? 'Temporada selecionada' : 'Menu principal'}</strong></span><span className="main-menu__topbar-tools"><label className="main-menu__motion" title={motion.systemReduced && !motion.enabled ? 'Desligadas porque os efeitos de animação do Windows estão desativados.' : undefined}><input type="checkbox" checked={motion.enabled} onChange={(event) => motion.setEnabled(event.target.checked)} /><span>Animações do menu</span></label><span className={`main-menu__connection${connected ? ' is-connected' : ''}`}><Radio size={14} aria-hidden="true" />{connectionLabel}</span></span></header>
         <main id="main-menu-content" className="main-menu__content" tabIndex={-1}>{props.children}</main>
         <footer className="main-menu__footer"><span>{capabilities.storageLabel}</span></footer>
       </div>
