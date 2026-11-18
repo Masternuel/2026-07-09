@@ -14,6 +14,7 @@ Documentos que descrevem o sistema **atual**. Os relatórios de execução de ca
 - [Instalador Windows](DESKTOP_INSTALLER.md).
 - [Editor local](DESKTOP_EDITOR.md) e [importação da base](DESKTOP_CATALOG_IMPORT.md).
 - [Multiplayer P2P direto](DESKTOP_P2P.md).
+- [Atualizar a base pela API-Football](API_FOOTBALL.md): Séries A–D com atributos gerados.
 - [Gemini no desktop](DESKTOP_GEMINI.md).
 - [Investigação de intermitências](DESKTOP_INTERMITTENCIES.md).
 

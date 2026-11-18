@@ -38,6 +38,7 @@
     "security:staging:media": "node scripts/security-staging-runner.mjs media",
     "security:staging:ai": "node scripts/security-staging-runner.mjs ai",
     "security:staging:cleanup": "node scripts/security-staging-runner.mjs cleanup",
+    "catalog:update": "node scripts/catalog-update.mjs",
     "import:brasfoot": "node scripts/import-brasfoot.mjs --dry-run --input ./data/brasfoot-normalized.json",
     "seed:builtin": "node scripts/seed-builtin-catalog.mjs --dry-run"
   },
