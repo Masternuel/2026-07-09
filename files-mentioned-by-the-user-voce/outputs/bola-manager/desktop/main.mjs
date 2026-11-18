@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { encodeSignal, parseSignal } from "./peer/identity.mjs";
 import { catalogExportAddress } from "./catalogImport.mjs";
+import { BUNDLED_CATALOG_RELATIVE_PATH, readBundledCatalogBytes } from "./bundledCatalog.mjs";
 import { MAX_CATALOG_DATABASE_BYTES } from "../server/services/catalogDatabase.mjs";
 import { createAiSettingsStore } from "./aiSettings.mjs";
 
@@ -97,7 +98,9 @@ else {
         app.quit();
       }
     });
-    ({ origin } = await request("start", undefined, { directory: join(app.getPath("userData"), "saves"), staticDirectory: join(root, "dist-desktop"), socialAiConfig }));
+    ({ origin } = await request("start", undefined, { directory: join(app.getPath("userData"), "saves"), staticDirectory: join(root, "dist-desktop"), socialAiConfig,
+      // Installed builds only: source runs and tests keep the deterministic starter catalog.
+      bundledCatalogPath: app.isPackaged ? join(root, BUNDLED_CATALOG_RELATIVE_PATH) : null }));
     networkWindow = new BrowserWindow({ show: false, webPreferences: {
       preload: join(root, "desktop/peer-network-preload.cjs"), partition: "bola-peer-network",
       nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
@@ -176,11 +179,17 @@ else {
         if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
         await shell.openExternal(address);
       },
-      async catalogPreview() {
+      async catalogPreview(source) {
         if (catalogDialogOpen) throw new Error("LOCAL_IMPORT_BUSY");
         catalogDialogOpen = true;
         try {
           if ((await request("peerStatus")).mode !== "offline") throw new Error("LOCAL_IMPORT_PEER_ACTIVE");
+          if (source === "bundled") {
+            // Only the database shipped with this build; the renderer never supplies a path.
+            const bytes = readBundledCatalogBytes(join(root, BUNDLED_CATALOG_RELATIVE_PATH));
+            if (!bytes) throw new Error("LOCAL_IMPORT_BUNDLED_MISSING");
+            return await request("catalogPreview", bytes);
+          }
           const selection = await dialog.showOpenDialog(window, { title: "Selecionar base exportada do Bola Manager",
             properties: ["openFile"], filters: [{ name: "Base Bola Manager", extensions: ["json"] }] });
           if (selection.canceled || selection.filePaths.length !== 1) return null;

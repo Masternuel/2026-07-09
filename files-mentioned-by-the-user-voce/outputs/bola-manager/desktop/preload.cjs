@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld("bolaDesktop", Object.freeze({
   writePreferences: (value) => ipcRenderer.invoke("desktop:writePreferences", value),
   catalogStatus: () => ipcRenderer.invoke("desktop:catalogStatus"),
   catalogOpenBrowser: (origin) => ipcRenderer.invoke("desktop:catalogOpenBrowser", origin),
-  catalogPreview: () => ipcRenderer.invoke("desktop:catalogPreview"),
+  catalogPreview: (source) => ipcRenderer.invoke("desktop:catalogPreview", source === "bundled" ? "bundled" : undefined),
   catalogCancel: (id) => ipcRenderer.invoke("desktop:catalogCancel", id),
   catalogCommit: (id) => ipcRenderer.invoke("desktop:catalogCommit", id),
   peerStatus: () => ipcRenderer.invoke("desktop:peerStatus"),

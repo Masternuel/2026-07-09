@@ -16,6 +16,8 @@ export interface DesktopCatalogStatus {
   source: 'local-starter' | 'local-import';
   importedAt: string | null;
   preservedCareers: number;
+  /** This build ships the real-club database (Serie A-D). */
+  bundledAvailable?: boolean;
 }
 
 export interface DesktopCatalogPreview {
@@ -42,7 +44,7 @@ export interface DesktopBridge {
   peerDisconnect: () => Promise<void>;
   catalogStatus: () => Promise<DesktopCatalogStatus>;
   catalogOpenBrowser: (origin: string) => Promise<void>;
-  catalogPreview: () => Promise<DesktopCatalogPreview | null>;
+  catalogPreview: (source?: 'bundled') => Promise<DesktopCatalogPreview | null>;
   catalogCancel: (id: string) => Promise<void>;
   catalogCommit: (id: string) => Promise<void>;
 }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ApiFootballError, createApiFootballClient, createFileCache, createMemoryCache } from "../import/apiFootball/client.mjs";
-import { assignPositions, buildCatalogRecords, clubName, clubOffsets, divisionFor, standingsByTeam, targetOverall } from "../import/apiFootball/catalogBuilder.mjs";
+import { assignPositions, buildCatalogRecords, clubName, clubOffsets, divisionFor, repairText, standingsByTeam, targetOverall } from "../import/apiFootball/catalogBuilder.mjs";
 import { parseCatalogDatabase, createCatalogDatabasePackage } from "../services/catalogDatabase.mjs";
 import { downloadDivisions, parseArguments } from "../../scripts/catalog-update.mjs";
 
@@ -224,4 +224,16 @@ test("hitting the quota on a table still uses every squad already in the cache",
   assert.equal(result.downloaded, 12);
   assert.equal(result.incomplete, true);
   assert.equal(exhausted.calls.length, 1, "after the first refusal nothing else goes to the network");
+});
+
+test("double-encoded API names are repaired; correct names are left alone", () => {
+  // Build the broken form the API returns: UTF-8 bytes read back as latin1.
+  const broken = (text) => Buffer.from(text, "utf8").toString("latin1");
+  for (const name of ["João Vítor", "Guizão", "Isaías Pereira"]) {
+    assert.notEqual(broken(name), name);
+    assert.equal(repairText(broken(name)), name);
+  }
+  assert.equal(repairText("São Paulo"), "São Paulo");
+  assert.equal(repairText("  Léo Ortiz "), "Léo Ortiz");
+  assert.equal(repairText(null), "");
 });

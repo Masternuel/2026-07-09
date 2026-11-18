@@ -11,7 +11,7 @@ import { createCatalogDatabasePackage } from "../server/services/catalogDatabase
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function parseArguments(argv, today = new Date()) {
-  const options = { season: today.getFullYear(), out: null, cache: resolve(root, ".tmp/api-football-cache"), maxRequests: Infinity, partial: false, fill: true, help: false };
+  const options = { season: today.getFullYear(), out: null, cache: resolve(root, ".tmp/api-football-cache"), maxRequests: Infinity, partial: false, fill: true, bundle: false, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--season") options.season = Number.parseInt(argv[++index], 10);
@@ -20,6 +20,7 @@ export function parseArguments(argv, today = new Date()) {
     else if (argument === "--max-requests") options.maxRequests = Number.parseInt(argv[++index], 10);
     else if (argument === "--partial") options.partial = true;
     else if (argument === "--no-fill") options.fill = false;
+    else if (argument === "--bundle") options.bundle = true;
     else if (argument === "--help" || argument === "-h") options.help = true;
     else throw new Error(`Argumento desconhecido: ${argument}`);
   }
@@ -37,6 +38,8 @@ A chave vem de API_FOOTBALL_KEY (ambiente ou .env.local) e nunca e exibida.
 Respostas ficam em cache (.tmp/api-football-cache): se a cota diaria acabar, rode de novo
 no dia seguinte e o download continua de onde parou. --partial gera a base mesmo com
 elencos faltando (completados com jogadores gerados). --no-fill nao gera jogadores.
+--bundle tambem copia a base para desktop/data/base-brasil.json, que entra no proximo
+instalador (npm run installer:windows) como base inicial.
 Depois importe o arquivo em Editor da Base -> Selecionar base exportada.`;
 
 function loadKey() {
@@ -113,6 +116,12 @@ async function main() {
   // The API's remaining-requests header does not track the daily quota reliably; don't show it.
   console.log(`Consultas usadas nesta execucao: ${client.stats.requests} (respondidas pelo cache: ${client.stats.cacheHits})`);
   console.log(`Base gerada: ${options.out}`);
+  if (options.bundle) {
+    const bundled = resolve(root, "desktop/data/base-brasil.json");
+    await mkdir(dirname(bundled), { recursive: true });
+    await writeFile(bundled, `${JSON.stringify(database)}\n`);
+    console.log(`Base incluida no proximo instalador: ${bundled}`);
+  }
   console.log("Importe em Editor da Base -> Selecionar base exportada.");
 }
 

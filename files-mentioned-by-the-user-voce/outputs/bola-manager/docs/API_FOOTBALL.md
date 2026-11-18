@@ -34,3 +34,12 @@ O arquivo sai em `.tmp/api-football/bola-manager-base-<temporada>.json`. Importe
 - **O plano grátis só libera as temporadas 2022 a 2024** (verificado em 18/11/2026). Com ele, use `--season 2024`: as divisões e a classificação são de 2024, mas os elencos são os atuais (essa consulta não depende de temporada). Para as divisões da temporada atual, é preciso um plano pago.
 - As notas dos jogadores não usam desempenho real: dentro do mesmo clube, um titular pode sair com nota parecida com a de um reserva. Ajuste os destaques no Editor.
 - Confira os [termos da API-Football](https://www.api-football.com/terms) antes de distribuir uma base gerada junto com o jogo.
+
+## Incluir a base no instalador
+
+```
+npm run catalog:update -- --season 2024 --bundle
+npm run installer:windows
+```
+
+`--bundle` copia a base para `desktop/data/base-brasil.json` (fora do Git). O instalador gerado em seguida já começa perfis novos com os clubes reais. Quem já tinha o jogo instalado continua com a base atual e pode trocar em **Editor da Base → Usar base do Brasil incluída** (as carreiras existentes são preservadas). Rodando pelo código-fonte (`npm run desktop`) e nos testes, a base incluída não é usada.

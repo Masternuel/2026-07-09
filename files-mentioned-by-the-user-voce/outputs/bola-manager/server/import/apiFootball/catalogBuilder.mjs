@@ -40,6 +40,27 @@ const FILLER_LAST_NAMES = Object.freeze([
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const unit = (seed) => (hashText(seed) % 10_000) / 10_000;
 
+// Some API names arrive double-encoded (UTF-8 read as cp1252): decode them back when that yields valid UTF-8.
+const MOJIBAKE = /[\u00c3\u00c2][\u0080-\u00bf\u2013-\u2122]/u;
+// Characters a cp1252/latin1-decoded UTF-8 string can contain, mapped back to their byte.
+const CP1252_BYTES = Object.freeze({
+  "\u20ac": 0x80, "\u201a": 0x82, "\u0192": 0x83, "\u201e": 0x84, "\u2026": 0x85, "\u2020": 0x86, "\u2021": 0x87,
+  "\u02c6": 0x88, "\u2030": 0x89, "\u0160": 0x8a, "\u2039": 0x8b, "\u0152": 0x8c, "\u017d": 0x8e, "\u2018": 0x91,
+  "\u2019": 0x92, "\u201c": 0x93, "\u201d": 0x94, "\u2022": 0x95, "\u2013": 0x96, "\u2014": 0x97, "\u02dc": 0x98,
+  "\u2122": 0x99, "\u0161": 0x9a, "\u203a": 0x9b, "\u0153": 0x9c, "\u017e": 0x9e, "\u0178": 0x9f,
+});
+export function repairText(value) {
+  const text = String(value ?? "").trim();
+  if (!MOJIBAKE.test(text)) return text;
+  const bytes = [];
+  for (const character of text) {
+    const code = CP1252_BYTES[character] ?? character.codePointAt(0);
+    if (code > 0xff) return text;
+    bytes.push(code);
+  }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes)); } catch { return text; }
+}
+
 export function divisionFor(leagueName) {
   return NATIONAL_DIVISIONS.find((item) => item.pattern.test(String(leagueName).trim())) ?? null;
 }
@@ -123,7 +144,7 @@ export function standingsByTeam(response) {
 
 // API names come in mixed case ("Vasco DA Gama"): keep Portuguese particles lowercase.
 export function clubName(name) {
-  return String(name).trim().replace(/(?<=\s)(DA|DE|DO|DAS|DOS|E)(?=\s)/g, (particle) => particle.toLowerCase());
+  return repairText(name).replace(/(?<=\s)(DA|DE|DO|DAS|DOS|E)(?=\s)/g, (particle) => particle.toLowerCase());
 }
 
 function abbreviation(team) {
@@ -198,10 +219,10 @@ export function buildCatalogRecords(divisions, { fillSquads = true } = {}) {
       const club = {
         id: clubId, name: clubName(team.name), abbreviation: abbreviation(team),
         colors: [CLUB_COLORS[hashText(clubId) % CLUB_COLORS.length]],
-        stadium: String(venue?.name ?? "").trim() || "A definir",
+        stadium: repairText(venue?.name) || "A definir",
         stadiumCapacity: clamp(Number(venue?.capacity) || 0, 0, 500_000),
         reputation, division: entry.division, country: "Brasil", state: null,
-        city: String(venue?.city ?? "").trim() || null, leagueId,
+        city: repairText(venue?.city) || null, leagueId,
         budget: Math.round((LEVEL_BUDGET[entry.level] ?? 200_000) * (1 + clubOffset * 0.3)),
         crestImageUrl: null, crestImagePath: null, active: true,
       };
@@ -217,7 +238,7 @@ export function buildCatalogRecords(divisions, { fillSquads = true } = {}) {
         seenPlayers.add(player.id);
         const age = clamp(Number.parseInt(player.age, 10) || 24, 15, 45);
         const shirtNumber = Number.isInteger(player.number) && player.number >= 0 && player.number <= 99 ? player.number : null;
-        clubPlayers.push(playerRecord({ id: `af-p${player.id}`, clubId, name: String(player.name).trim(), position: positions.get(player.id),
+        clubPlayers.push(playerRecord({ id: `af-p${player.id}`, clubId, name: repairText(player.name), position: positions.get(player.id),
           age, shirtNumber, overall: targetOverall({ level: entry.level, clubOffset, age, seed: player.id }), reputation }));
       }
       if (fillSquads) {

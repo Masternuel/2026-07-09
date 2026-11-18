@@ -13,6 +13,7 @@ export default {
     "desktop/**/*.mjs",
     "desktop/**/*.cjs",
     "desktop/*.html",
+    "desktop/data/base-brasil.json",
     "server/**/*.mjs",
     "shared/**/*.mjs",
     "!desktop/tests/**",
