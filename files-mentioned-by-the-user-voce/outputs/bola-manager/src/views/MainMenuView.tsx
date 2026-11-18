@@ -9,7 +9,7 @@ import { HistoryPage } from '../components/menu/HistoryPage';
 import { MainMenuLayout } from '../components/menu/MainMenuLayout';
 import { MultiplayerPage } from '../components/menu/MultiplayerPage';
 import { ProfilePage } from '../components/menu/ProfilePage';
-import { getMenuCapabilities, latestAuthorizedSave, sortAuthorizedSaves, type MainMenuPageId } from '../components/menu/mainMenuModel';
+import { formatSaveDate, getMenuCapabilities, latestAuthorizedSave, sortAuthorizedSaves, type MainMenuPageId } from '../components/menu/mainMenuModel';
 import { Button } from '../components/shared/Button';
 import { LobbyView, type LobbyPanelId, type LobbyViewProps } from './LobbyView';
 import { ConfigView } from './media/ConfigView';
@@ -86,7 +86,7 @@ export function MainMenuView(props: MainMenuViewProps) {
   }
 
   return <>
-    <MainMenuLayout identity={props.identity} page={props.page} connectionState={props.connectionState} canContinue={canContinue} continueReason={continueReason} pending={busy || exiting} sessionSelected={Boolean(props.room)} onNavigate={navigate} onExit={() => setExitOpen(true)}>
+    <MainMenuLayout identity={props.identity} page={props.page} connectionState={props.connectionState} canContinue={canContinue} continueReason={continueReason} continueDetail={latest ? `${latest.name} · ${formatSaveDate(latest)}` : undefined} pending={busy || exiting} sessionSelected={Boolean(props.room)} onNavigate={navigate} onExit={() => setExitOpen(true)}>
       {!props.room && props.error && <p className="form-error main-menu__error" role="alert">{props.error}</p>}
       {props.room ? <div className="menu-session-back"><Button variant="ghost" disabled={busy} icon={<ArrowLeft size={16} aria-hidden="true" />} onClick={deselectRoom}>Voltar ao menu</Button><span>Finalize a preparação ou entre na temporada selecionada.</span></div> : <>
         {props.page === 'career' && <CareerOverview identity={props.identity} latest={latest} clubs={props.clubs} loading={props.loading} pending={busy} continueReason={continueReason} onContinue={() => void continueCareer()} onNavigate={navigate} />}
