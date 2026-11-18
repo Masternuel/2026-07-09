@@ -70,6 +70,12 @@ test("producao sem Redis: HTTP 503 e handshake rejeitado antes dos handlers", as
   assert.equal(server.io.of("/").sockets.size, 0);
 });
 
+// Leak check for Redis details. requestId is a random UUID and can contain "6379"
+// by chance (~0.04% per id), which made this test fail intermittently; it is excluded.
+const leaksRedisDetails = (value) => /secret|private|6379/.test(
+  JSON.stringify(value, (key, item) => (key === "requestId" ? undefined : item)),
+);
+
 test("Redis obrigatorio cai apos conectar: comandos e HTTP bloqueados, recuperacao funciona", async (context) => {
   const redis = runtime();
   const { server, url } = await start(context, redis);
@@ -91,12 +97,12 @@ test("Redis obrigatorio cai apos conectar: comandos e HTTP bloqueados, recuperac
   redis.client.failure = true;
   const failedCommand = await client.timeout(1_000).emitWithAck("room:sync", { code: created.room.code });
   assert.equal(failedCommand.error.code, "REDIS_REQUIRED");
-  assert.equal(/secret|private|6379/.test(JSON.stringify(failedCommand)), false);
+  assert.equal(leaksRedisDetails(failedCommand), false);
   assert.equal(reached, 0);
   await assert.rejects(connect(context, url), (error) => error.data?.code === "REDIS_REQUIRED" && !/secret|6379/.test(error.message));
   const failedHttp = await jsonRequest(`${url}/api/rooms`, "owner-token");
   assert.equal(failedHttp.status, 503);
-  assert.equal(/secret|private|6379/.test(await failedHttp.text()), false);
+  assert.equal(leaksRedisDetails(await failedHttp.json()), false);
   redis.client.failure = false;
   assert.equal((await client.timeout(1_000).emitWithAck("room:sync", { code: created.room.code })).ok, true);
   assert.equal(reached, 1);
