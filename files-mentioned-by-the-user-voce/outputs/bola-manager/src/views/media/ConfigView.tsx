@@ -20,6 +20,7 @@ import {
 import { AudioSettingsPanel } from '../../components/audio/AudioSettingsPanel';
 import { DesktopPeerPanel } from '../../components/lobby/DesktopPeerPanel';
 import { DesktopAiSettingsPanel } from '../../components/settings/DesktopAiSettingsPanel';
+import { DesktopLocalAiPanel } from '../../components/settings/DesktopLocalAiPanel';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
 import { ResilientImage } from '../../components/shared/ResilientImage';
@@ -307,6 +308,7 @@ export function ConfigView({ onToast, room = null, showPeerPanel = true, embedde
           </section>
 
           <AudioSettingsPanel />
+          {desktopBridge && <DesktopLocalAiPanel guest={identity?.mode === 'peer'} />}
           {desktopBridge && <DesktopAiSettingsPanel guest={identity?.mode === 'peer'} />}
 
           <section className="settings-section" id="settings-access">

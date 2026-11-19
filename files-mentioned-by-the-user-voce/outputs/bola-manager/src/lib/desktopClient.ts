@@ -47,9 +47,29 @@ export interface DesktopBridge {
   catalogPreview: (source?: 'bundled') => Promise<DesktopCatalogPreview | null>;
   catalogCancel: (id: string) => Promise<void>;
   catalogCommit: (id: string) => Promise<void>;
+  localAiStatus?: () => Promise<DesktopLocalAiStatus>;
+  localAiDownload?: () => Promise<DesktopLocalAiStatus>;
+  localAiCancel?: () => Promise<DesktopLocalAiStatus>;
+  localAiSetEnabled?: (enabled: boolean) => Promise<DesktopLocalAiStatus>;
+  localAiRemove?: () => Promise<DesktopLocalAiStatus>;
   brasfootFolderPreview?: () => Promise<DesktopBrasfootPreview | null>;
   brasfootFolderCancel?: (id: string) => Promise<void>;
   brasfootFolderCommit?: (value: { id: string; countries: string[] }) => Promise<void>;
+}
+
+export interface DesktopLocalAiStatus {
+  modelId: string;
+  label: string;
+  bytes: number;
+  installed: boolean;
+  loaded: boolean;
+  downloading: boolean;
+  received: number;
+  downloadError: string | null;
+  threads: number;
+  lastGenerationMs: number | null;
+  enabled: boolean;
+  running: boolean;
 }
 
 export interface DesktopBrasfootCountry { country: string; leagues: number; clubs: number; players: number; crests: number; }
@@ -66,7 +86,7 @@ export interface DesktopAiSettings {
   enabled: boolean;
   storageAvailable: boolean;
   model: string;
-  lastResult: 'none' | 'gemini' | 'fallback';
+  lastResult: 'none' | 'gemini' | 'local' | 'fallback';
   lastError: string | null;
 }
 

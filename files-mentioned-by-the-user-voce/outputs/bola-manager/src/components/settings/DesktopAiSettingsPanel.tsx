@@ -11,6 +11,7 @@ interface DesktopAiSettingsPanelProps {
 
 function lastResultCopy(settings: DesktopAiSettings) {
   if (settings.lastResult === 'gemini') return 'A última resposta foi gerada pelo Gemini.';
+  if (settings.lastResult === 'local') return 'A última resposta foi gerada pela IA local deste computador.';
   if (settings.lastResult === 'fallback') return 'A última resposta usou o texto automático de reserva, não IA generativa.';
   return 'Nenhuma geração registrada nesta sessão.';
 }
