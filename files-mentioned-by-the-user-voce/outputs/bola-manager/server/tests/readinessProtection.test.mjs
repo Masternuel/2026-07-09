@@ -75,7 +75,7 @@ test("endpoint publico suporta probes legitimos sem 429 e limita consultas caras
   assert.equal((await fetch(`${url}/health`)).status, 200);
 });
 
-test("headers anti-framing sao servidos pelo HTTP e configurados no Vercel/dev/preview", async (context) => {
+test("headers anti-framing sao servidos pelo HTTP e configurados no dev/preview", async (context) => {
   const { server, url } = await startTestServer();
   context.after(() => server.close());
   for (const path of ["/health", "/ready", "/api/rooms", "/missing"]) {
@@ -84,10 +84,6 @@ test("headers anti-framing sao servidos pelo HTTP e configurados no Vercel/dev/p
     assert.equal(response.headers.get("x-frame-options"), "DENY");
   }
   assert.equal(HTTP_CSP, `${IMAGE_CSP}; frame-ancestors 'none'`);
-  const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
-  assert.equal(vercel.headers[0].source, "/(.*)");
-  assert.equal(vercel.headers[0].headers.find((header) => header.key === "Content-Security-Policy").value, HTTP_CSP);
-  assert.equal(vercel.headers[0].headers.find((header) => header.key === "X-Frame-Options").value, "DENY");
   const vite = await readFile(new URL("../../vite.config.ts", import.meta.url), "utf8");
   assert.equal((vite.match(/'X-Frame-Options': 'DENY'/g) ?? []).length, 2);
 });

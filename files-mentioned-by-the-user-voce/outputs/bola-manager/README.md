@@ -101,28 +101,9 @@ O lobby consulta o catálogo autenticado em `GET /api/teams`. Quando `brasfootCl
 
 Imagens externas passam por `/api/media/image`: somente HTTPS de Cloudinary (`image/upload`), Firebase Storage (`alt=media`) e avatares Google (`lh3.googleusercontent.com`). PNG/JPEG/WebP são decodificados e regravados, com teto de 5 MB, 4096 pixels por lado e 16 milhões de pixels; SVG/GIF e redirecionamentos são bloqueados. Links antigos de outras origens permanecem nos saves, mas exibem fallback; reenvie o arquivo pelo Editor. CSP bloqueia carregamento externo direto. Publique frontend e backend juntos; o frontend usa `VITE_SERVER_URL` ou o proxy `/api` existente. Limites, testes e operação: [segurança de imagens](./docs/history/ETAPA_IMAGENS_EXTERNAS.md).
 
-## Deploy
+## Distribuição
 
-### Vercel (frontend)
-
-- Root directory: raiz deste projeto.
-- Build command: `npm run build`.
-- Output directory: `dist`.
-- Defina `VITE_SERVER_URL` com a URL pública do Railway e, se usados, os valores `VITE_FIREBASE_*`.
-- `vercel.json` inclui o fallback de SPA.
-
-### Railway (backend)
-
-- Start command: `npm run server`.
-- Health check: `/health`.
-- Defina `CLIENT_ORIGIN` com o domínio Vercel, `PORT` (normalmente fornecido pelo Railway) e as credenciais Firebase Admin. Elas são obrigatórias em produção com `ROOM_STORE=firestore`.
-- Antes do deploy, valide origens exatas, IPs/CIDRs de `TRUST_PROXY` e HTTPS/HSTS conforme [hardening de configuração](docs/SECURITY_HARDENING.md). Wildcard em produção é recusado; sem proxy configurado, clientes atrás do mesmo proxy compartilham limite por IP. Backup/restore exige [homologação isolada](docs/BACKUP_RESTORE.md).
-- Defina `GEMINI_API_KEY` somente no Railway e, opcionalmente, `GEMINI_MODEL` (padrão: `gemini-3.5-flash`). `GEMINI_FALLBACK_MODELS` aceita modelos reserva separados por vírgula e usa `gemini-3.1-flash-lite` por padrão. Nunca use prefixo `VITE_` nessas chaves.
-- O servidor Socket.io deve permanecer em um serviço com conexões persistentes; não o publique como função serverless da Vercel.
-- Adicione Redis/Valkey compartilhado, configure `REDIS_URL` e use duas ou mais réplicas. O health check é `/ready`; detalhes em [docs/MULTI_REPLICA.md](./docs/MULTI_REPLICA.md).
-- Configure Cloudinary por **um** método: `CLOUDINARY_URL` ou o trio `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Se uma chave aparecer em chat, log ou arquivo rastreável, gere outra, atualize Railway/`.env.local`, teste e revogue a antiga.
-- Para monitoramento, configure `METRICS_TOKEN` exclusivo no backend/coletor. `/metrics` fica desativado sem segredo; exige Bearer próprio, limita coletas e séries, sem códigos de sala nos labels. `/health` e `/ready` permanecem públicos. Consulte [coleta privada de métricas](./docs/MULTI_REPLICA.md#coleta-privada-de-métricas).
-- Mercado autônomo: recibos em `marketState.aiTickRuns`, logs `ai_market.*` e métricas `ai_market_*`. Falhas de integridade são registradas sem repetir; erros transitórios reconhecidos têm até 3 tentativas com rollback. Efeitos e recibo são gravados junto com a partida. Consulte [operação e testes do mercado IA](./docs/history/ETAPA_MERCADO_IA.md).
+O jogo é distribuído como instalador Windows (`npm run installer:windows`, veja [docs/DESKTOP_INSTALLER.md](docs/DESKTOP_INSTALLER.md)). A versão web hospedada (Vercel, Railway, Firebase) foi descontinuada; os arquivos de deploy e os scripts de staging foram removidos. Os relatórios da época ficam em [`docs/history/`](docs/history/).
 
 ## Limites desta vertical slice
 

@@ -31,10 +31,7 @@ test("politica completa bloqueia scripts inline e eval, exceto o hash de tema", 
   assert.deepEqual(policy["base-uri"], ["'self'"]);
 });
 
-test("vercel e vite preview publicam a politica em modo report-only", async () => {
-  const vercel = JSON.parse(await read("vercel.json"));
-  const headers = vercel.headers[0].headers;
-  assert.equal(headers.find((header) => header.key === "Content-Security-Policy-Report-Only")?.value, APP_CSP_REPORT_ONLY);
+test("vite preview publica a politica em modo report-only", async () => {
   const vite = await read("vite.config.ts");
   assert.match(vite, /preview: \{ headers: \{[^}]*'Content-Security-Policy-Report-Only': APP_CSP_REPORT_ONLY/);
 });

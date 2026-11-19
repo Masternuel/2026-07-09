@@ -34,14 +34,6 @@ test("exemplo de ambiente nao publica credenciais", async () => {
   }
 });
 
-test("Railway usa readiness e multiplas replicas coordenadas", async () => {
-  const config = JSON.parse(await readFile(path.join(projectRoot, "railway.json"), "utf8"));
-  assert.ok(config.deploy.numReplicas >= 2);
-  assert.equal(config.deploy.multiRegionConfig, null);
-  assert.equal(config.deploy.healthcheckPath, "/ready");
-  assert.ok(config.deploy.overlapSeconds > 0);
-});
-
 test("RPC Socket.IO usa API de eventos entre servidores", async () => {
   const source = await readFile(path.join(projectRoot, "server", "sockets", "index.mjs"), "utf8");
   assert.match(source, /io\.serverSideEmitWithAck\("cluster:match-command"/);
@@ -54,12 +46,4 @@ test("exemplo de ambiente documenta Redis sem publicar URL", async () => {
   assert.equal(env.REDIS_URL, "");
   assert.ok(Number(env.LOCK_TTL_MS) > 0);
   assert.ok(Number(env.RATE_LIMIT_HTTP_MAX) > 0);
-});
-
-test("snapshots de partidas ativas nao ficam acessiveis pelo cliente Firebase", async () => {
-  const rules = await readFile(path.join(projectRoot, "firestore.rules"), "utf8");
-  assert.match(
-    rules,
-    /match \/activeMatches\/\{document=\*\*\}\s*\{\s*allow read, write: if false;\s*\}/,
-  );
 });
