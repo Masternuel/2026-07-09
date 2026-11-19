@@ -446,9 +446,6 @@
 .main-menu.main-menu--motion .main-menu__nav-item button { transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease !important; }
 .menu-parallax:not(.menu-parallax--motion) *, .menu-parallax:not(.menu-parallax--motion) .menu-parallax__layer { animation: none !important; transition: none !important; }
 .main-menu--scene:not(.main-menu--motion) .main-menu__nav-item--continue button::after { animation: none !important; }
-.main-menu__topbar-tools { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; justify-content: flex-end; }
-.main-menu__motion { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; cursor: pointer; }
-.main-menu__motion input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 
 /* No green left in the menu: "ok" states (connection, positive badges) use lavender. */
 .main-menu--scene .badge--positive { color: #c4b5fd; border-color: rgba(167, 139, 250, .35); background: rgba(139, 92, 246, .1); }

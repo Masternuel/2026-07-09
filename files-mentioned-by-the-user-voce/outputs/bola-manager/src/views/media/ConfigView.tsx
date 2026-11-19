@@ -21,6 +21,7 @@ import { AudioSettingsPanel } from '../../components/audio/AudioSettingsPanel';
 import { DesktopPeerPanel } from '../../components/lobby/DesktopPeerPanel';
 import { DesktopAiSettingsPanel } from '../../components/settings/DesktopAiSettingsPanel';
 import { DesktopLocalAiPanel } from '../../components/settings/DesktopLocalAiPanel';
+import { useMenuMotion } from '../../components/menu/useMenuMotion';
 import { Badge } from '../../components/shared/Badge';
 import { Button } from '../../components/shared/Button';
 import { ResilientImage } from '../../components/shared/ResilientImage';
@@ -84,6 +85,7 @@ const notificationOptions = [
 ] as const;
 
 export function ConfigView({ onToast, room = null, showPeerPanel = true, embedded = false }: ConfigViewProps) {
+  const menuMotion = useMenuMotion();
   const auth = useAuth();
   const settings = useUserPreferences();
   const browserNotifications = useNotifications();
@@ -300,6 +302,10 @@ export function ConfigView({ onToast, room = null, showPeerPanel = true, embedde
                   {settings.preferences.theme === key && <Check size={14} />}
                 </button>
               ))}
+            </div>
+            <div className="setting-row">
+              <span><strong>Animações do menu</strong><small>{menuMotion.systemReduced && !menuMotion.enabled ? 'Desligadas porque os efeitos de animação do Windows estão desativados. Ligue aqui para usar mesmo assim.' : 'Fundo em parallax, luzes e partículas do menu principal.'}</small></span>
+              <Toggle checked={menuMotion.enabled} onChange={menuMotion.setEnabled} label="Animações do menu" />
             </div>
             <div className="setting-row settings-readonly-row">
               <span><strong>Densidade da interface</strong><small>A interface usa a densidade padrão responsiva.</small></span>

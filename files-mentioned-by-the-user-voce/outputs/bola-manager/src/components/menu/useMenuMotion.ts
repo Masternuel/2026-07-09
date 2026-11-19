@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 export type MenuMotionMode = 'auto' | 'on' | 'off';
 const STORAGE_KEY = 'bola-manager:menu-motion';
+const CHANGE_EVENT = 'bola-manager:menu-motion-change';
 
 function readMode(): MenuMotionMode {
   try {
@@ -28,8 +29,11 @@ export function useMenuMotion() {
     let query: MediaQueryList | null = null;
     try { query = window.matchMedia('(prefers-reduced-motion: reduce)'); } catch { return undefined; }
     const onChange = () => setSystemReduced(query?.matches ?? false);
+    // The switch lives in Configurações; the menu backdrop listens so it follows at once.
+    const onModeChange = () => setModeState(readMode());
     query.addEventListener?.('change', onChange);
-    return () => query?.removeEventListener?.('change', onChange);
+    window.addEventListener(CHANGE_EVENT, onModeChange);
+    return () => { query?.removeEventListener?.('change', onChange); window.removeEventListener(CHANGE_EVENT, onModeChange); };
   }, []);
 
   const enabled = mode === 'on' || (mode === 'auto' && !systemReduced);
@@ -41,6 +45,7 @@ export function useMenuMotion() {
       if (nextMode === 'auto') window.localStorage.removeItem(STORAGE_KEY);
       else window.localStorage.setItem(STORAGE_KEY, nextMode);
     } catch { /* preference is only a convenience */ }
+    try { window.dispatchEvent(new Event(CHANGE_EVENT)); } catch { /* no window */ }
   }, [systemReduced]);
 
   return { enabled, mode, systemReduced, setEnabled };
