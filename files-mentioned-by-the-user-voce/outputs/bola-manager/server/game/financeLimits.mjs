@@ -54,7 +54,8 @@ export function ensurePersistentFinanceLimits(room, clubId, {
     profile.transferBudget = money(profile.transferBudget);
   }
   if (!initialized && money(profile.wageBudget) <= 0) {
-    profile.wageBudget = defaultWageBudget(balance, currentPayroll);
+    // currentPayroll may be a function: the payroll scan is only needed this first time.
+    profile.wageBudget = defaultWageBudget(balance, typeof currentPayroll === "function" ? currentPayroll() : currentPayroll);
   } else {
     profile.wageBudget = money(profile.wageBudget);
   }

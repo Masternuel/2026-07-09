@@ -111,8 +111,20 @@ export function groupLeaguesByCountry(leagues: readonly LeagueChoice[]): LeagueC
     .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR', { sensitivity: 'base' }));
 }
 
+/** Same limit as the server's createRoomSchema.activeLeagues. */
+export const MAX_ACTIVE_LEAGUES = 24;
+
+/**
+ * Small catalogs start with every playable division. A large import (e.g. a whole Brasfoot
+ * base) starts with one country only, Brazil when present, never above MAX_ACTIVE_LEAGUES.
+ */
 export function defaultLeagueIds(leagues: readonly LeagueChoice[]) {
-  return leagues.filter((league) => league.clubCount > 0).map((league) => league.id);
+  const playable = leagues.filter((league) => league.clubCount > 0);
+  if (playable.length <= MAX_ACTIVE_LEAGUES) return playable.map((league) => league.id);
+  const groups = groupLeaguesByCountry(playable);
+  const preferred = groups.find((group) => group.key === 'BRASIL')
+    ?? [...groups].sort((left, right) => right.clubCount - left.clubCount)[0];
+  return (preferred?.leagues ?? []).slice(0, MAX_ACTIVE_LEAGUES).map((league) => league.id);
 }
 
 export function initialOpenCountryKey(

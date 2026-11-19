@@ -158,7 +158,7 @@ export function ensureClubCareerSystems(room, { now = new Date() } = {}) {
   const effectiveAt = careerDateFor(room, now);
   ensureMarketState(room, effectiveAt);
   ensureClubFinanceState(room, effectiveAt);
-  for (const club of catalogClubs(room)) ensureFinanceAccount(room, club.id, { now: effectiveAt });
+  for (const club of catalogClubs(room)) ensureFinanceAccount(room, club.id, { now: effectiveAt, financeStateReady: true });
   ensureClubFacilities(room, effectiveAt);
   ensureClubCareerState(room);
   // ensureStaffState is intentionally pure and returns a full room clone. An
@@ -434,8 +434,9 @@ export function syncMarketCareerSideEffects(room) {
   return { mirrored, events };
 }
 
-export function recordClubMatchday(room, input) {
-  ensureClubCareerSystems(room, { now: input?.occurredAt });
+/** careerSystemsReady: the caller ran ensureClubCareerSystemsAt for this batch already. */
+export function recordClubMatchday(room, input, { careerSystemsReady = false } = {}) {
+  if (!careerSystemsReady) ensureClubCareerSystems(room, { now: input?.occurredAt });
   return recordMatchdayEconomy(room, input, {
     credit: (transaction) => creditFinance(room, transaction),
     recordEvent: (event) => recordClubCareerEvent(room, event),
@@ -623,8 +624,9 @@ export function recordPlayerAvailabilityEvents(room, {
   seasonNumber: suppliedSeasonNumber = null,
   previousPlayerStates = [],
   occurredAt = new Date(),
+  careerSystemsReady = false,
 } = {}) {
-  ensureClubCareerSystems(room, { now: occurredAt });
+  if (!careerSystemsReady) ensureClubCareerSystems(room, { now: occurredAt });
   const operation = fixtureOperationScope(room, {
     fixtureId,
     competitionId,
@@ -755,9 +757,18 @@ function clamp(value, minimum, maximum) {
  * Agrega somente efeitos comprovaveis da estrutura e da comissao do clube.
  * O bonus de partida e deliberadamente pequeno: ajuda, mas nunca decide sozinho.
  */
-export function clubCareerPerformanceEffects(room, clubId, asOf = new Date()) {
+/**
+ * Runs the (idempotent) aggregate migration once for a batch of effect reads at the same
+ * date. Callers that loop over every club or AI fixture use this and pass { ensured: true },
+ * otherwise each read re-normalizes all clubs and the loop becomes quadratic.
+ */
+export function ensureClubCareerSystemsAt(room, asOf = new Date()) {
+  ensureClubCareerSystems(room, { now: timestamp(asOf) });
+}
+
+export function clubCareerPerformanceEffects(room, clubId, asOf = new Date(), { ensured = false } = {}) {
   const now = timestamp(asOf);
-  ensureClubCareerSystems(room, { now });
+  if (!ensured) ensureClubCareerSystems(room, { now });
   const facility = facilityEffectsForClub(room, clubId, now);
   const staff = calculateStaffEffects(room, clubId, now);
   const club = catalogClubs(room).find((candidate) => clubKey(candidate?.id) === clubKey(clubId));
@@ -826,9 +837,10 @@ export function clubCareerPerformanceEffects(room, clubId, asOf = new Date()) {
 }
 
 export function clubCareerEffectsByClub(room, asOf = new Date()) {
+  ensureClubCareerSystemsAt(room, asOf);
   return Object.fromEntries(catalogClubs(room).map((club) => [
     clubKey(club.id),
-    clubCareerPerformanceEffects(room, club.id, asOf),
+    clubCareerPerformanceEffects(room, club.id, asOf, { ensured: true }),
   ]));
 }
 

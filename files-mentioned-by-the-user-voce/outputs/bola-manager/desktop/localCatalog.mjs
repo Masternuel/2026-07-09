@@ -15,8 +15,10 @@ export function createStarterCatalog() {
 }
 
 export class LocalCatalog {
-  constructor(catalog, ownerId, canRead = () => false, { archives = {}, imported = false } = {}) {
-    this.catalog = structuredClone(catalog);
+  constructor(catalog, ownerId, canRead = () => false, { archives = {}, imported = false, shared = false } = {}) {
+    // Every method only reads the catalog and returns copies, so a frozen committed state
+    // can be used as is (shared); cloning a 100k-player base on each read made matches take ~50 s.
+    this.catalog = shared ? catalog : structuredClone(catalog);
     this.ownerId = ownerId;
     this.canRead = canRead;
     this.source = imported ? "local-import" : "local-starter";

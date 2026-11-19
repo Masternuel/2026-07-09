@@ -720,10 +720,25 @@ function recomputeEffects(room, now) {
     const clubId = identifier(member.clubId);
     if (clubId) clubIds.set(clubKey(clubId), clubId);
   }
-  career.staffEffectsByClub = Object.fromEntries([...clubIds.values()].map((clubId) => [
-    clubId,
-    calculateEffectsFromCollections(career.staffMembers, career.staffContracts, clubId, now),
-  ]));
+  // Group once: filtering every member and contract per club made this quadratic in clubs.
+  // Each club still gets its own members and only their contracts (same order per staffId),
+  // so calculateEffectsFromCollections returns exactly what it did with the full lists.
+  const membersByClub = new Map();
+  for (const member of career.staffMembers ?? []) {
+    const memberClub = clubKey(member.clubId);
+    if (!membersByClub.has(memberClub)) membersByClub.set(memberClub, []);
+    membersByClub.get(memberClub).push(member);
+  }
+  const contractsByStaff = new Map();
+  for (const contract of career.staffContracts ?? []) {
+    if (!contractsByStaff.has(contract.staffId)) contractsByStaff.set(contract.staffId, []);
+    contractsByStaff.get(contract.staffId).push(contract);
+  }
+  career.staffEffectsByClub = Object.fromEntries([...clubIds.values()].map((clubId) => {
+    const clubMembers = membersByClub.get(clubKey(clubId)) ?? [];
+    const clubContracts = clubMembers.flatMap((member) => contractsByStaff.get(member.id) ?? []);
+    return [clubId, calculateEffectsFromCollections(clubMembers, clubContracts, clubId, now)];
+  }));
 }
 
 /** Clone and migrate staff data without changing unrelated room/career fields. */

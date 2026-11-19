@@ -2,6 +2,7 @@ import { calculateLineupAttributeProfile } from "./lineupStrength.mjs";
 import {
   careerDateFor,
   clubCareerPerformanceEffects,
+  ensureClubCareerSystemsAt,
   recordPlayerAvailabilityEvents,
 } from "./clubCareerSystem.mjs";
 import { simulateMatch } from "./matchSimulator.mjs";
@@ -202,8 +203,13 @@ function playerStateBaselines(...teams) {
   }));
 }
 
-/** Simulate an unmanaged fixture and persist its save-scoped player progression. */
-export function simulateAiFixture(room, fixture, rosters, completedAt) {
+/** Prepare career aggregates once before simulating several AI fixtures at the same time. */
+export function prepareAiFixtureBatch(room, completedAt) {
+  ensureClubCareerSystemsAt(room, careerDateFor(room, completedAt));
+}
+
+/** Simulate an unmanaged fixture; pass { careerSystemsReady: true } after prepareAiFixtureBatch. */
+export function simulateAiFixture(room, fixture, rosters, completedAt, { careerSystemsReady = false } = {}) {
   fixture = applyFanAtmosphereToFixture(room, fixture);
   const fixtureId = fixtureIdentity(fixture);
   const competitionId = identifier(fixture?.leagueId ?? fixture?.tournamentId ?? fixture?.competitionId) || null;
@@ -216,8 +222,8 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
   const homeTacticalProfile = tactical ? home.tacticalProfile : null;
   const awayTacticalProfile = tactical ? away.tacticalProfile : null;
   const careerEffects = {
-    home: clubCareerPerformanceEffects(room, homeClubId, careerDateFor(room, completedAt)),
-    away: clubCareerPerformanceEffects(room, awayClubId, careerDateFor(room, completedAt)),
+    home: clubCareerPerformanceEffects(room, homeClubId, careerDateFor(room, completedAt), { ensured: careerSystemsReady }),
+    away: clubCareerPerformanceEffects(room, awayClubId, careerDateFor(room, completedAt), { ensured: careerSystemsReady }),
   };
   const strengthProfile = {
     home: strengthBreakdown(fixture, home, tactical?.home, "home", careerEffects.home),
@@ -299,6 +305,7 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
       seasonNumber: room.currentSeason,
       previousPlayerStates,
       occurredAt: completedAt,
+      careerSystemsReady,
     });
     return simulated;
   }
@@ -314,6 +321,7 @@ export function simulateAiFixture(room, fixture, rosters, completedAt) {
     seasonNumber: room.currentSeason,
     previousPlayerStates,
     occurredAt: completedAt,
+    careerSystemsReady,
   });
   return tracked;
 }

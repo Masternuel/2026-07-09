@@ -11,7 +11,7 @@ import type { ClubOption } from '../constants/clubs';
 import type { ClubCatalogSource } from '../hooks/useClubCatalog';
 import type { SocketState } from '../hooks/useSocket';
 import type { ClubChoice, LeagueChoice, ManagerIdentity, Room, RoomCreatePayload } from '../types';
-import { defaultLeagueIds, groupLeaguesByCountry, initialOpenCountryKey, resolveLeagueSelectionAfterCatalogChange } from '../utils/leagueCountryGroups';
+import { MAX_ACTIVE_LEAGUES, defaultLeagueIds, groupLeaguesByCountry, initialOpenCountryKey, resolveLeagueSelectionAfterCatalogChange } from '../utils/leagueCountryGroups';
 
 export type LobbyPanelId = 'saves' | 'create' | 'join';
 
@@ -152,6 +152,10 @@ export function LobbyView(props: LobbyViewProps) {
   }, [currentManager?.clubId, roomClubs]);
 
   function toggleLeague(leagueId: string) {
+    if (!selectedLeagueIds.includes(leagueId) && selectedLeagueIds.length >= MAX_ACTIVE_LEAGUES) {
+      props.onToast(`Cada carreira aceita até ${MAX_ACTIVE_LEAGUES} divisões. Desmarque uma para incluir outra.`);
+      return;
+    }
     leagueSelectionEdited.current = true;
     setSelectedLeagueIds((current) => current.includes(leagueId)
       ? current.filter((candidate) => candidate !== leagueId)
@@ -162,6 +166,10 @@ export function LobbyView(props: LobbyViewProps) {
     if (peer) return;
     if (selectedLeagueIds.length === 0) {
       props.onToast('Selecione pelo menos uma liga para criar a temporada.');
+      return;
+    }
+    if (selectedLeagueIds.length > MAX_ACTIVE_LEAGUES) {
+      props.onToast(`Cada carreira aceita até ${MAX_ACTIVE_LEAGUES} divisões. Desmarque ${selectedLeagueIds.length - MAX_ACTIVE_LEAGUES} para continuar.`);
       return;
     }
     const unlimitedSeasons = seasonLength === 'unlimited';
@@ -340,7 +348,8 @@ export function LobbyView(props: LobbyViewProps) {
                                   <input
                                     type="checkbox"
                                     checked={selectedLeagueIds.includes(league.id)}
-                                    disabled={props.pending || props.leagueCatalogLoading || unavailable}
+                                    disabled={props.pending || props.leagueCatalogLoading || unavailable
+                                      || (!selectedLeagueIds.includes(league.id) && selectedLeagueIds.length >= MAX_ACTIVE_LEAGUES)}
                                     onChange={() => toggleLeague(league.id)}
                                   />
                                   <span className="league-division-row__identity">
@@ -359,7 +368,7 @@ export function LobbyView(props: LobbyViewProps) {
                   {!props.leagues.length && <p className="form-note">Nenhuma liga ativa foi encontrada no catálogo.</p>}
                   {props.leagues.length > 0 && (
                     <p className="league-selector__summary" role="status" aria-live="polite">
-                      <strong>{selectedLeagueIds.length}</strong> de {selectableLeagueCount} divisões disponíveis · {selectedClubCount} {selectedClubCount === 1 ? 'clube' : 'clubes'} no save
+                      <strong>{selectedLeagueIds.length}</strong> de {selectableLeagueCount} divisões disponíveis{selectableLeagueCount > MAX_ACTIVE_LEAGUES ? ` (máximo ${MAX_ACTIVE_LEAGUES} por carreira)` : ''} · {selectedClubCount} {selectedClubCount === 1 ? 'clube' : 'clubes'} no save
                     </p>
                   )}
                 </fieldset>
@@ -367,7 +376,8 @@ export function LobbyView(props: LobbyViewProps) {
                 {props.leagueCatalogError && <div className="form-note" role="alert"><span>{props.leagueCatalogError}</span> <Button size="sm" variant="ghost" onClick={props.onRefreshCatalog}>Tentar novamente</Button></div>}
                 {selectedUnderfilledLeagues.length > 0 && <p className="form-note" role="note">{selectedUnderfilledLeagues.map((league) => league.name).join(', ')} precisa de pelo menos mais um clube ativo {desktop ? 'na base' : 'no Editor'} para iniciar partidas.</p>}
                 {!selectedLeagueIds.length && <p className="form-error" role="alert">Selecione pelo menos uma liga.</p>}
-                <Button variant="primary" loading={props.pending || props.leagueCatalogLoading} disabled={props.pending || props.leagueCatalogLoading || !props.leagues.length || !selectedLeagueIds.length} onClick={() => void createRoom()} icon={<ChevronRight size={16} />}>Criar e escolher clube</Button>
+                {selectedLeagueIds.length > MAX_ACTIVE_LEAGUES && <p className="form-error" role="alert">Cada carreira aceita até {MAX_ACTIVE_LEAGUES} divisões. Desmarque {selectedLeagueIds.length - MAX_ACTIVE_LEAGUES} para continuar.</p>}
+                <Button variant="primary" loading={props.pending || props.leagueCatalogLoading} disabled={props.pending || props.leagueCatalogLoading || !props.leagues.length || !selectedLeagueIds.length || selectedLeagueIds.length > MAX_ACTIVE_LEAGUES} onClick={() => void createRoom()} icon={<ChevronRight size={16} />}>Criar e escolher clube</Button>
               </div>
             </div>}
             {!desktop && <div id="lobby-panel-join" role={props.embedded ? undefined : 'tabpanel'} aria-labelledby={props.embedded ? undefined : 'lobby-tab-join'} hidden={tab !== 'join'}>
