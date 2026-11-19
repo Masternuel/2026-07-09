@@ -179,12 +179,6 @@ e marcando `storageCleanupPending`. A limpeza percorre em paginas `catalog`,
 terminar, finaliza a tombstone. Se o processo cair, nova tentativa continua a
 limpeza sem reativar o save nem liberar o codigo.
 
-#### Regra de deploy no Railway
-
-`railway.json` usa duas replicas e `/ready`. Redis compartilhado fornece adapter
-Socket.IO, rate-limit e ownership do playback com TTL/fencing. Firestore e Storage
-guardam partidas e importacoes. Configure `REDIS_URL` e Firebase Storage antes de
-escalar; veja `docs/MULTI_REPLICA.md`.
 
 Torneios ficam em `tournaments` e usam `format` (`league`, `knockout` ou `groups_knockout`), `teamCount`, `legs` (`single` ou `double`), `tiebreakers`, `teamIds`, imagem de trofeu opcional e `active`. IDs de times precisam existir em `brasfootClubs`; um torneio ativo exige exatamente `teamCount` IDs e todos os clubes precisam estar ativos. O backend valida as referencias em lote quando `getAll` esta disponivel e impede arquivar um clube ainda usado por torneio ativo. Duplicatas, criterios repetidos e combinacoes incoerentes como `away_goals` com jogo unico sao recusados. A colecao `tournaments` nao permite leitura direta pelas regras do cliente; o contrato publico e somente `GET /api/tournaments`.
 

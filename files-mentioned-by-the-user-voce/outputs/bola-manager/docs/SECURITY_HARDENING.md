@@ -50,4 +50,4 @@ Permissão segue somente contents: read; sem pull_request_target, novos jobs ou 
 
 ## Pendências não executadas
 
-Redis real/Lua, Firebase/Firestore/Storage, Cloudinary, Gemini, IAM, contenção/partições e headers pós-deploy dependem de homologação. Backup/restore real não comprovado: seguir [runbook isolado](BACKUP_RESTORE.md), medir RPO/RTO e registrar evidência. Nenhuma ação nesta fase executa deploy, acessa produção, usa credenciais reais ou concede IAM.
+Redis real/Lua, Firebase/Firestore/Storage, Cloudinary, Gemini, IAM, contenção/partições e headers pós-deploy dependem de homologação. Backup/restore real não comprovado: seguir [runbook isolado](history/BACKUP_RESTORE.md), medir RPO/RTO e registrar evidência. Nenhuma ação nesta fase executa deploy, acessa produção, usa credenciais reais ou concede IAM.

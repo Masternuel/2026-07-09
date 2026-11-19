@@ -151,15 +151,12 @@ test("cache do proxy expira e limita entradas; miniaturas nao excedem 512 pixels
   assert.equal(calls, 131);
 });
 
-test("CSP consistente em desenvolvimento, build e Vercel bloqueia carregamento externo direto", async () => {
+test("CSP consistente em desenvolvimento e build bloqueia carregamento externo direto", async () => {
   const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
   const vite = await readFile(new URL("../../vite.config.ts", import.meta.url), "utf8");
-  const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
   assert.ok(html.includes(`content="${IMAGE_CSP}"`));
-  assert.equal(vercel.headers[0].headers.find((header) => header.key === "Content-Security-Policy").value, HTTP_CSP);
   assert.equal((vite.match(/'Content-Security-Policy': HTTP_CSP/g) ?? []).length, 2);
   assert.equal(HTTP_CSP, `${IMAGE_CSP}; frame-ancestors 'none'`);
-  assert.equal(vercel.headers[0].headers.find((header) => header.key === "X-Frame-Options").value, "DENY");
   assert.equal(IMAGE_CSP.includes("https:"), false);
   assert.equal(IMAGE_CSP.includes("data:"), false);
 });

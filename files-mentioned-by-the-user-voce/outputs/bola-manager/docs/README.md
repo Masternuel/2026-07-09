@@ -3,10 +3,7 @@
 Documentos que descrevem o sistema **atual**. Os relatórios de execução de cada etapa ficam em [`history/`](history/), como registro do que foi feito e validado na época.
 
 ## Operação e segurança
-- [Operação multi-réplica](MULTI_REPLICA.md): Redis, locks, métricas privadas e réplicas no Railway.
-- [Backup e restauração](BACKUP_RESTORE.md): runbook operacional do Firestore.
 - [Configuração e revisão de segurança](SECURITY_HARDENING.md).
-- [Staging de segurança](STAGING_SECURITY_SETUP.md): preparação externa.
 - [Atualização de dependências](dependency-security.md).
 
 ## Desktop
@@ -25,4 +22,4 @@ Documentos que descrevem o sistema **atual**. Os relatórios de execução de ca
 - [Menu principal](MAIN_MENU.md), [áudio](AUDIO.md) e [identidade visual](BRANDING.md).
 
 ## Histórico
-Relatórios de etapa (`ETAPA_*`) e das fases de segurança (`PHASE*`) estão em [`history/`](history/). Eles registram decisões e resultados da época e podem citar caminhos, versões ou números que já mudaram. A auditoria técnica mais recente está em `AUDITORIA_TECNICA.md`, na raiz do repositório.
+Relatórios de etapa (`ETAPA_*`), das fases de segurança (`PHASE*`) e os runbooks da antiga versão web (multi-réplica, backup do Firestore, staging) estão em [`history/`](history/). Eles registram decisões e resultados da época e podem citar caminhos, versões ou números que já mudaram. A auditoria técnica mais recente está em `AUDITORIA_TECNICA.md`, na raiz do repositório.
