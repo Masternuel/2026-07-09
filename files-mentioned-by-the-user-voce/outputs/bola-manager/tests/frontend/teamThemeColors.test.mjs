@@ -384,8 +384,10 @@ test("gameplay usa tokens do clube sem contaminar entrada e editor", async () =>
   ]);
   assert.doesNotMatch(entryCss, /--team-(?:line|surface)/);
   assert.doesNotMatch(editorCss, /--team-(?:line|surface)/);
-  assert.match(entryCss, /rgba\(\s*200\s*,\s*255\s*,\s*61/i);
-  assert.match(editorCss, /rgba\(\s*200\s*,\s*255\s*,\s*61/i);
+  // Entry and Editor use the brand accent (purple in the menu and Editor since 2026-11-18),
+  // never the club tokens; their tints are mixed from --accent instead of a fixed lime.
+  assert.match(entryCss, /color-mix\(in srgb, var\(--accent\) [\d.]+%, transparent\)/);
+  assert.match(editorCss, /color-mix\(in srgb, var\(--accent\) [\d.]+%, transparent\)/);
   assert.match(globalCss, /--team-line:/);
   assert.match(globalCss, /--team-surface-strong:/);
 });
