@@ -304,7 +304,7 @@ export function ConfigView({ onToast, room = null, showPeerPanel = true, embedde
               ))}
             </div>
             <div className="setting-row">
-              <span><strong>Animações do menu</strong><small>{menuMotion.systemReduced && !menuMotion.enabled ? 'Desligadas porque os efeitos de animação do Windows estão desativados. Ligue aqui para usar mesmo assim.' : 'Fundo em parallax, luzes e partículas do menu principal.'}</small></span>
+              <span><strong>Animações do menu</strong><small>Fundo em parallax, luzes e partículas do menu principal.</small></span>
               <Toggle checked={menuMotion.enabled} onChange={menuMotion.setEnabled} label="Animações do menu" />
             </div>
             <div className="setting-row settings-readonly-row">

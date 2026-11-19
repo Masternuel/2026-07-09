@@ -65,7 +65,8 @@ test('"Animações do menu" lives only in Configurações and forced motion beat
   assert.match(css, /\.main-menu \.menu-parallax--motion \.menu-parallax__particles span \{[^}]*animation-delay: var\(--delay, 0s\) !important; \}/);
   assert.match(css, /\.menu-parallax:not\(\.menu-parallax--motion\) \*/);
   const hook = await readFile(new URL('../../src/components/menu/useMenuMotion.ts', import.meta.url), 'utf8');
-  assert.match(hook, /mode === 'on' \|\| \(mode === 'auto' && !systemReduced\)/);
+  assert.match(hook, /getItem\(STORAGE_KEY\) !== 'off'/, 'motion starts on and only an explicit "off" disables it');
+  assert.doesNotMatch(hook, /prefers-reduced-motion/, 'the Windows animation setting no longer turns the menu motion off');
   assert.match(hook, /dispatchEvent\(new Event\(CHANGE_EVENT\)\)/, 'changing it in Configurações updates the open menu');
 });
 
