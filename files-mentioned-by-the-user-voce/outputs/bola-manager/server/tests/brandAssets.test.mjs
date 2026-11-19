@@ -11,7 +11,8 @@ const source = `${brand}bola-manager-logo.png`;
 
 test('official logo remains byte-identical to the approved image', async () => {
   assert.equal(createHash('sha256').update(await readFile(source)).digest('hex'),
-    '8fb184c8adf70cedaa4fbba0d980c241931b6d20d64892246952582668ab998b');
+    // Purple crest approved by the owner on 2026-11-18 (greens recoloured; ball and lettering unchanged).
+    'a6f0291482da013028308e5b19f715f517c3f0753f68fce73efce6db804a8dce');
   const metadata = await sharp(source).metadata();
   assert.equal(metadata.width, 1254);
   assert.equal(metadata.height, 1254);

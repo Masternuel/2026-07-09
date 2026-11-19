@@ -421,7 +421,7 @@
 }
 /* Menu v2 fit: the whole rail fits a 900px-tall window; saves stay left of the player. */
 .main-menu--scene .brand-logo--menu .brand-logo__crest { width: 96px; height: 96px; }
-.main-menu__tagline { margin-bottom: 16px; font-size: 11px; letter-spacing: .16em; white-space: nowrap; }
+.main-menu__tagline { margin-bottom: 16px; font-size: 12px; letter-spacing: .14em; white-space: normal; text-wrap: balance; }
 .main-menu--scene .main-menu__navigation { gap: 5px; overflow: visible; }
 .main-menu--scene .main-menu__nav-item button { min-height: 42px; padding-block: 8px; }
 .main-menu--scene .main-menu__nav-item--continue button { min-height: 64px; }
