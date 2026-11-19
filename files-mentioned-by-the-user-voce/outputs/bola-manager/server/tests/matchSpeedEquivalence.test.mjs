@@ -259,9 +259,13 @@ test("staff migration: the staff view gives the same staff fields as migrating t
     const now = "2026-07-20T12:00:00.000Z";
     const full = ensureStaffState(candidate, { now }).clubCareerState;
     const viewed = ensureStaffState(staffStateView(candidate), { now }).clubCareerState;
+    // Without the protective copy: the input is only read (a frozen view would throw on a write).
+    const frozenView = deepFreeze(structuredClone(staffStateView(candidate)));
+    const uncopied = ensureStaffState(frozenView, { now, copyInput: false }).clubCareerState;
     for (const field of ["staffSchemaVersion", "staffMembers", "staffCandidates", "staffContracts", "staffHistory",
       "staffEffectsByClub", "processedStaffOperationIds", "staffInitializedClubIds"]) {
       assert.equal(json(viewed[field]), json(full[field]), field);
+      assert.equal(json(uncopied[field]), json(full[field]), field);
     }
   }
 });
@@ -506,4 +510,41 @@ test("player states: a state moved to another club in place (market transfer) is
   applyMatchPlayerProgression(reference, ...fixture("move-2", second, third), "2026-07-21T12:00:00.000Z");
   assert.equal(json(room.playerStates), json(reference.playerStates));
   assert.ok(!room.playerStates.includes(moved));
+});
+
+test("job security: reused profiles and history equal normalizing fresh copies on every pass", async () => {
+  const { normalizeCoachJobSecurityState } = await import("../game/coachJobSecurity.mjs");
+  const raw = {
+    profiles: [
+      // Weights scaled up past the 40 cap on the first pass and clamped on the second.
+      { id: "p1", clubId: " EQ-A-C1 ", type: "passionate", weights: { classics: 38, fans: 39, relegation: 40, achievements: 37 }, classicImportance: 99, fanInfluence: 99 },
+      { clubId: "EQ-A-C2", badResultsTolerance: "61.26" },
+      { id: "p3", clubId: "" },
+    ],
+    history: [
+      { id: "h1", coachId: " c1 ", clubId: "EQ-A-C1", newScore: "55.55", factors: [{ id: "f", impact: 1.26 }], fanSupport: { value: 70.04 } },
+      { id: "h2", coachId: "c2", clubId: "EQ-A-C2", occurredAt: "2026-07-20", relegation: { risk: 12.345 } },
+      { id: "", coachId: "c3", clubId: "x" },
+    ],
+    ultimatums: [], meetings: [], processedSignalIds: ["a", "a", "b"],
+  };
+  let fast = normalizeCoachJobSecurityState(raw);
+  let reference = normalizeCoachJobSecurityState(structuredClone(raw));
+  for (let pass = 0; pass < 4; pass += 1) {
+    assert.equal(json(fast), json(reference));
+    fast = normalizeCoachJobSecurityState(fast, { owned: true });
+    reference = normalizeCoachJobSecurityState(structuredClone(reference));
+  }
+  assert.equal(json(fast), json(reference));
+  assert.ok(fast.profiles[0].weights.fans <= 40);
+});
+
+test("professional leave: migrating without the second staff copy leaves the input untouched and gives the same room", async () => {
+  const { ensureProfessionalLeaveState } = await import("../game/professionalLeave.mjs");
+  const room = await playedRoom();
+  const frozen = deepFreeze(structuredClone(room));
+  const fromFrozen = ensureProfessionalLeaveState(frozen, { now: "2026-07-20T12:00:00.000Z" });
+  const fromCopy = ensureProfessionalLeaveState(structuredClone(room), { now: "2026-07-20T12:00:00.000Z" });
+  assert.equal(json(fromFrozen), json(fromCopy));
+  assert.equal(json(frozen), json(room));
 });

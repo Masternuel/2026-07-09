@@ -193,7 +193,7 @@ export function ensureClubCareerSystems(room, { now = new Date() } = {}) {
   // ensureStaffState is intentionally pure and returns a full room clone. An
   // aggregate migration must not replace the whole live room here: doing so
   // invalidates references held by match/finance transactions in progress.
-  const staffState = ensureStaffState(staffStateView(room), { now: effectiveAt }).clubCareerState;
+  const staffState = ensureStaffState(staffStateView(room), { now: effectiveAt, copyInput: false }).clubCareerState;
   for (const field of [
     "staffSchemaVersion",
     "staffMembers",

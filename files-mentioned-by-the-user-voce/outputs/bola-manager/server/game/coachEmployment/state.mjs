@@ -1974,8 +1974,12 @@ function reconcileHumanManagerClaims(room, state, now) {
 }
 
 function seedLegacyLinks(room, state, now) {
+  // The catalog does not change in this loop: build the club map once, not once per coach
+  // (canonicalClubId rebuilds and copies every club on each call).
+  const clubs = catalogClubs(room);
   for (const coach of room.coachCareerState.coaches) {
-    const clubId = canonicalClubId(room, coach.currentClubId);
+    const supplied = identifier(coach.currentClubId);
+    const clubId = supplied ? (clubs.get(clubKey(supplied))?.id ?? supplied) : null;
     if (!clubId || activeAppointmentForCoach(state, coach.id) || activeAppointmentForClub(state, clubId)) continue;
     const assignment = currentAssignment(coach);
     const role = coach.status === "interim" ? "interim" : "head_coach";
