@@ -324,9 +324,32 @@ function normalizeEventInput(input) {
   };
 }
 
+// Normalizing a stored event or news item reaches a fixed point after two passes: the first
+// pass can add payload keys (event) or move keys into sorted order (news), the second only
+// copies. Objects produced by a pass over an earlier pass's output are therefore already
+// canonical, and ensureClubCareerState reuses them instead of rebuilding up to 1,500 items for
+// every recorded event (that made each match slower as the career log filled up). Values are
+// identical either way; code in this module that edits a stored item in place forgets it here.
+const normalizedOutputs = new WeakSet();
+const canonicalOutputs = new WeakSet();
+
+function rememberNormalized(source, normalized) {
+  if (normalized) {
+    normalizedOutputs.add(normalized);
+    if (normalizedOutputs.has(source)) canonicalOutputs.add(normalized);
+  }
+  return normalized;
+}
+
+function forgetNormalized(item) {
+  normalizedOutputs.delete(item);
+  canonicalOutputs.delete(item);
+}
+
 function storedEvent(value) {
+  if (value && typeof value === "object" && canonicalOutputs.has(value)) return value;
   try {
-    return normalizeEventInput(value);
+    return rememberNormalized(value, normalizeEventInput(value));
   } catch {
     return null;
   }
@@ -351,10 +374,11 @@ function sameOccurrence(left, right) {
 
 function normalizeNews(value) {
   if (!value || typeof value !== "object") return null;
+  if (canonicalOutputs.has(value)) return value;
   const id = identifier(value.id);
   const sourceEventId = identifier(value.eventId ?? value.sourceEventId);
   if (!id || !sourceEventId) return null;
-  return {
+  return rememberNormalized(value, {
     ...clean(value),
     id,
     eventId: sourceEventId,
@@ -363,7 +387,7 @@ function normalizeNews(value) {
     readAtByManagerId: value.readAtByManagerId && typeof value.readAtByManagerId === "object"
       ? clean(value.readAtByManagerId)
       : {},
-  };
+  });
 }
 
 function newsProcessingKeys(news) {
@@ -683,31 +707,54 @@ export function ensureClubCareerState(room) {
   const state = room.clubCareerState && typeof room.clubCareerState === "object"
     ? room.clubCareerState
     : {};
+  // Lookups replace the earlier pairwise scans (quadratic in the 1,000-event log) and keep
+  // their exact rules: an event is a duplicate of any kept event with the same raw id or the
+  // same type + operationId; a legacy event of any kept event with the same identifier.
   const events = [];
+  const keptIds = new Set();
+  const keptOccurrences = new Set();
+  const keptIdentifiers = new Map();
+  // Length-prefixed, so no type/operation pair can produce another pair's key.
+  const occurrenceKey = (type, operationId) => `${type.length}:${type}:${operationId}`;
+  const keep = (event) => {
+    events.push(event);
+    keptIds.add(event?.id);
+    if (typeof event?.type === "string" && typeof event?.operationId === "string") {
+      keptOccurrences.add(occurrenceKey(event.type, event.operationId));
+    }
+    const id = identifier(event?.id);
+    if (!keptIdentifiers.has(id)) keptIdentifiers.set(id, event);
+  };
   for (const candidate of Array.isArray(state.events) ? state.events : []) {
     const normalized = storedEvent(candidate);
     if (normalized) {
-      if (!events.some((event) => sameOccurrence(event, normalized))) events.push(normalized);
+      if (!keptIds.has(normalized.id) && !keptOccurrences.has(occurrenceKey(normalized.type, normalized.operationId))) {
+        keep(normalized);
+      }
       continue;
     }
     // Dominios anteriores podem ter eventos com um schema proprio. Preserva-os
     // para a migracao do dominio de origem, mas nao os transforma em noticia.
     const legacyId = identifier(candidate?.id);
-    if (legacyId && !events.some((event) => identifier(event?.id) === legacyId)) {
-      events.push(clean(candidate));
+    if (legacyId && !keptIdentifiers.has(legacyId)) {
+      keep(clean(candidate));
     }
   }
   const news = [];
+  const newsIds = new Set();
+  const newsEventIds = new Set();
   for (const candidate of Array.isArray(state.news) ? state.news : []) {
     const normalized = normalizeNews(candidate);
-    if (!normalized || news.some((item) => item.id === normalized.id || item.eventId === normalized.eventId)) continue;
+    if (!normalized || newsIds.has(normalized.id) || newsEventIds.has(normalized.eventId)) continue;
     news.push(normalized);
+    newsIds.add(normalized.id);
+    newsEventIds.add(normalized.eventId);
   }
   const processedEventIds = uniqueIdentifiers([
     ...(Array.isArray(state.processedEventIds) ? state.processedEventIds : []),
     ...news.map((item) => item.eventId),
     ...news.flatMap((item) => {
-      const source = events.find((event) => identifier(event?.id) === item.eventId);
+      const source = keptIdentifiers.get(item.eventId);
       return source && storedEvent(source) ? processingKeys(source) : [];
     }),
   ]);
@@ -1525,9 +1572,9 @@ export function enrichCareerEventFacts(room, eventInput) {
 }
 
 function processed(state, event) {
-  const keys = new Set(state.processedEventIds);
   const candidates = processingKeys(event);
-  return candidates.some((key) => keys.has(key))
+  // At most two keys to look up: scanning is cheaper than building a Set of every processed id.
+  return candidates.some((key) => state.processedEventIds.includes(key))
     || processedArchiveContains(state.processedEventArchive, candidates);
 }
 
@@ -1655,6 +1702,7 @@ export function setCareerNewsReadState(room, newsId, managerId, read, readAt = n
   }
   item.readByManagerIds = [...readers];
   item.readAtByManagerId = readDates;
+  forgetNormalized(item);
   if (archiveSeason && wasRead !== Boolean(read)) {
     const previous = archiveSeason.readNewsCountByManagerId[canonicalManagerId] ?? 0;
     const next = Math.max(0, previous + (read ? 1 : -1));

@@ -790,7 +790,7 @@ export function postFinancialTransaction(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const occurredAt = timestamp(input.occurredAt ?? input.completedAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, occurredAt);
-  const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+  const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
   const previous = existingTransaction(state, account, clubId, originId);
   if (previous) {
     return { transaction: clone(previous), account, applied: false, duplicate: true };
@@ -861,7 +861,7 @@ export function mirrorSettledFinancialTransaction(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const occurredAt = timestamp(input.occurredAt ?? input.completedAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, occurredAt);
-  const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+  const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
   const previous = existingTransaction(state, account, clubId, originId);
   if (previous) return { transaction: clone(previous), account, applied: false, duplicate: true };
   const relatedClubId = identifier(input.relatedClubId ?? input.counterpartyClubId) || null;
@@ -925,7 +925,7 @@ export function reserveFinance(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const createdAt = timestamp(input.createdAt ?? input.occurredAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, createdAt);
-  const account = ensureFinanceAccount(room, clubId, { now: createdAt });
+  const account = ensureFinanceAccount(room, clubId, { now: createdAt, financeStateReady: true });
   const profile = profileFor(state, clubId, true);
   const previous = profile.reservations.find((reservation) => reservation.id === reservationId);
   if (previous) {
@@ -962,7 +962,7 @@ export function releaseFinance(room, input = {}) {
   const reservationId = reservationIdFor(input);
   const releasedAt = timestamp(input.releasedAt ?? input.occurredAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, releasedAt);
-  const account = ensureFinanceAccount(room, clubId, { now: releasedAt });
+  const account = ensureFinanceAccount(room, clubId, { now: releasedAt, financeStateReady: true });
   const profile = profileFor(state, clubId, true);
   const reservation = profile.reservations.find((candidate) => candidate.id === reservationId);
   if (!reservation) {
@@ -1095,7 +1095,7 @@ export function processMonthlyClubFinance(room, input = {}) {
   const rollback = monthlyFinanceSnapshot(room);
   try {
     const state = ensureClubFinanceState(room, occurredAt);
-    const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+    const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
     const profile = profileFor(state, clubId, true);
     const key = clubKey(clubId);
     if (identifier(state.lastFinancialPeriodByClub[key]) === periodKey) {

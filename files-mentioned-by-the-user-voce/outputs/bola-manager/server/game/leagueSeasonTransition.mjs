@@ -28,18 +28,38 @@ function score(value) {
   return value.slice(0, 2).map((item) => Math.max(0, Math.trunc(Number(item) || 0)));
 }
 
-function resultForFixture(room, leagueId, fixture) {
-  const compact = (room.leagueFixtureSchedule ?? []).find((candidate) => (
-    key(candidate?.leagueId) === key(leagueId)
-    && Number(candidate?.round) === Number(fixture?.round)
-    && new Set([key(candidate?.homeClubId), key(candidate?.awayClubId)]).size === 2
-    && [key(candidate?.homeClubId), key(candidate?.awayClubId)].sort().join("|")
-      === [key(fixture?.homeClubId), key(fixture?.awayClubId)].sort().join("|")
-  ));
-  if (!compact) return null;
-  const stored = (room.leagueMatchResults ?? []).find(
-    (candidate) => key(candidate?.leagueFixtureId) === key(compact.leagueFixtureId),
+function fixtureKey(leagueId, round, homeClubId, awayClubId) {
+  return JSON.stringify([key(leagueId), String(round), [key(homeClubId), key(awayClubId)].sort()]);
+}
+
+/**
+ * Lookups for resultForFixture, built once per call instead of scanning the whole schedule
+ * and result list for every fixture of every league (that grew with each played round).
+ * Each map keeps the first match, like the Array.find it replaces.
+ */
+function leagueResultIndex(room) {
+  const schedule = new Map();
+  for (const candidate of room.leagueFixtureSchedule ?? []) {
+    const round = Number(candidate?.round);
+    if (Number.isNaN(round)) continue;
+    if (key(candidate?.homeClubId) === key(candidate?.awayClubId)) continue;
+    const scheduleKey = fixtureKey(candidate?.leagueId, round, candidate?.homeClubId, candidate?.awayClubId);
+    if (!schedule.has(scheduleKey)) schedule.set(scheduleKey, candidate);
+  }
+  const results = new Map();
+  for (const candidate of room.leagueMatchResults ?? []) {
+    const resultKey = key(candidate?.leagueFixtureId);
+    if (!results.has(resultKey)) results.set(resultKey, candidate);
+  }
+  return { schedule, results };
+}
+
+function resultForFixture(index, leagueId, fixture) {
+  const compact = index.schedule.get(
+    fixtureKey(leagueId, Number(fixture?.round), fixture?.homeClubId, fixture?.awayClubId),
   );
+  if (!compact) return null;
+  const stored = index.results.get(key(compact.leagueFixtureId));
   if (!stored) return null;
   const value = score(stored.score);
   return key(compact.homeClubId) === key(fixture.homeClubId) ? value : [value[1], value[0]];
@@ -47,6 +67,7 @@ function resultForFixture(room, leagueId, fixture) {
 
 export function buildCompletedLeagueStates(room) {
   const states = [];
+  let index = null;
   for (const league of room?.competitionCatalog ?? []) {
     const participants = (league?.clubs ?? []).map((club) => ({ id: club.id, name: club.name }));
     if (!league?.id || participants.length < 2) continue;
@@ -64,16 +85,22 @@ export function buildCompletedLeagueStates(room) {
       startDate: room.seasonStartedAt,
       roundIntervalDays: 7,
     });
-    let complete = true;
+    index ??= leagueResultIndex(room);
+    // Only a league with every result is kept, so find the scores first and replay the table
+    // only when none is missing. Replaying the played prefix of an unfinished league on every
+    // match (one full state copy per result) was thrown away anyway.
+    const scores = [];
     for (const fixture of state.fixtures) {
-      const fixtureScore = resultForFixture(room, league.id, fixture);
-      if (!fixtureScore) {
-        complete = false;
-        break;
-      }
-      state = recordCompetitionResult(state, fixture.id, { score: fixtureScore });
+      const fixtureScore = resultForFixture(index, league.id, fixture);
+      if (!fixtureScore) break;
+      scores.push(fixtureScore);
     }
-    if (complete && state.status === "completed") states.push(state);
+    if (scores.length !== state.fixtures.length) continue;
+    const fixtures = state.fixtures;
+    for (const [position, fixture] of fixtures.entries()) {
+      state = recordCompetitionResult(state, fixture.id, { score: scores[position] });
+    }
+    if (state.status === "completed") states.push(state);
   }
   return states;
 }

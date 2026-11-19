@@ -53,6 +53,17 @@ function copyOnWrite(state) {
   return draft;
 }
 
+/**
+ * Section of a draft without copying it: the frozen committed value while the operation has
+ * not touched it, otherwise the operation's own copy. Callers that rebuild a section around
+ * unchanged frozen parts (rooms + a growing match archive) assign the result back instead of
+ * mutating what this returns.
+ */
+function peekDraft(draft, state, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(draft, key);
+  return descriptor?.get ? state[key] : draft[key];
+}
+
 function materialize(draft, state) {
   const next = {};
   for (const key of Object.keys(draft)) {
@@ -207,7 +218,7 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
     transaction: (operation, { backup = false } = {}) => enqueue(async () => {
       const draft = copyOnWrite(state);
       const backupFile = backup ? `career-before-import-${randomUUID()}.bolasave` : null;
-      const result = await operation(draft, { backupFile });
+      const result = await operation(draft, { backupFile, peek: (key) => peekDraft(draft, state, key) });
       const next = materialize(draft, state);
       const bytes = encode(next);
       if (backup) {

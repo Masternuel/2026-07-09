@@ -385,8 +385,13 @@ export function ensureClubFacilities(room, now = new Date()) {
   return state;
 }
 
-export function facilityForClub(room, clubId, now = new Date()) {
-  const state = ensureClubFacilities(room, now);
+/**
+ * ensured: the caller normalized every facility (ensureClubFacilities, directly or through
+ * ensureClubCareerSystems) and changed none since. Normalizing all clubs again for each lookup
+ * made per-club loops quadratic in the number of clubs.
+ */
+export function facilityForClub(room, clubId, now = new Date(), { ensured = false } = {}) {
+  const state = ensured ? room.clubCareerState : ensureClubFacilities(room, now);
   return state.clubFacilities.find((facility) => clubKey(facility.clubId) === clubKey(clubId)) ?? null;
 }
 
@@ -549,8 +554,8 @@ export function calculateMatchdayEconomy(room, {
   stage = null,
   score = [0, 0],
   occurredAt = new Date(),
-} = {}) {
-  const facility = facilityForClub(room, homeClubId, occurredAt);
+} = {}, { facilitiesReady = false } = {}) {
+  const facility = facilityForClub(room, homeClubId, occurredAt, { ensured: facilitiesReady });
   if (!facility) return null;
   const home = clubFromRoom(room, homeClubId);
   const away = clubFromRoom(room, awayClubId);
@@ -593,14 +598,21 @@ export function calculateMatchdayEconomy(room, {
   };
 }
 
-export function recordMatchdayEconomy(room, input, { credit, recordEvent } = {}) {
-  const economy = calculateMatchdayEconomy(room, input);
+/**
+ * facilitiesReady: every facility was normalized for this batch and only matchdays changed them
+ * since. A matchday keeps a facility normalized (whole-number totals, attendance within capacity,
+ * histories trimmed by syncStadiumHistory), so the per-fixture normalization of all clubs is
+ * skipped for a round of fixtures.
+ */
+export function recordMatchdayEconomy(room, input, { credit, recordEvent, facilitiesReady = false } = {}) {
+  const economy = calculateMatchdayEconomy(room, input, { facilitiesReady });
   if (!economy) return null;
   const operationScope = matchScope(economy);
   const operationId = `matchday:${operationScope}`;
   const eventOperationId = `match:${operationScope}`;
-  const state = ensureClubFacilities(room, economy.occurredAt);
-  const facility = facilityForClub(room, economy.homeClubId, economy.occurredAt);
+  // calculateMatchdayEconomy just normalized every facility (facilityForClub) and changed none.
+  const state = room.clubCareerState;
+  const facility = facilityForClub(room, economy.homeClubId, economy.occurredAt, { ensured: true });
   const alreadyRecorded = facility.stadium.matchHistory.some((entry) => (
     entry.operationId === operationId || isLegacyMatchDuplicate(room, entry, economy)
   ));
@@ -644,8 +656,8 @@ export function recordMatchdayEconomy(room, input, { credit, recordEvent } = {})
   return { ...economy, operationScope, financeOperationId: operationId, eventOperationId, duplicate: false };
 }
 
-export function facilityEffectsForClub(room, clubId, now = new Date()) {
-  const facility = facilityForClub(room, clubId, now);
+export function facilityEffectsForClub(room, clubId, now = new Date(), { ensured = false } = {}) {
+  const facility = facilityForClub(room, clubId, now, { ensured });
   if (!facility) return {
     developmentMultiplier: 1,
     youthQualityBonus: 0,

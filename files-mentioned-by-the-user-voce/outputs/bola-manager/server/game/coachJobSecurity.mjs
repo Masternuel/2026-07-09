@@ -315,8 +315,14 @@ function normalizeSecurityHistory(value) {
   };
 }
 
-export function normalizeCoachJobSecurityState(value = {}) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : {};
+/**
+ * owned: the caller hands over a state nobody else references (the previous evaluation's
+ * result), so it is normalized without the protective deep copy. The values are the same; the
+ * copy of the whole growing state for every coach of a batch made evaluations quadratic.
+ */
+export function normalizeCoachJobSecurityState(value = {}, { owned = false } = {}) {
+  const isObject = value && typeof value === 'object' && !Array.isArray(value);
+  const source = isObject ? (owned ? value : clone(value)) : {};
   const fanSupportByClubId = source.fanSupportByClubId && typeof source.fanSupportByClubId === 'object'
     ? Object.fromEntries(Object.entries(source.fanSupportByClubId).map(([clubId, entry]) => [clubId, {
       value: rounded(clamp(finite(entry?.value, 50)), 1),
@@ -968,7 +974,7 @@ export function evaluateCoachJobSecurity(input = {}) {
   const round = integer(input.round, 0);
   const season = integer(input.seasonNumber, 1, 1);
   const evaluationId = text(input.evaluationId) || 'coach-evaluation:' + appointment.id + ':s' + season + ':r' + round;
-  const jobState = normalizeCoachJobSecurityState(employmentState.jobSecurity);
+  const jobState = normalizeCoachJobSecurityState(employmentState.jobSecurity, { owned: input.jobSecurityOwned === true });
   const persistedEvaluation = list(employmentState.evaluations)
     .find((entry) => text(entry?.id) === evaluationId);
   if (persistedEvaluation) {

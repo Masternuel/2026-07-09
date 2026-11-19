@@ -926,10 +926,44 @@ function assertTransferWindow(room, now) {
   }
 }
 
-function effectiveCareerClubId(room, candidate) {
-  const career = careerPlayer(room, candidate?.id) ?? candidate;
+function firstByKey(values, keyOf) {
+  const index = new Map();
+  for (const value of values) {
+    const valueKey = keyOf(value);
+    if (!index.has(valueKey)) index.set(valueKey, value);
+  }
+  return index;
+}
+
+/**
+ * careerPlayer/registrationForPlayer for many players of an unchanged room: each list is
+ * indexed once (first match per id, like the Array.find they replace) and only when first
+ * needed, so a non-canonical market state is still migrated at the same point as before.
+ */
+function squadLookup(room) {
+  let careerIndex = null;
+  let registrationIndex = null;
+  return {
+    career(playerId) {
+      careerIndex ??= firstByKey(careerPlayers(room), (candidate) => identifierKey(candidate?.id));
+      return careerIndex.get(identifierKey(playerId)) ?? null;
+    },
+    registration(playerId) {
+      if (!registrationIndex) {
+        const state = room.marketState?.version === 1 && Array.isArray(room.marketState.registrations)
+          ? room.marketState
+          : ensureMarketState(room);
+        registrationIndex = firstByKey(state.registrations, (candidate) => identifierKey(candidate.playerId));
+      }
+      return registrationIndex.get(identifierKey(playerId)) ?? null;
+    },
+  };
+}
+
+function effectiveCareerClubId(room, candidate, lookup = null) {
+  const career = (lookup ? lookup.career(candidate?.id) : careerPlayer(room, candidate?.id)) ?? candidate;
   if (career && playerIsFreeAgent(career)) return FREE_AGENT_CLUB_ID;
-  const registration = registrationForPlayer(room, candidate?.id);
+  const registration = lookup ? lookup.registration(candidate?.id) : registrationForPlayer(room, candidate?.id);
   if (registration?.currentClubId) return registration.currentClubId;
   return identifier(career?.currentClubId ?? career?.clubId ?? career?.contract?.clubId);
 }
@@ -940,10 +974,12 @@ function assertSquadCapacity(room, clubId, playerId, {
 } = {}) {
   const players = careerPlayers(room);
   const maximum = Math.max(1, integer(room.maxSquadSize, MAX_SQUAD_SIZE, 200));
+  // One lookup for the whole squad scan: per-player linear searches made this quadratic.
+  const lookup = squadLookup(room);
   const ids = new Set(players.filter((candidate) => (
     candidate?.active !== false
     && !identifiersEqual(candidate?.id, playerId)
-    && clubKey(effectiveCareerClubId(room, candidate)) === clubKey(clubId)
+    && clubKey(effectiveCareerClubId(room, candidate, lookup)) === clubKey(clubId)
   )).map((candidate) => identifierKey(candidate.id)));
   if (includeScheduled) {
     const targetSeason = Math.max(1, integer(effectiveSeason, currentSeason(room)));
@@ -961,10 +997,10 @@ function assertSquadCapacity(room, clubId, playerId, {
   }
 }
 
-function actualOwnership(room, player) {
-  const career = careerPlayer(room, player?.id);
+function actualOwnership(room, player, lookup = null) {
+  const career = lookup ? lookup.career(player?.id) : careerPlayer(room, player?.id);
   if (career && playerIsFreeAgent(career)) return FREE_AGENT_CLUB_ID;
-  const registration = registrationForPlayer(room, player?.id);
+  const registration = lookup ? lookup.registration(player?.id) : registrationForPlayer(room, player?.id);
   if (registration?.currentClubId) return registration.currentClubId;
   const clubId = identifier(career?.currentClubId ?? career?.clubId ?? career?.contract?.clubId ?? player?.clubId);
   if (clubId) return clubId;
@@ -2234,7 +2270,7 @@ function leagueKeyForClub(room, clubId) {
   return identifierKey(league?.id);
 }
 
-function advanceMarketLoansInternal(room, seasonNumber, round, now = new Date(), leagueId = null) {
+function advanceMarketLoansInternal(room, seasonNumber, round, now = new Date(), leagueId = null, { beforeLoanEnds = () => {} } = {}) {
   const state = ensureMarketState(room, now);
   const season = Math.max(1, integer(seasonNumber, 1));
   const normalizedRound = Math.max(1, integer(round, 1));
@@ -2259,6 +2295,7 @@ function advanceMarketLoansInternal(room, seasonNumber, round, now = new Date(),
     advanced += 1;
     registration.loan.remainingRounds = Math.max(0, integer(registration.loan.remainingRounds) - 1);
     if (registration.loan.remainingRounds === 0) {
+      beforeLoanEnds();
       const value = finishLoan(room, state, registration, now);
       if (value?.disposition === "returned") returned.push(value.registration);
       else if (value?.disposition === "converted") returned.push(value.registration);
@@ -3325,13 +3362,15 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
   }
   const allPlayers = [...playerMap.values()];
   const rosters = new Map(aiClubs.map((club) => [clubKey(club.id), []]));
+  // One index for the whole scan instead of a linear search per player.
+  const ownershipLookup = squadLookup(room);
   for (const player of allPlayers) {
     if (player?.active === false
       || player?.academy === true
       || player?.youth === true
       || player?.retired === true
       || player?.careerStage === "academy") continue;
-    rosters.get(clubKey(actualOwnership(room, player)))?.push(player);
+    rosters.get(clubKey(actualOwnership(room, player, ownershipLookup)))?.push(player);
   }
   const players = allPlayers.filter((player) => aiTransferPlayerEligible(room, state, player, aiClubKeys));
   const financialContexts = new Map(aiClubs.map((club) => [
@@ -3340,9 +3379,11 @@ function runAiTransferTickInternal(room, input = {}, now = new Date()) {
   ]));
   const seed = `${room.id ?? room.code}:${tickKey}`;
   let policyMethod = preferredMethod ?? "club-strategy";
+  // A fresh index: the eligibility and finance checks above may have touched the market state.
+  const sellerLookup = squadLookup(room);
   const orderedPlayers = players
     .filter((player) => {
-      const fromClubId = actualOwnership(room, player);
+      const fromClubId = actualOwnership(room, player, sellerLookup);
       return clubKey(fromClubId) === clubKey(FREE_AGENT_CLUB_ID)
         || (rosters.get(clubKey(fromClubId))?.length ?? 0) > AI_MIN_SQUAD_AFTER_TRANSFER;
     })
@@ -3829,8 +3870,31 @@ export function processScheduledTransfers(...args) {
   return withRoomRollback(args[0], () => processScheduledTransfersInternal(...args));
 }
 
-export function advanceMarketLoans(...args) {
-  return withRoomRollback(args[0], () => advanceMarketLoansInternal(...args));
+/**
+ * Runs once per completed league round, so a full room copy as rollback point (as the other
+ * market operations take) was made dozens of times per match. Until a loan ends, this only
+ * replaces room.marketState (ensureMarketState builds a new one), so the rollback point is a
+ * copy of the market state; the full copy is taken just before the first loan ends, with the
+ * market state as it was at the start. On failure the room is restored exactly as before.
+ */
+export function advanceMarketLoans(room, seasonNumber, round, now, leagueId) {
+  const hadMarketState = Object.hasOwn(room, "marketState");
+  const marketStateBefore = structuredClone(room.marketState);
+  let roomBefore = null;
+  try {
+    return advanceMarketLoansInternal(room, seasonNumber, round, now, leagueId, {
+      beforeLoanEnds() {
+        if (roomBefore) return;
+        roomBefore = structuredClone({ ...room, marketState: marketStateBefore });
+        if (!hadMarketState) delete roomBefore.marketState;
+      },
+    });
+  } catch (error) {
+    if (roomBefore) restoreRoom(room, roomBefore);
+    else if (hadMarketState) room.marketState = marketStateBefore;
+    else delete room.marketState;
+    throw error;
+  }
 }
 
 export function returnLoansForSeason(...args) {

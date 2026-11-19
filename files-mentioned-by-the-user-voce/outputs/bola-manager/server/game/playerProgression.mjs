@@ -206,14 +206,48 @@ export function normalizePlayerState(value, {
   };
 }
 
-function normalizedRoomStates(room) {
+// normalizePlayerState reaches its fixed point in one pass. A stored state this module produced
+// for a season and never changed afterwards is already normalized for that season, so a match
+// can keep it as is instead of rebuilding every player state of the career for each fixture.
+// The club is remembered too: the market moves a player by rewriting state.clubId in place.
+const normalizedForSeason = new WeakMap();
+
+function alreadyNormalized(candidate, seasonNumber) {
+  const marked = candidate && typeof candidate === "object" ? normalizedForSeason.get(candidate) : null;
+  return Boolean(marked) && marked.seasonNumber === seasonNumber && marked.clubId === candidate.clubId;
+}
+
+/**
+ * reusable(candidate): the caller will not modify this state, so an already normalized one can
+ * be kept by reference. Every other state is a fresh normalized copy, as before.
+ */
+function normalizedRoomStates(room, { reusable = () => false } = {}) {
   const seasonNumber = Math.max(1, integer(room?.currentSeason, 1));
   const states = new Map();
   for (const candidate of Array.isArray(room?.playerStates) ? room.playerStates : []) {
-    const normalized = normalizePlayerState(candidate, { seasonNumber });
+    const normalized = alreadyNormalized(candidate, seasonNumber) && reusable(candidate)
+      ? candidate
+      : normalizePlayerState(candidate, { seasonNumber });
     if (normalized) states.set(stateKey(normalized.clubId, normalized.playerId), normalized);
   }
   return states;
+}
+
+/**
+ * The stored state each player of a merge would get from normalizedRoomStates (last valid
+ * entry per club + player), normalizing only those players instead of the whole room.
+ */
+function roomStateLookup(room, seasonNumber) {
+  const candidates = new Map();
+  for (const candidate of Array.isArray(room?.playerStates) ? room.playerStates : []) {
+    const playerId = identifier(candidate?.playerId);
+    const clubId = identifier(candidate?.clubId);
+    if (playerId && clubId) candidates.set(stateKey(clubId, playerId), candidate);
+  }
+  return (key) => {
+    const candidate = candidates.get(key);
+    return candidate ? normalizePlayerState(candidate, { seasonNumber }) : undefined;
+  };
 }
 
 function mergePlayerState(player, state, seasonNumber) {
@@ -243,11 +277,11 @@ function mergePlayerState(player, state, seasonNumber) {
 export function mergePlayerStates(players, room, clubId) {
   const values = Array.isArray(players) ? players : [];
   const seasonNumber = Math.max(1, integer(room?.currentSeason, 1));
-  const states = normalizedRoomStates(room);
+  const stateFor = roomStateLookup(room, seasonNumber);
   const requestedClub = identifier(clubId);
   return values.map((player) => {
     const playerClubId = identifier(player?.clubId) || requestedClub;
-    const state = states.get(stateKey(playerClubId, player?.id));
+    const state = stateFor(stateKey(playerClubId, player?.id));
     return mergePlayerState({ ...player, clubId: playerClubId }, state, seasonNumber);
   });
 }
@@ -508,7 +542,24 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
   const homeClubId = identifier(result?.homeClubId ?? fixture?.homeClubId);
   const awayClubId = identifier(result?.awayClubId ?? fixture?.awayClubId);
   const competitionId = competitionIdFor(fixture, result);
-  const states = normalizedRoomStates(room);
+  const statistics = [
+    ...entriesForSide(result, "playerStatistics", "home", homeClubId),
+    ...entriesForSide(result, "playerStatistics", "away", awayClubId),
+  ];
+  const effects = playerEffectsFor(result, homeClubId, awayClubId)
+    .map(normalizeEffect)
+    .filter(Boolean);
+  const participatingClubs = new Set([
+    clubKey(homeClubId),
+    clubKey(awayClubId),
+    ...statistics.map((stat) => clubKey(stat.clubId)),
+    ...effects.map((effect) => clubKey(effect.clubId)),
+  ].filter(Boolean));
+  // States of clubs outside this fixture are not changed below and can be kept as they are.
+  const states = normalizedRoomStates(room, {
+    reusable: (candidate) => participatingClubs.size > 0 && !participatingClubs.has(clubKey(candidate.clubId)),
+  });
+  const changed = new Set();
 
   // Runtime fields used by old catalogs lived on the player itself. Seed a
   // room state once so a suspension/injury can be served instead of returning
@@ -528,10 +579,6 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
     states.set(key, normalized);
   }
 
-  const statistics = [
-    ...entriesForSide(result, "playerStatistics", "home", homeClubId),
-    ...entriesForSide(result, "playerStatistics", "away", awayClubId),
-  ];
   updateCompetitionCoverage(room, {
     competitionId,
     seasonNumber,
@@ -547,15 +594,6 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
       result?.competitionFixtureId,
     ],
   });
-  const effects = playerEffectsFor(result, homeClubId, awayClubId)
-    .map(normalizeEffect)
-    .filter(Boolean);
-  const participatingClubs = new Set([
-    clubKey(homeClubId),
-    clubKey(awayClubId),
-    ...statistics.map((stat) => clubKey(stat.clubId)),
-    ...effects.map((effect) => clubKey(effect.clubId)),
-  ].filter(Boolean));
   const effectByPlayer = new Map(effects.map((effect) => [
     stateKey(effect.clubId, effect.playerId),
     effect,
@@ -574,6 +612,7 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
       alreadyApplied.add(key);
       continue;
     }
+    changed.add(state);
     state.injuryMatches = Math.max(0, state.injuryMatches - 1);
     state.suspensionMatches = Math.max(0, state.suspensionMatches - 1);
     state.seasonStats = normalizeSeasonStats(state.seasonStats, seasonNumber);
@@ -600,6 +639,7 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
       });
       states.set(key, state);
     }
+    changed.add(state);
     const conditionBefore = state.condition;
     const matchStats = normalizedMatchStats(stat, result, clubId);
     addMatchStats(state, matchStats);
@@ -637,6 +677,7 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
       });
       states.set(key, state);
     }
+    changed.add(state);
     const conditionBefore = state.condition;
     state.condition = finalCondition(state, null, effect, effect.injuryMatches > 0);
     state.injuryMatches = Math.max(state.injuryMatches, effect.injuryMatches);
@@ -647,6 +688,11 @@ export function applyMatchPlayerProgression(room, fixture, result, now = new Dat
   }
 
   room.playerStates = [...states.values()];
+  // Unchanged states are normalizePlayerState output for this season (or kept ones that were).
+  const seasonOfStates = Math.max(1, integer(room.currentSeason, 1));
+  for (const state of room.playerStates) {
+    if (!changed.has(state)) normalizedForSeason.set(state, { seasonNumber: seasonOfStates, clubId: state.clubId });
+  }
   return {
     playerStates: room.playerStates,
     playerEffects: normalizedEffects,

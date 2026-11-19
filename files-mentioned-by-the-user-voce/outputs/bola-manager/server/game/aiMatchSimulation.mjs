@@ -290,7 +290,14 @@ export function simulateAiFixture(room, fixture, rosters, completedAt, { careerS
       { ...away, clubId: awayClubId },
     ),
   };
-  const previousPlayerStates = structuredClone(room.playerStates ?? []);
+  // Availability events only compare these fields; progression replaces changed states with
+  // new objects, so a field copy is enough (a deep copy of every state per fixture was not).
+  const previousPlayerStates = (room.playerStates ?? []).map((state) => ({
+    playerId: state?.playerId,
+    clubId: state?.clubId,
+    injuryMatches: state?.injuryMatches,
+    suspensionMatches: state?.suspensionMatches,
+  }));
   if (!canTrackPlayers) {
     // The fixture still serves existing bans/injuries and recovers unused
     // players, but no fabricated individual incident is persisted.

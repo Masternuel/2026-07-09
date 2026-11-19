@@ -89,6 +89,20 @@ test("copy-on-write: replaced, added and deleted sections persist; a failed tran
   assert.equal(await reopened.read((state) => Object.hasOwn(state, "catalogMedia")), false);
 });
 
+test("copy-on-write: peek reads a section without copying it, then the operation's own copy", async (t) => {
+  const { db } = await database(t);
+  let committedRooms;
+  await db.read((state) => { committedRooms = state.rooms; });
+  await db.transaction((state, { peek }) => {
+    assert.equal(peek("rooms"), committedRooms, "untouched: the frozen committed section");
+    state.rooms = { ...peek("rooms"), rooms: [{ code: "BOLA-PEEK" }] };
+    assert.equal(peek("rooms"), state.rooms, "after a write: the operation's value");
+    assert.equal(peek("profile").uid, "local-db-test");
+  });
+  assert.deepEqual(await db.read((state) => state.rooms.rooms), [{ code: "BOLA-PEEK" }]);
+  assert.deepEqual(await db.read((state) => state.rooms.history), []);
+});
+
 test("S-10: rename retries transient Windows lock errors with bounded backoff", async () => {
   for (const code of ["EPERM", "EBUSY", "EACCES"]) {
     const waits = []; let calls = 0;

@@ -251,23 +251,34 @@ export class MemoryRoomPersistence {
   #deletedCodes = new Set();
   #creationReceipts = new Map();
 
-  constructor(initialRooms = [], { deletedCodes = [], creationReceipts = [], history = [] } = {}) {
+  #shared = false;
+
+  /**
+   * shared: the initial rooms/receipts/history are immutable (a frozen committed save) and
+   * this adapter lives for one operation. They are kept by reference instead of copied; every
+   * read still returns a copy and a mutation still works on (and stores) its own copy, so the
+   * shared values are never written. exportState then reuses the untouched values, which keeps
+   * the desktop save from copying every room and the whole match archive several times per write.
+   */
+  constructor(initialRooms = [], { deletedCodes = [], creationReceipts = [], history = [], shared = false } = {}) {
+    this.#shared = shared;
     this.#deletedCodes = new Set(deletedCodes);
-    this.#creationReceipts = new Map(clone(creationReceipts));
-    this.matchHistory = new MemoryMatchHistory((code) => this.#rooms.has(code) && !this.#deletedCodes.has(code), history);
+    this.#creationReceipts = new Map(shared ? creationReceipts : clone(creationReceipts));
+    this.matchHistory = new MemoryMatchHistory((code) => this.#rooms.has(code) && !this.#deletedCodes.has(code), history, { shared });
     for (const room of initialRooms) {
       if (isDeletedRoom(room)) this.#deletedCodes.add(room.code);
-      else this.#rooms.set(room.code, clone(room));
+      else this.#rooms.set(room.code, shared ? room : clone(room));
     }
   }
 
   exportState() {
-    return clone({
+    const state = {
       rooms: [...this.#rooms.values()],
       deletedCodes: [...this.#deletedCodes],
       creationReceipts: [...this.#creationReceipts],
       history: this.matchHistory.exportState(),
-    });
+    };
+    return this.#shared ? state : clone(state);
   }
 
   async findCreation(operation) {
@@ -331,8 +342,10 @@ export class MemoryRoomPersistence {
     const next = mutation(current);
     if (next === undefined) return current;
     if (reserved) throw reservedCodeError(code);
-    this.#rooms.set(code, clone(next));
-    return clone(next);
+    const stored = clone(next);
+    this.#rooms.set(code, stored);
+    // A shared adapter is discarded after the operation and its caller copies the result.
+    return this.#shared ? stored : clone(next);
   }
 
   async mutatePaths(code, _paths, mutation) {

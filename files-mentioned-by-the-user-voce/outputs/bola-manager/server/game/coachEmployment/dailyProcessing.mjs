@@ -216,7 +216,7 @@ function expectationFor(room, clubId, league, contract) {
   };
 }
 
-function evaluateAppointment(room, state, appointment, now, minimumGames, id) {
+function evaluateAppointment(room, state, appointment, now, minimumGames, id, { jobSecurityOwned = false } = {}) {
   const league = leagueForClub(room, appointment.clubId);
   const rows = standingsFor(room, league);
   const rowIndex = rows.findIndex((row) => clubKey(row.clubId) === clubKey(appointment.clubId));
@@ -248,6 +248,7 @@ function evaluateAppointment(room, state, appointment, now, minimumGames, id) {
     round: completedRound(room),
     minimumGames,
     evaluationId: id,
+    jobSecurityOwned,
   });
 }
 
@@ -2148,10 +2149,13 @@ export function processCoachEmploymentDate(roomValue, asOf = new Date(), options
 
   const minimumGames = integer(options.minimumGames, 5, 1, 30);
   const round = completedRound(room);
+  // After the first evaluation, state.jobSecurity is the previous evaluation's own result.
+  let jobSecurityOwned = false;
   for (const appointment of state.appointments.filter((candidate) => candidate.status === "active")) {
     const id = `coach-evaluation:s${seasonNumber(room)}:r${round}:${appointment.id}`;
     if (state.evaluations.some((evaluation) => evaluation.id === id)) continue;
-    const securityOutcome = evaluateAppointment(room, state, appointment, now, minimumGames, id);
+    const securityOutcome = evaluateAppointment(room, state, appointment, now, minimumGames, id, { jobSecurityOwned });
+    jobSecurityOwned = true;
     const evaluation = normalizeEvaluation(securityOutcome.evaluation);
     state.jobSecurity = securityOutcome.jobSecurityState;
     state.evaluations.push(evaluation);

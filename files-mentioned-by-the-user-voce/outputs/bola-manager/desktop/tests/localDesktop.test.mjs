@@ -8,7 +8,8 @@ import { request as httpRequest } from "node:http";
 import { openLocalDatabase } from "../localDatabase.mjs";
 import { createFileStores } from "../fileStores.mjs";
 import { startLocalBackend } from "../localBackend.mjs";
-import { createStarterCatalog } from "../localCatalog.mjs";
+import { createStarterCatalog, LocalCatalog } from "../localCatalog.mjs";
+import { sortPlayersForSelection } from "../../server/game/starImpact.mjs";
 import { createAiTacticPlan, DEFAULT_TACTIC_PLAN, FORMATION_ROLES } from "../../server/game/tactics.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../.tmp/desktop-tests");
@@ -161,6 +162,57 @@ test("file: room deletion tombstones and match history persist", async (t) => {
   database = await openLocalDatabase(directory, initial());
   try { assert.equal(await createFileStores(database).persistence.create(room), false); }
   finally { await database.close(); }
+});
+
+test("catalog: club rosters from a committed (frozen) catalog match a full scan, in the same order", async () => {
+  const catalog = createStarterCatalog();
+  catalog.players.push({ ...catalog.players[0], id: "inactive-one", active: false }, { ...catalog.players[1], id: "late-one" });
+  const expected = async (clubId) => sortPlayersForSelection(structuredClone(catalog.players.filter((player) => player.clubId === clubId && player.active !== false)));
+  const frozen = new LocalCatalog(Object.freeze({ ...catalog, players: Object.freeze([...catalog.players]) }), "local-test", undefined, { shared: true });
+  const mutable = new LocalCatalog(catalog, "local-test");
+  for (const clubId of [...new Set(catalog.players.map((player) => player.clubId)), "NOPE"]) {
+    assert.deepEqual((await frozen.listPlayers(clubId)).players, await expected(clubId));
+    assert.deepEqual((await mutable.listPlayers(clubId)).players, await expected(clubId));
+  }
+});
+
+test("file: archive batches save once, keep untouched rooms/records and report what was kept before a failure", async (t) => {
+  const directory = await fixture(t);
+  let database = await openLocalDatabase(directory, initial());
+  let transactions = 0;
+  const transaction = database.transaction;
+  database.transaction = (...args) => { transactions += 1; return transaction(...args); };
+  const { persistence } = createFileStores(database);
+  const room = { id: "room-local", code: "BOLA-AAAA", managerIds: ["local-test"] };
+  const other = { id: "room-other", code: "BOLA-BBBB", managerIds: ["local-test"], payload: { big: [1, 2, 3] } };
+  await persistence.create(room);
+  await persistence.create(other);
+  const records = ["m1", "m2", "m3"].map((id, index) => ({ id, orderKey: String(index), detailsAvailable: true, score: [index, 0] }));
+  transactions = 0;
+  assert.deepEqual((await persistence.matchHistory.putBatch(room, records)).map((record) => record.id), ["m1", "m2", "m3"]);
+  assert.equal(transactions, 1, "one save for the whole batch");
+  // read() returns copies, so capture the committed objects themselves inside the reader.
+  const committed = () => new Promise((done) => { database.read((state) => { done([state.rooms.rooms[1], state.rooms.history[0][1]]); }); });
+  const [otherBefore, recordBefore] = await committed();
+  await persistence.mutate(room.code, (current) => ({ ...current, name: "Renomeada" }));
+  const [otherAfter, recordAfter] = await committed();
+  assert.equal(otherAfter, otherBefore, "a room write keeps the other rooms as they were committed");
+  assert.equal(recordAfter, recordBefore, "a room write does not copy the match archive");
+  // A conflicting record stops the batch: earlier records are saved and reported on the error.
+  const conflicting = [{ id: "m4", orderKey: "4", detailsAvailable: true, score: [4, 0] }, { ...records[0], score: [9, 9] }, { id: "m5", orderKey: "5", detailsAvailable: true }];
+  await assert.rejects(persistence.matchHistory.putBatch(room, conflicting), (error) => (
+    error.code === "MATCH_HISTORY_CONFLICT" && error.acknowledged.map((record) => record.id).join() === "m4"
+  ));
+  await database.close();
+  database = await openLocalDatabase(directory, initial());
+  const reopened = createFileStores(database).persistence;
+  try {
+    assert.deepEqual((await reopened.matchHistory.get(room, "m4")).score, [4, 0]);
+    assert.deepEqual((await reopened.matchHistory.get(room, "m1")).score, [0, 0]);
+    assert.equal(await reopened.matchHistory.get(room, "m5"), null);
+    assert.equal((await reopened.get(room.code)).name, "Renomeada");
+    assert.deepEqual((await reopened.get(other.code)).payload, other.payload);
+  } finally { await database.close(); }
 });
 
 test("file: match sequence/fencing and removal tombstones survive reload", async (t) => {
