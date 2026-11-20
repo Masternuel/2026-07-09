@@ -14,6 +14,29 @@ interface DesktopPeerPanelProps {
 
 type PeerAction = 'offer' | 'answer' | 'accept' | 'enter' | 'disconnect' | null;
 
+/** The desktop sends only a PEER_* code in the error message; the rest stays generic. */
+export function peerErrorCode(error: unknown): string | null {
+  const match = /PEER_[A-Z_]+/.exec(error instanceof Error ? error.message : String(error ?? ''));
+  return match ? match[0] : null;
+}
+
+const INVITE_MINUTES = 5;
+
+export function acceptFailureMessage(code: string | null): string {
+  if (code === 'PEER_SIGNAL_WRONG_TYPE') return 'Esse texto é um convite, não a resposta. Cole aqui o texto que o amigo gerou em "Gerar resposta".';
+  if (code === 'PEER_SIGNAL_INVALID') return 'A resposta está incompleta ou alterada. Peça para o amigo copiar com o botão "Copiar resposta" e enviar de novo. Se o app de conversa cortar textos longos (como o Discord), mande como arquivo .txt.';
+  if (code === 'PEER_SIGNAL_STATE') return `Essa resposta não corresponde a nenhum convite aberto. Cada convite vale ${INVITE_MINUTES} minutos e aceita uma única resposta, e é perdido se o jogo for fechado. Gere um novo convite e peça uma nova resposta.`;
+  if (code === 'PEER_TRANSPORT_CLOSED' || code === 'PEER_TRANSPORT_TIMEOUT') return 'A conexão do jogo não respondeu. Gere um novo convite e tente de novo.';
+  return 'Não foi possível aceitar a resposta. Gere um novo convite e peça uma nova resposta ao amigo.';
+}
+
+export function answerFailureMessage(code: string | null): string {
+  if (code === 'PEER_SIGNAL_WRONG_TYPE') return 'Esse texto é uma resposta, não um convite. Cole aqui o convite que o anfitrião gerou.';
+  if (code === 'PEER_INVITE_EXPIRED_OR_INVALID') return `O convite expirou (vale ${INVITE_MINUTES} minutos) ou não é válido. Peça um novo ao anfitrião e responda logo.`;
+  if (code === 'PEER_SIGNAL_INVALID') return 'O convite está incompleto ou alterado. Peça para o anfitrião copiar com "Copiar convite" e enviar de novo; se o app cortar textos longos, mande como arquivo .txt.';
+  return 'Não foi possível gerar a resposta. Cole o convite completo e peça um novo ao anfitrião se ele expirou.';
+}
+
 export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge }: DesktopPeerPanelProps) {
   const id = useId();
   const [status, setStatus] = useState<DesktopPeerStatus | null>(null);
@@ -93,7 +116,7 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
 
   if (!bridge || !desktopIdentity) return null;
 
-  async function perform(nextAction: Exclude<PeerAction, null>, operation: () => Promise<void>, failureMessage: string) {
+  async function perform(nextAction: Exclude<PeerAction, null>, operation: () => Promise<void>, failureMessage: string | ((code: string | null) => string)) {
     if (actionPending.current) return;
     actionPending.current = true;
     setAction(nextAction);
@@ -101,8 +124,8 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
     setNotice(null);
     try {
       await operation();
-    } catch {
-      if (mounted.current) setError(failureMessage);
+    } catch (failure) {
+      if (mounted.current) setError(typeof failureMessage === 'function' ? failureMessage(peerErrorCode(failure)) : failureMessage);
     } finally {
       actionPending.current = false;
       if (mounted.current) setAction(null);
@@ -130,7 +153,7 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
       if (mounted.current && currentRoomCode.current === code) {
         setInvitation(offer);
         setHostAnswer('');
-        setNotice('Convite pronto. Copie e envie somente ao amigo que vai entrar.');
+        setNotice(`Convite pronto. Copie e envie somente ao amigo que vai entrar: ele vale ${INVITE_MINUTES} minutos, e a resposta dele precisa chegar dentro desse prazo.`);
       }
     }, 'Não foi possível gerar o convite. Confira se você é o anfitrião de uma carreira compartilhada.');
   }
@@ -143,7 +166,7 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
         setAnswer(nextAnswer);
         setNotice('Resposta pronta. Envie ao anfitrião e aguarde a conexão.');
       }
-    }, 'Não foi possível gerar a resposta. Cole o convite completo e peça um novo ao anfitrião se ele expirou.');
+    }, answerFailureMessage);
   }
 
   function acceptAnswer() {
@@ -155,7 +178,7 @@ export function DesktopPeerPanel({ identity, room = null, bridge = desktopBridge
         setInvitation('');
         setNotice('Resposta aceita. Aguarde a conexão direta com o convidado.');
       }
-    }, 'Não foi possível aceitar a resposta. Confira o texto completo e o convite correspondente.');
+    }, acceptFailureMessage);
   }
 
   function enterCareer() {

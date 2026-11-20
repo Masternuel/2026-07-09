@@ -8,6 +8,9 @@ export function parseSignal(text, type) {
   if (typeof text !== "string" || text.length > 256_000 || !text.trim().startsWith(PREFIX)) throw peerError("PEER_SIGNAL_INVALID");
   let value;
   try { value = JSON.parse(Buffer.from(text.trim().slice(PREFIX.length), "base64url").toString("utf8")); } catch { throw peerError("PEER_SIGNAL_INVALID"); }
+  // A complete code of the other kind (the host pasting its own invitation as the answer,
+  // or the guest pasting an answer as the invitation) gets its own code so the screen can say so.
+  if (value?.version === 1 && ["offer", "answer"].includes(value.type) && value.type !== type) throw peerError("PEER_SIGNAL_WRONG_TYPE");
   if (value?.version !== 1 || value.type !== type || !/^[a-f0-9-]{36}$/.test(value.id)
     || !value.description || value.description.type !== type || typeof value.description.sdp !== "string" || value.description.sdp.length > 128_000) throw peerError("PEER_SIGNAL_INVALID");
   if (type === "offer") validateInvitation(value.invitation, value.id);

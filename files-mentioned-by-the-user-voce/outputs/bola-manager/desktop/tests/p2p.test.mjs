@@ -131,7 +131,8 @@ test("P2P device proof binds one room/nonce and retains identity across process 
     assert.throws(() => verifyInvitationProof(invitation, { ...proof, secret: "x".repeat(43) }), { code: "PEER_AUTH_REJECTED" });
     const signal = encodeSignal({ type: "offer", id: invitation.id, invitation, description: { type: "offer", sdp: "test" } });
     assert.equal(parseSignal(signal, "offer").id, invitation.id);
-    assert.throws(() => parseSignal(signal, "answer"), { code: "PEER_SIGNAL_INVALID" });
+    assert.throws(() => parseSignal(signal, "answer"), { code: "PEER_SIGNAL_WRONG_TYPE" });
+    assert.throws(() => parseSignal(signal.slice(0, -40), "offer"), { code: "PEER_SIGNAL_INVALID" });
     const expired = { ...invitation, expiresAt: Date.now() - 1 };
     assert.throws(() => parseSignal(encodeSignal({ type: "offer", id: expired.id, invitation: expired, description: { type: "offer", sdp: "test" } }), "offer"));
     await backend.close();

@@ -352,9 +352,15 @@ else {
         await window.loadURL(origin);
       },
     };
-    for (const [action, handler] of Object.entries(peerHandlers)) ipcMain.handle(`desktop:${action}`, (event, value) => {
+    for (const [action, handler] of Object.entries(peerHandlers)) ipcMain.handle(`desktop:${action}`, async (event, value) => {
       if (!trustedSender(event)) throw new Error("LOCAL_IPC_FORBIDDEN");
-      return handler(value);
+      // IPC keeps only the error message, so the PEER_* code goes there for the screen
+      // to explain the cause (expired invite, wrong text). No other detail crosses.
+      try { return await handler(value); }
+      catch (error) {
+        const code = [error?.code, error?.message].find((item) => /^PEER_[A-Z_]{1,60}$/.test(String(item)));
+        throw new Error(code ?? "PEER_FAILED");
+      }
     });
     const session = window.webContents.session;
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
