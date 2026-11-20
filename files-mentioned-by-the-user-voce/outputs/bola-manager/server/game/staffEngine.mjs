@@ -720,19 +720,38 @@ function recomputeEffects(room, now) {
     const clubId = identifier(member.clubId);
     if (clubId) clubIds.set(clubKey(clubId), clubId);
   }
-  career.staffEffectsByClub = Object.fromEntries([...clubIds.values()].map((clubId) => [
-    clubId,
-    calculateEffectsFromCollections(career.staffMembers, career.staffContracts, clubId, now),
-  ]));
+  // Group once: filtering every member and contract per club made this quadratic in clubs.
+  // Each club still gets its own members and only their contracts (same order per staffId),
+  // so calculateEffectsFromCollections returns exactly what it did with the full lists.
+  const membersByClub = new Map();
+  for (const member of career.staffMembers ?? []) {
+    const memberClub = clubKey(member.clubId);
+    if (!membersByClub.has(memberClub)) membersByClub.set(memberClub, []);
+    membersByClub.get(memberClub).push(member);
+  }
+  const contractsByStaff = new Map();
+  for (const contract of career.staffContracts ?? []) {
+    if (!contractsByStaff.has(contract.staffId)) contractsByStaff.set(contract.staffId, []);
+    contractsByStaff.get(contract.staffId).push(contract);
+  }
+  career.staffEffectsByClub = Object.fromEntries([...clubIds.values()].map((clubId) => {
+    const clubMembers = membersByClub.get(clubKey(clubId)) ?? [];
+    const clubContracts = clubMembers.flatMap((member) => contractsByStaff.get(member.id) ?? []);
+    return [clubId, calculateEffectsFromCollections(clubMembers, clubContracts, clubId, now)];
+  }));
 }
 
-/** Clone and migrate staff data without changing unrelated room/career fields. */
-export function ensureStaffState(roomValue, { now = new Date(), candidateCountPerRole = 2 } = {}) {
+/**
+ * Clone and migrate staff data without changing unrelated room/career fields.
+ * copyInput: false for a throwaway view built by the caller. The migration only reads its input
+ * (every normalizer builds new objects), so the deep copy there only guarded shared data.
+ */
+export function ensureStaffState(roomValue, { now = new Date(), candidateCountPerRole = 2, copyInput = true } = {}) {
   if (!roomValue || typeof roomValue !== "object" || Array.isArray(roomValue)) {
     throw new StaffError("Save inválido para comissão técnica", "STAFF_ROOM_INVALID", 400);
   }
   const nowIso = timestamp(now);
-  const room = structuredClone(roomValue);
+  const room = copyInput ? structuredClone(roomValue) : { ...roomValue };
   const existingCareer = careerStateFrom(room);
   const collections = normalizedStaffCollections(room, nowIso);
   const initialized = new Map((Array.isArray(existingCareer.staffInitializedClubIds)

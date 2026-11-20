@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, utilityProcess, shell, safeStorage } from "electron";
-import { open } from "node:fs/promises";
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, utilityProcess, shell, safeStorage } from "electron";
+import { open, readFile, rename, writeFile } from "node:fs/promises";
+import { constants as osConstants, setPriority } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -8,6 +9,7 @@ import { catalogExportAddress } from "./catalogImport.mjs";
 import { BUNDLED_CATALOG_RELATIVE_PATH, readBundledCatalogBytes } from "./bundledCatalog.mjs";
 import { MAX_CATALOG_DATABASE_BYTES } from "../server/services/catalogDatabase.mjs";
 import { createAiSettingsStore } from "./aiSettings.mjs";
+import { DEFAULT_LOCAL_MODEL, LOCAL_AI_MODELS } from "./localAi/catalog.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 app.setName("Bola Manager Desktop");
@@ -15,6 +17,7 @@ const dataArgument = process.argv.find((value) => value.startsWith("--desktop-da
 if (dataArgument) app.setPath("userData", dataArgument.slice("--desktop-data-dir=".length));
 
 let worker;
+let aiWorker;
 let window;
 let networkWindow;
 let origin;
@@ -69,6 +72,19 @@ else {
       aiSettingsError = error.code;
       return { apiKey: "", enabled: false };
     });
+    // Local AI preference: plain JSON (no secret), outside saves and exports.
+    const localAiPath = join(app.getPath("userData"), "local-ai.json");
+    let localAiConfig = await readFile(localAiPath, "utf8").then((text) => {
+      const value = JSON.parse(text);
+      return { enabled: value?.enabled === true, modelId: Object.hasOwn(LOCAL_AI_MODELS, value?.modelId) ? value.modelId : DEFAULT_LOCAL_MODEL };
+    }).catch(() => ({ enabled: false, modelId: DEFAULT_LOCAL_MODEL }));
+    const saveLocalAiConfig = async (value) => {
+      localAiConfig = value;
+      const temporary = `${localAiPath}.${randomUUID()}.pending`;
+      await writeFile(temporary, JSON.stringify(value));
+      await rename(temporary, localAiPath);
+    };
+    socialAiConfig.local = localAiConfig;
     // Explicit OS-only environment: no inherited Firebase, Redis or provider secrets.
     const env = Object.fromEntries(["PATH", "Path", "SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"]
       .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
@@ -98,6 +114,41 @@ else {
         app.quit();
       }
     });
+    // Local model host: separate, below-normal priority, CPU-only; the game engine talks to it
+    // over a private port. If it dies, social replies fall back to the deterministic ones.
+    const aiPending = new Map();
+    let aiNextId = 1;
+    const aiRequest = (action, value, timeoutMs = 20_000) => new Promise((resolve, reject) => {
+      if (!aiWorker) { reject(Object.assign(new Error("IA local indisponivel"), { code: "LOCAL_AI_CLOSED" })); return; }
+      const id = aiNextId++;
+      const timer = setTimeout(() => { aiPending.delete(id); reject(Object.assign(new Error("IA local sem resposta"), { code: "LOCAL_AI_TIMEOUT" })); }, timeoutMs);
+      aiPending.set(id, { resolve, reject, timer });
+      aiWorker.postMessage({ id, action, value });
+    });
+    const startAiWorker = () => {
+      aiWorker = utilityProcess.fork(join(root, "desktop/localAi/worker.mjs"), [], {
+        env: { ...env, BOLA_LOCAL_AI_DIR: app.getPath("userData") }, stdio: "pipe", serviceName: "Bola Manager IA local" });
+      aiWorker.stdout?.resume();
+      aiWorker.stderr?.resume();
+      aiWorker.on("spawn", () => {
+        try { setPriority(aiWorker.pid, osConstants.priority.PRIORITY_BELOW_NORMAL); } catch { /* best effort */ }
+        const { port1, port2 } = new MessageChannelMain();
+        aiWorker.postMessage({ type: "enginePort" }, [port2]);
+        worker.postMessage({ type: "localAiPort" }, [port1]);
+      });
+      aiWorker.on("message", (message) => {
+        const item = aiPending.get(message?.id);
+        if (!item) return;
+        aiPending.delete(message.id); clearTimeout(item.timer);
+        if (message.error) item.reject(Object.assign(new Error("IA local indisponivel"), { code: message.error.code }));
+        else item.resolve(message.value);
+      });
+      aiWorker.on("exit", () => {
+        aiWorker = null;
+        for (const item of aiPending.values()) { clearTimeout(item.timer); item.reject(Object.assign(new Error("IA local encerrada"), { code: "LOCAL_AI_CLOSED" })); }
+        aiPending.clear();
+      });
+    };
     ({ origin } = await request("start", undefined, { directory: join(app.getPath("userData"), "saves"), staticDirectory: join(root, "dist-desktop"), socialAiConfig,
       // Installed builds only: source runs and tests keep the deterministic starter catalog.
       bundledCatalogPath: app.isPackaged ? join(root, BUNDLED_CATALOG_RELATIVE_PATH) : null }));
@@ -149,6 +200,7 @@ else {
         return request(action, value);
       });
     }
+    startAiWorker();
     const readAiSettings = async () => ({ ...await request("socialAiStatus"),
       storageAvailable: await aiSettings.available(), ...(aiSettingsError ? { lastError: aiSettingsError } : {}) });
     let aiSettingsBusy = false;
@@ -165,12 +217,46 @@ else {
         if (action === "testAiConnection") await request("testSocialAi");
         else {
           const config = await aiSettings.write(value);
-          await request("configureSocialAi", config);
+          await request("configureSocialAi", { ...config, local: localAiConfig });
           aiSettingsError = null;
         }
         return await readAiSettings();
       } catch { throw new Error("Nao foi possivel configurar/testar o Gemini. Verifique a chave, a conexao e se voce e o anfitriao."); }
       finally { aiSettingsBusy = false; }
+    });
+    const localAiStatus = async () => ({ ...await aiRequest("status", { modelId: localAiConfig.modelId }), enabled: localAiConfig.enabled, running: Boolean(aiWorker) });
+    const reconfigureSocialAi = async () => {
+      const gemini = await aiSettings.read().catch(() => ({ apiKey: "", enabled: false }));
+      await request("configureSocialAi", { ...gemini, local: localAiConfig });
+    };
+    const localAiHandlers = {
+      localAiStatus: () => localAiStatus(),
+      async localAiDownload() {
+        if (!aiWorker) startAiWorker();
+        await aiRequest("download", { modelId: localAiConfig.modelId });
+        return localAiStatus();
+      },
+      async localAiCancel() { await aiRequest("cancelDownload"); return localAiStatus(); },
+      async localAiSetEnabled(value) {
+        if (typeof value !== "boolean") throw new Error("LOCAL_AI_SETTINGS_INVALID");
+        if ((await request("peerStatus")).mode === "guest") throw new Error("LOCAL_AI_HOST_REQUIRED");
+        if (value && !(await aiRequest("status", { modelId: localAiConfig.modelId })).installed) throw new Error("LOCAL_AI_MODEL_MISSING");
+        await saveLocalAiConfig({ ...localAiConfig, enabled: value });
+        await reconfigureSocialAi();
+        if (!value) await aiRequest("unload").catch(() => undefined);
+        return localAiStatus();
+      },
+      async localAiRemove() {
+        await saveLocalAiConfig({ ...localAiConfig, enabled: false });
+        await reconfigureSocialAi();
+        await aiRequest("remove", { modelId: localAiConfig.modelId });
+        return localAiStatus();
+      },
+    };
+    for (const [action, handler] of Object.entries(localAiHandlers)) ipcMain.handle(`desktop:${action}`, async (event, value) => {
+      if (!trustedSender(event)) throw new Error("LOCAL_IPC_FORBIDDEN");
+      try { return await handler(value); }
+      catch (error) { throw new Error(`IA local: ${error?.code ?? error?.message ?? "LOCAL_AI_FAILED"}`); }
     });
     let catalogDialogOpen = false;
     const catalogHandlers = {
@@ -266,9 +352,15 @@ else {
         await window.loadURL(origin);
       },
     };
-    for (const [action, handler] of Object.entries(peerHandlers)) ipcMain.handle(`desktop:${action}`, (event, value) => {
+    for (const [action, handler] of Object.entries(peerHandlers)) ipcMain.handle(`desktop:${action}`, async (event, value) => {
       if (!trustedSender(event)) throw new Error("LOCAL_IPC_FORBIDDEN");
-      return handler(value);
+      // IPC keeps only the error message, so the PEER_* code goes there for the screen
+      // to explain the cause (expired invite, wrong text). No other detail crosses.
+      try { return await handler(value); }
+      catch (error) {
+        const code = [error?.code, error?.message].find((item) => /^PEER_[A-Z_]{1,60}$/.test(String(item)));
+        throw new Error(code ?? "PEER_FAILED");
+      }
     });
     const session = window.webContents.session;
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -290,7 +382,7 @@ else {
     const code = /^[A-Z0-9_:-]{1,80}$/.test(error?.code) ? error.code : "LOCAL_STARTUP_FAILED";
     console.error(`LOCAL_STARTUP:${code}`);
     dialog.showErrorBox("Não foi possível abrir o jogo", `Falha local (${error.code ?? "LOCAL_STARTUP_FAILED"}). Nenhum save foi apagado.`);
-    worker?.kill();
+    worker?.kill(); aiWorker?.kill();
     quitting = true;
     app.quit();
   }
@@ -305,7 +397,7 @@ else {
       const code = /^[A-Z0-9_:-]{1,80}$/.test(error?.code) ? error.code : "LOCAL_SHUTDOWN_FAILED";
       console.error(`LOCAL_SHUTDOWN:${code}`);
       dialog.showErrorBox("Encerramento local incompleto", "O último save confirmado foi preservado; verifique o encerramento antes de continuar.");
-    }).finally(() => { networkWindow?.destroy(); worker?.kill(); rejectPending(); app.quit(); });
+    }).finally(() => { networkWindow?.destroy(); worker?.kill(); aiWorker?.kill(); rejectPending(); app.quit(); });
   });
   });
 }

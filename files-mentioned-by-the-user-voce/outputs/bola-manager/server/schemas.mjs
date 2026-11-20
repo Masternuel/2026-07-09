@@ -16,7 +16,7 @@ export const createRoomSchema = z.object({
   creatorId: legacyIdentifier,
   creatorName: z.string().trim().min(2).max(60).optional(),
   clubId: clubIdentifier.optional(),
-  activeLeagues: z.array(z.string().trim().min(2).max(40)).min(1).max(24).prefault(["BR-A", "BR-B"]),
+  activeLeagues: z.array(z.string().trim().min(2).max(40)).min(1).max(24, "Cada carreira aceita ate 24 divisoes").prefault(["BR-A", "BR-B"]),
   seasonLength: z.coerce.number().int().min(1).max(20).prefault(1),
   unlimitedSeasons: z.boolean().prefault(false),
   maxManagers: z.coerce.number().int().min(1).max(16).prefault(6),

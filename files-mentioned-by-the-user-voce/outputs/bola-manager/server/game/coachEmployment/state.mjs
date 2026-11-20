@@ -1258,19 +1258,29 @@ function normalizedState(value, now) {
     .map(normalizeEvaluation)
     .filter(Boolean));
   let jobSecurity = normalizeCoachJobSecurityState(source.jobSecurity);
+  // Lookups for "this evaluation already has a history entry" (same id, same evaluation, or the
+  // same coach, club, date and score, and appointment when the evaluation has one). Scanning the
+  // whole history for every evaluation grew with the square of the career length.
+  const historyIds = new Set();
+  const historyEvaluationIds = new Set();
+  const historyOccurrences = new Map();
+  const occurrenceKey = (coachId, clubId, occurredAt, score) => JSON.stringify([coachId, clubId, occurredAt, score]);
+  const rememberHistory = (entry) => {
+    historyIds.add(entry.id);
+    historyEvaluationIds.add(entry.evaluationId);
+    const occurrence = occurrenceKey(identifier(entry.coachId), identifier(entry.clubId),
+      nullableTimestamp(entry.occurredAt), finite(entry.newScore, -1));
+    if (!historyOccurrences.has(occurrence)) historyOccurrences.set(occurrence, new Set());
+    historyOccurrences.get(occurrence).add(identifier(entry.appointmentId));
+  };
+  jobSecurity.history.forEach(rememberHistory);
   for (const evaluation of evaluations) {
     const historyId = `${evaluation.id}:security-history`;
-    if (jobSecurity.history.some((entry) => (
-      entry.id === historyId
-      || entry.evaluationId === evaluation.id
-      || (
-        identifier(entry.coachId) === evaluation.coachId
-        && identifier(entry.clubId) === evaluation.clubId
-        && (!evaluation.appointmentId || identifier(entry.appointmentId) === evaluation.appointmentId)
-        && nullableTimestamp(entry.occurredAt) === nullableTimestamp(evaluation.updatedAt ?? evaluation.evaluatedAt)
-        && finite(entry.newScore, -1) === evaluation.score
-      )
-    ))) continue;
+    const appointments = historyOccurrences.get(occurrenceKey(evaluation.coachId, evaluation.clubId,
+      nullableTimestamp(evaluation.updatedAt ?? evaluation.evaluatedAt), evaluation.score));
+    if (historyIds.has(historyId)
+      || historyEvaluationIds.has(evaluation.id)
+      || (appointments && (!evaluation.appointmentId || appointments.has(evaluation.appointmentId)))) continue;
     jobSecurity.history.push({
       id: historyId,
       evaluationId: evaluation.id,
@@ -1292,8 +1302,10 @@ function normalizedState(value, now) {
       decision: evaluation.recommendation,
       legacyDerived: Boolean(evaluation.legacyDerived),
     });
+    rememberHistory(jobSecurity.history.at(-1));
   }
-  jobSecurity = normalizeCoachJobSecurityState(jobSecurity);
+  // jobSecurity is this function's own normalized copy: no second deep copy is needed.
+  jobSecurity = normalizeCoachJobSecurityState(jobSecurity, { owned: true });
   for (const proposal of proposals) {
     const legacyGuarantees = Array.isArray(proposal.guarantees) ? proposal.guarantees : [];
     for (const [index, raw] of legacyGuarantees.entries()) {
@@ -1962,8 +1974,12 @@ function reconcileHumanManagerClaims(room, state, now) {
 }
 
 function seedLegacyLinks(room, state, now) {
+  // The catalog does not change in this loop: build the club map once, not once per coach
+  // (canonicalClubId rebuilds and copies every club on each call).
+  const clubs = catalogClubs(room);
   for (const coach of room.coachCareerState.coaches) {
-    const clubId = canonicalClubId(room, coach.currentClubId);
+    const supplied = identifier(coach.currentClubId);
+    const clubId = supplied ? (clubs.get(clubKey(supplied))?.id ?? supplied) : null;
     if (!clubId || activeAppointmentForCoach(state, coach.id) || activeAppointmentForClub(state, clubId)) continue;
     const assignment = currentAssignment(coach);
     const role = coach.status === "interim" ? "interim" : "head_coach";

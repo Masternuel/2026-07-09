@@ -4,7 +4,8 @@ export default {
   directories: { output: "release-desktop", buildResources: ".tmp/desktop-build" },
   artifactName: "Bola-Manager-Setup-${version}-${arch}.${ext}",
   asar: true,
-  asarUnpack: ["node_modules/@img/**"],
+  // Native code must live outside app.asar; only the CPU build of the local-AI engine ships.
+  asarUnpack: ["node_modules/@img/**", "node_modules/node-llama-cpp/**", "node_modules/@node-llama-cpp/win-x64/**"],
   npmRebuild: false, // sharp uses its platform-specific Node-API binaries.
   publish: null,
   files: [
@@ -17,6 +18,11 @@ export default {
     "server/**/*.mjs",
     "shared/**/*.mjs",
     "!desktop/tests/**",
+    "!node_modules/@node-llama-cpp/win-x64-cuda/**",
+    "!node_modules/@node-llama-cpp/win-x64-cuda-ext/**",
+    "!node_modules/@node-llama-cpp/win-x64-vulkan/**",
+    "!node_modules/@node-llama-cpp/win-arm64/**",
+    "!node_modules/node-llama-cpp/llama/gitRelease.bundle",
     "!desktop/installer.config.mjs",
     "!server/tests/**",
     "!**/.env*",

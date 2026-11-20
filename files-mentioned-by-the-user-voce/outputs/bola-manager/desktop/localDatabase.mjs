@@ -35,6 +35,44 @@ export async function renameWithRetry(from, to, { renameFile = rename, attempts 
   }
 }
 
+/**
+ * Transaction draft that clones a top-level section (rooms, catalog, ...) only when the
+ * operation first touches it. A match only changes rooms/matches, so a 100k-player catalog
+ * is no longer copied on every save. Untouched sections keep the frozen committed object.
+ */
+function copyOnWrite(state) {
+  const draft = {};
+  const own = (key, value) => Object.defineProperty(draft, key, { value, writable: true, enumerable: true, configurable: true });
+  for (const key of Object.keys(state)) {
+    Object.defineProperty(draft, key, {
+      enumerable: true, configurable: true,
+      get() { const value = structuredClone(state[key]); own(key, value); return value; },
+      set(value) { own(key, value); },
+    });
+  }
+  return draft;
+}
+
+/**
+ * Section of a draft without copying it: the frozen committed value while the operation has
+ * not touched it, otherwise the operation's own copy. Callers that rebuild a section around
+ * unchanged frozen parts (rooms + a growing match archive) assign the result back instead of
+ * mutating what this returns.
+ */
+function peekDraft(draft, state, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(draft, key);
+  return descriptor?.get ? state[key] : draft[key];
+}
+
+function materialize(draft, state) {
+  const next = {};
+  for (const key of Object.keys(draft)) {
+    const descriptor = Object.getOwnPropertyDescriptor(draft, key);
+    next[key] = descriptor.get ? state[key] : descriptor.value;
+  }
+  return next;
+}
+
 function encode(state) {
   const payload = serialize({ version: 1, state });
   if (payload.length > MAX_BYTES) throw failure("LOCAL_SAVE_TOO_LARGE", "O save local excedeu 128 MiB.");
@@ -178,9 +216,10 @@ export async function openLocalDatabase(directory, initialState, { atomicWrite, 
     // Readers see the frozen committed state; only their result is cloned (D-01).
     read: (operation) => enqueue(async () => structuredClone(await operation(state))),
     transaction: (operation, { backup = false } = {}) => enqueue(async () => {
-      const next = structuredClone(state);
+      const draft = copyOnWrite(state);
       const backupFile = backup ? `career-before-import-${randomUUID()}.bolasave` : null;
-      const result = await operation(next, { backupFile });
+      const result = await operation(draft, { backupFile, peek: (key) => peekDraft(draft, state, key) });
+      const next = materialize(draft, state);
       const bytes = encode(next);
       if (backup) {
         const backupRoot = join(root, "backups");

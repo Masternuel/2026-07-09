@@ -32,17 +32,19 @@ export class LocalEditorCatalog {
       const archived = Object.hasOwn(state.catalogArchives ?? {}, uid) ? state.catalogArchives[uid] : null;
       const records = archived ?? (this.canRead(uid) ? state.catalog : null);
       if (!records) fail("Catalogo local pertence a outro perfil", "ROOM_FORBIDDEN", 403);
-      return new LocalCatalog(this.project(records), uid, undefined, { imported: Boolean(state.catalogImport) })[method](...args);
+      return this.projectResult(new LocalCatalog(records, uid, undefined, { imported: Boolean(state.catalogImport), shared: true })[method](...args));
     });
     return Object.fromEntries(["ensureInitialized", "readInitialized", "get", "listTeams", "listCompetitionCatalog", "listActiveLeagues", "listActiveTournaments", "listPlayers", "getStarImpact"]
       .map((method) => [method, (...args) => read(method, args)]));
   }
   project(value) { return this.media ? this.media.project(value) : structuredClone(value); }
+  // Media URLs are rewritten on the (small) result, never on the whole frozen catalog.
+  async projectResult(pending) { return this.project(await pending); }
   async ensureInitialized() {}
   async readInitialized() {}
   async read(method, ...args) {
-    return this.database.read((state) => new LocalCatalog(this.project(state.catalog), this.ownerId, undefined,
-      { imported: Boolean(state.catalogImport) })[method](...args));
+    return this.database.read((state) => this.projectResult(new LocalCatalog(state.catalog, this.ownerId, undefined,
+      { imported: Boolean(state.catalogImport), shared: true })[method](...args)));
   }
   listTeams(...args) { return this.read("listTeams", ...args); }
   listCompetitionCatalog(...args) { return this.read("listCompetitionCatalog", ...args); }

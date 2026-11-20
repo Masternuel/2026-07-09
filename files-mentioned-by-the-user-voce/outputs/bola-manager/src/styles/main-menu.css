@@ -346,7 +346,7 @@
   --accent: #8b5cf6; --accent-hover: #a78bfa; --accent-deep: #5b21b6; --accent-dim: rgba(139, 92, 246, .18); --on-accent: #fff;
   --canvas: #0b0914; --panel: rgba(16, 13, 28, .8); --raised: rgba(32, 26, 54, .85); --raised-2: rgba(44, 35, 72, .9);
   --ink: #f4f2ff; --ink-soft: #d4cfea; --muted: #a39cc2; --muted-2: #7d769c; --line: rgba(255, 255, 255, .11); --line-soft: rgba(255, 255, 255, .06);
-  --green: #69d596; --blue: #8fb8ff; --amber: #e6b85c; --red: #ff7a85;
+  --green: #c4b5fd; --blue: #8fb8ff; --amber: #e6b85c; --red: #ff7a85;
   --menu-display: Bahnschrift, "Barlow Condensed", "Arial Narrow", sans-serif;
   position: relative; isolation: isolate; color: var(--ink); background: #07060c;
 }
@@ -421,7 +421,7 @@
 }
 /* Menu v2 fit: the whole rail fits a 900px-tall window; saves stay left of the player. */
 .main-menu--scene .brand-logo--menu .brand-logo__crest { width: 96px; height: 96px; }
-.main-menu__tagline { margin-bottom: 16px; font-size: 11px; letter-spacing: .16em; white-space: nowrap; }
+.main-menu__tagline { margin-bottom: 16px; font-size: 12px; letter-spacing: .14em; white-space: normal; text-wrap: balance; }
 .main-menu--scene .main-menu__navigation { gap: 5px; overflow: visible; }
 .main-menu--scene .main-menu__nav-item button { min-height: 42px; padding-block: 8px; }
 .main-menu--scene .main-menu__nav-item--continue button { min-height: 64px; }
@@ -446,6 +446,9 @@
 .main-menu.main-menu--motion .main-menu__nav-item button { transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease !important; }
 .menu-parallax:not(.menu-parallax--motion) *, .menu-parallax:not(.menu-parallax--motion) .menu-parallax__layer { animation: none !important; transition: none !important; }
 .main-menu--scene:not(.main-menu--motion) .main-menu__nav-item--continue button::after { animation: none !important; }
-.main-menu__topbar-tools { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; justify-content: flex-end; }
-.main-menu__motion { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; cursor: pointer; }
-.main-menu__motion input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+/* No green left in the menu: "ok" states (connection, positive badges) use lavender. */
+.main-menu--scene .badge--positive { color: #c4b5fd; border-color: rgba(167, 139, 250, .35); background: rgba(139, 92, 246, .1); }
+.main-menu--scene .main-menu__connection.is-connected { color: #c4b5fd; }
+/* Toasts shown over the menu or the Editor take the purple accent (base style lives in styles.css). */
+body:has(.main-menu--scene, .editor-screen) .toast { --accent: #8b5cf6; --on-accent: #fff; border-color: rgba(139, 92, 246, .35); background: #17131f; }

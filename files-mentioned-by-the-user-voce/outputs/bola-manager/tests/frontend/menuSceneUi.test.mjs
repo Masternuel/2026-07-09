@@ -55,13 +55,29 @@ test('purple theme, art and motion stay inside the menu and respect reduced moti
   assert.match(appCss, /--accent: #c8ff3d;/, 'outside the menu the accent (and club themes) are unchanged');
 });
 
-test('"Animações do menu" toggle is in the top bar and forced motion beats the OS reduced-motion rule', async () => {
+test('"Animações do menu" lives only in Configurações and forced motion beats the OS reduced-motion rule', async () => {
   const html = layout();
-  assert.match(html, /<label class="main-menu__motion"[^>]*><input type="checkbox"[^>]*\/><span>Animações do menu<\/span><\/label>/);
+  assert.doesNotMatch(html, /Animações do menu|main-menu__motion|type="checkbox"/, 'the menu top bar has no motion switch');
+  const config = await readFile(new URL('../../src/views/media/ConfigView.tsx', import.meta.url), 'utf8');
+  assert.match(config, /<Toggle checked=\{menuMotion\.enabled\} onChange=\{menuMotion\.setEnabled\} label="Animações do menu" \/>/);
   const css = await readFile(new URL('../../src/styles/main-menu.css', import.meta.url), 'utf8');
   assert.match(css, /\.main-menu \.menu-parallax--motion \.menu-parallax__layer \{ transition: transform [^}]*!important; \}/);
   assert.match(css, /\.main-menu \.menu-parallax--motion \.menu-parallax__particles span \{[^}]*animation-delay: var\(--delay, 0s\) !important; \}/);
   assert.match(css, /\.menu-parallax:not\(\.menu-parallax--motion\) \*/);
   const hook = await readFile(new URL('../../src/components/menu/useMenuMotion.ts', import.meta.url), 'utf8');
-  assert.match(hook, /mode === 'on' \|\| \(mode === 'auto' && !systemReduced\)/);
+  assert.match(hook, /getItem\(STORAGE_KEY\) !== 'off'/, 'motion starts on and only an explicit "off" disables it');
+  assert.doesNotMatch(hook, /prefers-reduced-motion/, 'the Windows animation setting no longer turns the menu motion off');
+  assert.match(hook, /dispatchEvent\(new Event\(CHANGE_EVENT\)\)/, 'changing it in Configurações updates the open menu');
+});
+
+test('no fixed lime left in the menu experience: Editor, save/club lists, music notice and toasts follow the purple accent', async () => {
+  const read = (file) => readFile(new URL(`../../src/styles/${file}`, import.meta.url), 'utf8');
+  for (const file of ['editor.css', 'entry.css', 'audio.css']) {
+    assert.doesNotMatch(await read(file), /rgba\(\s*200\s*,\s*255\s*,\s*61/, `${file} still hard-codes the lime accent`);
+  }
+  assert.match(await read('editor.css'), /\.editor-screen \{ --accent: #8b5cf6;/);
+  const menu = await read('main-menu.css');
+  assert.match(menu, /--green: #c4b5fd;/);
+  assert.match(menu, /body:has\(\.main-menu--scene, \.editor-screen\) \.toast \{ --accent: #8b5cf6;/);
+  assert.match(await read('audio.css'), /body:has\(\.main-menu--scene, \.editor-screen\) \.music-notification \{ --accent: #8b5cf6; \}/);
 });

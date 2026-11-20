@@ -2,6 +2,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("bolaDesktop", Object.freeze({
   readAiSettings: () => ipcRenderer.invoke("desktop:readAiSettings"),
+  localAiStatus: () => ipcRenderer.invoke("desktop:localAiStatus"),
+  localAiDownload: () => ipcRenderer.invoke("desktop:localAiDownload"),
+  localAiCancel: () => ipcRenderer.invoke("desktop:localAiCancel"),
+  localAiSetEnabled: (enabled) => ipcRenderer.invoke("desktop:localAiSetEnabled", enabled === true),
+  localAiRemove: () => ipcRenderer.invoke("desktop:localAiRemove"),
   writeAiSettings: (value) => ipcRenderer.invoke("desktop:writeAiSettings", value),
   testAiConnection: () => ipcRenderer.invoke("desktop:testAiConnection"),
   session: () => ipcRenderer.invoke("desktop:session"),

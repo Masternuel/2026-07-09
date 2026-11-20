@@ -153,18 +153,47 @@ export function careerDateFor(room, fallback = new Date()) {
   );
 }
 
+// Everything ensureStaffState reads (staffEngine.mjs). It deep-copies the room it is given, so
+// it gets only these fields instead of the whole career save (events, finances, coach and
+// player state), which it copied on every call; the staff fields it returns are the same.
+const STAFF_ROOM_FIELDS = Object.freeze([
+  "id", "code", "currentSeason", "managers", "competitionCatalog", "tournamentCatalog",
+  "staffMembers", "staffCandidates", "staff",
+]);
+const STAFF_CAREER_FIELDS = Object.freeze([
+  "staffMembers", "staffCandidates", "staffContracts", "staffHistory", "staffEffectsByClub",
+  "processedStaffOperationIds", "staffInitializedClubIds", "staff",
+]);
+
+function pickOwn(source, fields) {
+  const view = {};
+  for (const field of fields) if (Object.hasOwn(source, field)) view[field] = source[field];
+  return view;
+}
+
+export function staffStateView(room) {
+  const view = pickOwn(room, STAFF_ROOM_FIELDS);
+  const career = room.clubCareerState;
+  if (Object.hasOwn(room, "clubCareerState")) {
+    view.clubCareerState = career && typeof career === "object" && !Array.isArray(career)
+      ? pickOwn(career, STAFF_CAREER_FIELDS)
+      : career;
+  }
+  return view;
+}
+
 /** Migra saves antigos e inicializa todos os agregados persistentes. */
 export function ensureClubCareerSystems(room, { now = new Date() } = {}) {
   const effectiveAt = careerDateFor(room, now);
   ensureMarketState(room, effectiveAt);
   ensureClubFinanceState(room, effectiveAt);
-  for (const club of catalogClubs(room)) ensureFinanceAccount(room, club.id, { now: effectiveAt });
+  for (const club of catalogClubs(room)) ensureFinanceAccount(room, club.id, { now: effectiveAt, financeStateReady: true });
   ensureClubFacilities(room, effectiveAt);
   ensureClubCareerState(room);
   // ensureStaffState is intentionally pure and returns a full room clone. An
   // aggregate migration must not replace the whole live room here: doing so
   // invalidates references held by match/finance transactions in progress.
-  const staffState = ensureStaffState(room, { now: effectiveAt }).clubCareerState;
+  const staffState = ensureStaffState(staffStateView(room), { now: effectiveAt, copyInput: false }).clubCareerState;
   for (const field of [
     "staffSchemaVersion",
     "staffMembers",
@@ -434,11 +463,13 @@ export function syncMarketCareerSideEffects(room) {
   return { mirrored, events };
 }
 
-export function recordClubMatchday(room, input) {
-  ensureClubCareerSystems(room, { now: input?.occurredAt });
+/** careerSystemsReady: the caller ran ensureClubCareerSystemsAt for this batch already. */
+export function recordClubMatchday(room, input, { careerSystemsReady = false } = {}) {
+  if (!careerSystemsReady) ensureClubCareerSystems(room, { now: input?.occurredAt });
   return recordMatchdayEconomy(room, input, {
     credit: (transaction) => creditFinance(room, transaction),
     recordEvent: (event) => recordClubCareerEvent(room, event),
+    facilitiesReady: careerSystemsReady,
   });
 }
 
@@ -623,8 +654,9 @@ export function recordPlayerAvailabilityEvents(room, {
   seasonNumber: suppliedSeasonNumber = null,
   previousPlayerStates = [],
   occurredAt = new Date(),
+  careerSystemsReady = false,
 } = {}) {
-  ensureClubCareerSystems(room, { now: occurredAt });
+  if (!careerSystemsReady) ensureClubCareerSystems(room, { now: occurredAt });
   const operation = fixtureOperationScope(room, {
     fixtureId,
     competitionId,
@@ -755,10 +787,20 @@ function clamp(value, minimum, maximum) {
  * Agrega somente efeitos comprovaveis da estrutura e da comissao do clube.
  * O bonus de partida e deliberadamente pequeno: ajuda, mas nunca decide sozinho.
  */
-export function clubCareerPerformanceEffects(room, clubId, asOf = new Date()) {
+/**
+ * Runs the (idempotent) aggregate migration once for a batch of effect reads at the same
+ * date. Callers that loop over every club or AI fixture use this and pass { ensured: true },
+ * otherwise each read re-normalizes all clubs and the loop becomes quadratic.
+ */
+export function ensureClubCareerSystemsAt(room, asOf = new Date()) {
+  ensureClubCareerSystems(room, { now: timestamp(asOf) });
+}
+
+export function clubCareerPerformanceEffects(room, clubId, asOf = new Date(), { ensured = false } = {}) {
   const now = timestamp(asOf);
-  ensureClubCareerSystems(room, { now });
-  const facility = facilityEffectsForClub(room, clubId, now);
+  if (!ensured) ensureClubCareerSystems(room, { now });
+  // Either call above or the caller's batch normalized every facility already.
+  const facility = facilityEffectsForClub(room, clubId, now, { ensured: true });
   const staff = calculateStaffEffects(room, clubId, now);
   const club = catalogClubs(room).find((candidate) => clubKey(candidate?.id) === clubKey(clubId));
   const baseAcademyQuality = clamp(finite(
@@ -826,9 +868,10 @@ export function clubCareerPerformanceEffects(room, clubId, asOf = new Date()) {
 }
 
 export function clubCareerEffectsByClub(room, asOf = new Date()) {
+  ensureClubCareerSystemsAt(room, asOf);
   return Object.fromEntries(catalogClubs(room).map((club) => [
     clubKey(club.id),
-    clubCareerPerformanceEffects(room, club.id, asOf),
+    clubCareerPerformanceEffects(room, club.id, asOf, { ensured: true }),
   ]));
 }
 
@@ -888,7 +931,7 @@ export function applyClubRecoveryEffects(room, asOf = new Date()) {
   const now = timestamp(asOf);
   ensureClubCareerSystems(room, { now });
   const effectsByClub = new Map(catalogClubs(room).map((club) => {
-    const facility = facilityEffectsForClub(room, club.id, now);
+    const facility = facilityEffectsForClub(room, club.id, now, { ensured: true });
     const staff = calculateStaffEffects(room, club.id, now);
     return [clubKey(club.id), {
       conditionBonus: Math.max(0, facility.recoveryBonus + staff.conditionRecoveryBonus),

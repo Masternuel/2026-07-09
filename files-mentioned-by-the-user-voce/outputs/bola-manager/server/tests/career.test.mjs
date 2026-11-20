@@ -184,3 +184,12 @@ test("match:finished aponta primeiro jogo da nova temporada ilimitada", async (c
   assert.equal(nextSeason.currentSeason, 2);
   assert.equal(nextSeason.currentFixtureId, "abertura");
 });
+
+test("criar sala com mais de 24 divisoes explica o limite", () => {
+  const activeLeagues = Array.from({ length: 25 }, (_, index) => `BRA-${index + 1}`);
+  assert.throws(() => parseOrThrow(createRoomSchema, { name: "Muitas ligas", activeLeagues }), (error) => (
+    error.status === 400
+    && error.details.some((detail) => detail.path === "activeLeagues" && /24 divisoes/.test(detail.message))
+  ));
+  assert.equal(parseOrThrow(createRoomSchema, { name: "No limite", activeLeagues: activeLeagues.slice(0, 24) }).activeLeagues.length, 24);
+});

@@ -66,7 +66,7 @@ export function MainMenuLayout(props: MainMenuLayoutProps) {
         </div>
       </aside>
       <div className="main-menu__workspace">
-        <header className="main-menu__topbar"><span><strong>{props.sessionSelected ? 'Temporada selecionada' : 'Menu principal'}</strong></span><span className="main-menu__topbar-tools"><label className="main-menu__motion" title={motion.systemReduced && !motion.enabled ? 'Desligadas porque os efeitos de animação do Windows estão desativados.' : undefined}><input type="checkbox" checked={motion.enabled} onChange={(event) => motion.setEnabled(event.target.checked)} /><span>Animações do menu</span></label><span className={`main-menu__connection${connected ? ' is-connected' : ''}`}><Radio size={14} aria-hidden="true" />{connectionLabel}</span></span></header>
+        <header className="main-menu__topbar"><span><strong>{props.sessionSelected ? 'Temporada selecionada' : 'Menu principal'}</strong></span><span className={`main-menu__connection${connected ? ' is-connected' : ''}`}><Radio size={14} aria-hidden="true" />{connectionLabel}</span></header>
         <main id="main-menu-content" className="main-menu__content" tabIndex={-1}>{props.children}</main>
         <footer className="main-menu__footer"><span>{capabilities.storageLabel}</span></footer>
       </div>

@@ -129,6 +129,20 @@ test("agrupa aliases por país e ordena as divisões por nível", () => {
   ), ["BR-A"]);
 });
 
+test("base grande comeca so com o Brasil e nunca passa de 24 divisoes", () => {
+  const big = [];
+  for (const country of ["ALE", "ARG", "BRA", "ESP", "FRA", "HOL", "ING", "ITA", "POR"]) {
+    for (let level = 1; level <= 4; level += 1) {
+      big.push({ id: `${country}-${level}`, name: `${country} ${level}`, country, division: String(level), level, clubCount: 20 });
+    }
+  }
+  assert.deepEqual(defaultLeagueIds(big), ["BRA-1", "BRA-2", "BRA-3", "BRA-4"]);
+  const noBrazil = big.filter((league) => league.country !== "BRA").map((league) => (
+    league.country === "ITA" ? { ...league, clubCount: 30 } : league));
+  assert.deepEqual(defaultLeagueIds(noBrazil), ["ITA-1", "ITA-2", "ITA-3", "ITA-4"]);
+  assert.equal(defaultLeagueIds(big.slice(0, 24)).length, 24, "small catalogs still start with everything");
+});
+
 test("lobby renderiza bandeira decorativa antes do nome de cada pais", () => {
   const html = renderLobby([
     { id: "BR-A", name: "Serie A", country: "BRA", division: "1", level: 1, clubCount: 1 },

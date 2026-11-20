@@ -58,6 +58,7 @@ import {
   compactLeagueRankingTimeline,
 } from "../game/rankingTimeline.mjs";
 import {
+  prepareAiFixtureBatch,
   simulateAiFixture,
   validateAiFixtureRosterCoverage,
 } from "../game/aiMatchSimulation.mjs";
@@ -89,6 +90,7 @@ import {
   awardCompletedCompetitionPrizes,
   clubCareerEffectsByClub,
   clubCareerPerformanceEffects,
+  ensureClubCareerSystemsAt,
   careerDateFor,
   ensureClubCareerSystems,
   fireClubStaff as fireClubStaffOperation,
@@ -851,6 +853,7 @@ function compactLeagueResult({
 
 function recordNewLeagueMatchEconomies(room, previousResultIds, fallbackAt) {
   const recorded = [];
+  let prepared = false;
   for (const result of room.leagueMatchResults ?? []) {
     const resultId = fixtureResultKey(result?.leagueFixtureId);
     if (!resultId || previousResultIds.has(resultId)) continue;
@@ -859,6 +862,7 @@ function recordNewLeagueMatchEconomies(room, previousResultIds, fallbackAt) {
     );
     if (!compactFixture) continue;
     const fixture = hydrateLeagueFixture(room, compactFixture);
+    if (!prepared) { ensureClubCareerSystemsAt(room, careerDateFor(room, fallbackAt)); prepared = true; }
     const economy = recordClubMatchday(room, {
       fixtureId: fixture.leagueFixtureId,
       homeClubId: fixture.homeClubId,
@@ -868,7 +872,7 @@ function recordNewLeagueMatchEconomies(room, previousResultIds, fallbackAt) {
       round: fixture.round,
       score: result.score,
       occurredAt: fixture.scheduledAt ?? result.completedAt ?? fallbackAt,
-    });
+    }, { careerSystemsReady: true });
     if (economy) recorded.push(economy);
   }
   return recorded;
@@ -963,11 +967,13 @@ function roundSummaryFor(room, humanFixture, humanResult) {
 }
 
 function simulateMissingAiFixtures(room, fixtures, completedAt, aiRosters = new Map()) {
+  let prepared = false;
   for (const compactFixture of fixtures) {
     if (fixtureHasManager(room, compactFixture)) continue;
     if (resultForLeagueFixture(room, compactFixture.leagueFixtureId)) continue;
     const fixture = hydrateLeagueFixture(room, compactFixture);
-    const simulated = simulateAiFixture(room, fixture, aiRosters, completedAt);
+    if (!prepared) { prepareAiFixtureBatch(room, completedAt); prepared = true; }
+    const simulated = simulateAiFixture(room, fixture, aiRosters, completedAt, { careerSystemsReady: true });
     enqueueMatchHistory(room, { ...simulated, completedAt }, fixture);
     room.leagueMatchResults.push(compactLeagueResult({
       leagueFixtureId: fixture.leagueFixtureId,
@@ -1198,8 +1204,9 @@ function careerClubs(room) {
   const clubs = [...new Map(values.filter((club) => club?.id).map((club) => [clubKey(club.id), club])).values()];
   if (!room?.clubCareerState) return clubs;
   const asOf = careerDateFor(room, new Date());
+  ensureClubCareerSystemsAt(room, asOf);
   return clubs.map((club) => {
-    const effects = clubCareerPerformanceEffects(room, club.id, asOf);
+    const effects = clubCareerPerformanceEffects(room, club.id, asOf, { ensured: true });
     return {
       ...club,
       // Derivado dos agregados persistentes. Nao altera academyLevel do catalogo

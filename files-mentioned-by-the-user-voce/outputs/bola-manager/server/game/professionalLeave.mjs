@@ -577,9 +577,11 @@ export function ensureProfessionalLeaveState(roomValue, options = {}) {
     : {};
   const markers = rawLegacyLeaveMarkers(roomValue);
   let room = ensureCoachEmploymentState(roomValue, { now: requestedNow });
+  // room is already a private copy (ensureCoachEmploymentState clones), so no second deep copy.
   room = ensureStaffState(room, {
     now: requestedNow,
     candidateCountPerRole: options.candidateCountPerRole ?? 0,
+    copyInput: false,
   });
   const leaves = uniqueById(legacyLeaveSources(roomValue, source)
     .map((leave) => normalizeLeave(leave, requestedNow))

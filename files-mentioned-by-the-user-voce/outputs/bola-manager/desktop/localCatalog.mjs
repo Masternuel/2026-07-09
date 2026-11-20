@@ -14,9 +14,31 @@ export function createStarterCatalog() {
   return { ...seed, tournaments: [] };
 }
 
+// Players grouped by club (catalog order kept), built once per committed catalog. Only frozen
+// (committed) player lists are indexed, so the index can never go stale; a match loads every
+// AI roster, and filtering ~100k players once per club took seconds with a Brasfoot base.
+const playersByClubIndex = new WeakMap();
+
+function playersOfClub(players, clubId) {
+  if (!Object.isFrozen(players)) return players.filter((player) => player.clubId === clubId);
+  let index = playersByClubIndex.get(players);
+  if (!index) {
+    index = new Map();
+    for (const player of players) {
+      const group = index.get(player.clubId);
+      if (group) group.push(player);
+      else index.set(player.clubId, [player]);
+    }
+    playersByClubIndex.set(players, index);
+  }
+  return index.get(clubId) ?? [];
+}
+
 export class LocalCatalog {
-  constructor(catalog, ownerId, canRead = () => false, { archives = {}, imported = false } = {}) {
-    this.catalog = structuredClone(catalog);
+  constructor(catalog, ownerId, canRead = () => false, { archives = {}, imported = false, shared = false } = {}) {
+    // Every method only reads the catalog and returns copies, so a frozen committed state
+    // can be used as is (shared); cloning a 100k-player base on each read made matches take ~50 s.
+    this.catalog = shared ? catalog : structuredClone(catalog);
     this.ownerId = ownerId;
     this.canRead = canRead;
     this.source = imported ? "local-import" : "local-starter";
@@ -57,7 +79,7 @@ export class LocalCatalog {
     return { tournaments, count: tournaments.length, source: this.source };
   }
   async listPlayers(clubId) {
-    const players = sortPlayersForSelection(structuredClone(this.catalog.players.filter((player) => player.clubId === clubId && player.active !== false)));
+    const players = sortPlayersForSelection(structuredClone(playersOfClub(this.catalog.players, clubId).filter((player) => player.active !== false)));
     return { players, count: players.length, source: this.source };
   }
   async getStarImpact(clubId) { return { ...calculateStarImpact(clubId, (await this.listPlayers(clubId)).players), source: this.source }; }

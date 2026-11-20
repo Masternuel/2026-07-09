@@ -10,7 +10,7 @@ const PARTICLES = Array.from({ length: 14 }, (_, index) => ({
 /**
  * Main-menu scenery: stadium, floodlight glow, drifting particles and the player cut-out move
  * at different depths with the pointer (CSS variables --mx/--my, one rAF per frame, no React
- * re-render). Decorative only; `motion` comes from useMenuMotion (OS preference or the player's choice).
+ * re-render). Decorative only; `motion` comes from useMenuMotion (on unless turned off in Configurações).
  */
 export function MenuParallaxBackdrop({ showPlayer, motion = true }: { showPlayer: boolean; motion?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);

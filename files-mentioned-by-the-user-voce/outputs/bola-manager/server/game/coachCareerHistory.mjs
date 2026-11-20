@@ -338,9 +338,37 @@ function rawMatches(room) {
   ])).values()];
 }
 
-function coachMatchRecords(room, coach) {
+/**
+ * Work shared by every coach of one synchronizeCoachCareerHistory pass. The played matches
+ * only depend on results, which the pass does not change, so they are listed once instead of
+ * once per coach. Which coach was in charge of a side depends on every coach's assignments;
+ * an answer is reused until a coach's assignments change (see synchronizeCoachCareerHistory).
+ * Without this, the pass scanned all coaches for every match side of every coach.
+ */
+function coachHistoryPass(room) {
+  let matches = null;
+  const attributions = new Map();
+  return {
+    matches: () => (matches ??= rawMatches(room)),
+    coachAtClub(clubId, season, round, occurredAt) {
+      const cacheKey = JSON.stringify([key(clubId), season, round, occurredAt]);
+      if (!attributions.has(cacheKey)) attributions.set(cacheKey, coachAtClub(room, clubId, season, round, occurredAt));
+      return attributions.get(cacheKey);
+    },
+    assignmentsChanged() { attributions.clear(); },
+  };
+}
+
+// Every assignment value coachAtClub reads, typed so a value it reads differently never matches.
+function attributionSignature(coach) {
+  return JSON.stringify(list(coach?.assignments).map((assignment) => [
+    "clubId", "startedSeason", "startedRound", "endedSeason", "endedRound", "startedAt", "endedAt",
+  ].map((field) => [typeof assignment?.[field], String(assignment?.[field])])));
+}
+
+function coachMatchRecords(room, coach, pass = null) {
   const result = [];
-  for (const match of rawMatches(room)) {
+  for (const match of pass ? pass.matches() : rawMatches(room)) {
     const sides = [{
       clubId: match.homeClubId,
       opponentClubId: match.awayClubId,
@@ -357,13 +385,9 @@ function coachMatchRecords(room, coach) {
       goalsAgainst: match.score[0],
     }];
     for (const side of sides) {
-      const attributedCoachId = side.managerId || coachAtClub(
-        room,
-        side.clubId,
-        match.seasonNumber,
-        match.round,
-        match.completedAt,
-      );
+      const attributedCoachId = side.managerId || (pass
+        ? pass.coachAtClub(side.clubId, match.seasonNumber, match.round, match.completedAt)
+        : coachAtClub(room, side.clubId, match.seasonNumber, match.round, match.completedAt));
       if (text(attributedCoachId) !== text(coach.id)) continue;
       const assignment = list(coach.assignments).find((candidate) => (
         key(candidate?.clubId) === key(side.clubId)
@@ -1388,11 +1412,11 @@ function coachAtAssignmentClub(coach, clubId, event) {
   return assignment ? coach?.id : null;
 }
 
-function synchronizeCoach(room, state, coach, now, catalog, titles, movements) {
+function synchronizeCoach(room, state, coach, now, catalog, titles, movements, pass = null) {
   coach.careerHistoryVersion = HISTORY_VERSION;
   coach.careerReputationHistory = reputationRecords(coach);
   coach.negotiationHistory = negotiationRecords(state, coach);
-  coach.careerMatchHistory = mergeById(coach?.careerMatchHistory, coachMatchRecords(room, coach))
+  coach.careerMatchHistory = mergeById(coach?.careerMatchHistory, coachMatchRecords(room, coach, pass))
     .sort(compareChronological);
   const assignmentValues = list(coach?.assignments).map((assignment) => ({
     ...clone(assignment),
@@ -1420,8 +1444,15 @@ function synchronizeCoach(room, state, coach, now, catalog, titles, movements) {
 /**
  * Ingests volatile employment data before retention and writes a permanent,
  * idempotent history into each coach record.
+ * shareMatchWork: false recomputes the match list and attributions per coach (reference path
+ * kept for the equivalence test).
  */
-export function synchronizeCoachCareerHistory(room, state = room?.coachEmploymentState, suppliedNow = null) {
+export function synchronizeCoachCareerHistory(
+  room,
+  state = room?.coachEmploymentState,
+  suppliedNow = null,
+  { shareMatchWork = true } = {},
+) {
   if (!room || typeof room !== "object") return { room, state };
   const employmentState = state && typeof state === "object" ? state : {};
   if (!room.coachCareerState || typeof room.coachCareerState !== "object") {
@@ -1432,9 +1463,12 @@ export function synchronizeCoachCareerHistory(room, state = room?.coachEmploymen
   const catalog = clubCatalog(room);
   const titles = winnerRecords(room);
   const movements = movementRecords(room);
+  const pass = shareMatchWork ? coachHistoryPass(room) : null;
   for (const coach of room.coachCareerState.coaches) {
     if (!text(coach?.id)) continue;
-    synchronizeCoach(room, employmentState, coach, now, catalog, titles, movements);
+    const before = pass ? attributionSignature(coach) : null;
+    synchronizeCoach(room, employmentState, coach, now, catalog, titles, movements, pass);
+    if (pass && attributionSignature(coach) !== before) pass.assignmentsChanged();
   }
   employmentState.careerHistoryVersion = HISTORY_VERSION;
   employmentState.careerHistoryUpdatedAt = now;

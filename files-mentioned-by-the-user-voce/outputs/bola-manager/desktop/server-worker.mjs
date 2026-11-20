@@ -2,6 +2,7 @@ import { startLocalBackend } from "./localBackend.mjs";
 import { createPeerRuntime } from "./peer/runtime.mjs";
 import { openLocalDatabase } from "./localDatabase.mjs";
 import { prepareCatalogImport, previewCatalogImport, commitCatalogImport, requireCatalogImportMode } from "./catalogImport.mjs";
+import { createLocalAiClient } from "./localAi/client.mjs";
 import { prepareBrasfootFolder, previewBrasfootFolder, commitBrasfootFolder } from "./brasfootFolderImport.mjs";
 
 let backend;
@@ -9,10 +10,11 @@ let peers;
 let backendOptions;
 let candidate;
 let brasfootCandidate;
+let localAiClient = null;
 let importOperation;
 let importing = false;
 async function initialize(options) {
-  backend = await startLocalBackend(options);
+  backend = await startLocalBackend({ ...options, localAi: localAiClient });
   peers = createPeerRuntime(backend, {
     staticDirectory: options.staticDirectory,
     send(peerId, frame) { process.parentPort.postMessage({ type: "peerSend", peerId, frame }); },
@@ -59,7 +61,7 @@ const handlers = {
   configureSocialAi(value) {
     if (peers.status().mode === "guest") throw Object.assign(new Error(), { code: "LOCAL_AI_HOST_REQUIRED" });
     backend.configureSocialAi(value);
-    backendOptions.socialAiConfig = { apiKey: value.apiKey, enabled: value.enabled };
+    backendOptions.socialAiConfig = { apiKey: value.apiKey, enabled: value.enabled, local: value.local };
     return backend.socialAiStatus();
   },
   testSocialAi() {
@@ -103,7 +105,12 @@ const handlers = {
   peerDisconnect: () => peers.disconnect(),
   close: async () => { await importOperation?.catch(() => undefined); candidate = null; brasfootCandidate = null; await peers.close(); await backend?.close(); backend = null; },
 };
-process.parentPort.on("message", async ({ data }) => {
+process.parentPort.on("message", async ({ data, ports }) => {
+  if (data?.type === "localAiPort" && ports?.[0]) {
+    localAiClient = createLocalAiClient(ports[0]);
+    backend?.setLocalAi(localAiClient);
+    return;
+  }
   try {
     if (data.action === "start" && !backend) {
       backendOptions = data.options;

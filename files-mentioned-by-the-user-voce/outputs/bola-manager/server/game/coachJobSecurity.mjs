@@ -315,8 +315,41 @@ function normalizeSecurityHistory(value) {
   };
 }
 
-export function normalizeCoachJobSecurityState(value = {}) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : {};
+/**
+ * Reuses list items that are already in final form. Each normalizer here reaches its fixed point
+ * within two passes, so an item produced from an earlier pass's output is canonical and comes
+ * back unchanged; the job state is normalized once per coach evaluation, and rebuilding every
+ * club profile and the whole (growing) history each time made a round of evaluations quadratic.
+ * Only lists whose items are never edited in place use it (not ultimatums or meetings).
+ */
+function reusingNormalizer(normalize) {
+  const normalized = new WeakSet();
+  const canonical = new WeakSet();
+  return (value) => {
+    if (value && typeof value === 'object' && canonical.has(value)) return value;
+    const result = normalize(value);
+    if (result && typeof result === 'object') {
+      if (value && typeof value === 'object' && normalized.has(value)) canonical.add(result);
+      normalized.add(result);
+    }
+    return result;
+  };
+}
+
+const normalizeStoredProfile = reusingNormalizer((profile) => {
+  const normalized = normalizeProfile(profile);
+  return normalized.clubId ? { ...normalized, id: text(profile?.id) || 'security-profile:' + key(normalized.clubId) } : null;
+});
+const normalizeStoredHistory = reusingNormalizer(normalizeSecurityHistory);
+
+/**
+ * owned: the caller hands over a state nobody else references (the previous evaluation's
+ * result), so it is normalized without the protective deep copy. The values are the same; the
+ * copy of the whole growing state for every coach of a batch made evaluations quadratic.
+ */
+export function normalizeCoachJobSecurityState(value = {}, { owned = false } = {}) {
+  const isObject = value && typeof value === 'object' && !Array.isArray(value);
+  const source = isObject ? (owned ? value : clone(value)) : {};
   const fanSupportByClubId = source.fanSupportByClubId && typeof source.fanSupportByClubId === 'object'
     ? Object.fromEntries(Object.entries(source.fanSupportByClubId).map(([clubId, entry]) => [clubId, {
       value: rounded(clamp(finite(entry?.value, 50)), 1),
@@ -328,13 +361,10 @@ export function normalizeCoachJobSecurityState(value = {}) {
   return {
     ...source,
     version: COACH_JOB_SECURITY_VERSION,
-    profiles: uniqueById(list(source.profiles).map((profile) => {
-      const normalized = normalizeProfile(profile);
-      return normalized.clubId ? { ...normalized, id: text(profile?.id) || 'security-profile:' + key(normalized.clubId) } : null;
-    }).filter(Boolean)),
+    profiles: uniqueById(list(source.profiles).map(normalizeStoredProfile).filter(Boolean)),
     meetings: uniqueById(list(source.meetings).filter((entry) => text(entry?.id))),
     ultimatums: uniqueById(list(source.ultimatums).map(normalizeUltimatum).filter(Boolean)),
-    history: uniqueById(list(source.history).map(normalizeSecurityHistory).filter(Boolean)),
+    history: uniqueById(list(source.history).map(normalizeStoredHistory).filter(Boolean)),
     fanSupportByClubId,
     processedSignalIds: [...new Set(list(source.processedSignalIds).map(text).filter(Boolean))].slice(-2000),
   };
@@ -968,7 +998,7 @@ export function evaluateCoachJobSecurity(input = {}) {
   const round = integer(input.round, 0);
   const season = integer(input.seasonNumber, 1, 1);
   const evaluationId = text(input.evaluationId) || 'coach-evaluation:' + appointment.id + ':s' + season + ':r' + round;
-  const jobState = normalizeCoachJobSecurityState(employmentState.jobSecurity);
+  const jobState = normalizeCoachJobSecurityState(employmentState.jobSecurity, { owned: input.jobSecurityOwned === true });
   const persistedEvaluation = list(employmentState.evaluations)
     .find((entry) => text(entry?.id) === evaluationId);
   if (persistedEvaluation) {

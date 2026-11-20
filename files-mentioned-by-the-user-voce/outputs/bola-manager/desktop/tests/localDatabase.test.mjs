@@ -53,6 +53,56 @@ test("D-01: read results are clones and transactions still commit", async (t) =>
   assert.equal((await db.read((state) => state.catalogMedia["m.png"].bytes))[0], 1);
 });
 
+test("copy-on-write: a transaction copies only the sections it touches", async (t) => {
+  const { db, directory } = await database(t);
+  let catalogBefore; let roomsBefore;
+  await db.read((state) => { catalogBefore = state.catalog; roomsBefore = state.rooms; });
+  await db.transaction((state) => { state.rooms.rooms.push({ code: "BOLA-AAAA" }); });
+  let catalogAfter; let roomsAfter;
+  await db.read((state) => { catalogAfter = state.catalog; roomsAfter = state.rooms; });
+  assert.equal(catalogAfter, catalogBefore, "untouched catalog keeps the committed object");
+  assert.notEqual(roomsAfter, roomsBefore);
+  assert.equal(Object.isFrozen(roomsAfter.rooms[0]), true);
+  await db.close();
+  const reopened = await openLocalDatabase(directory, initial());
+  t.after(() => reopened.close().catch(() => undefined));
+  assert.deepEqual(await reopened.read((state) => state.rooms.rooms), [{ code: "BOLA-AAAA" }]);
+  assert.deepEqual(await reopened.read((state) => state.catalog), initial().catalog);
+});
+
+test("copy-on-write: replaced, added and deleted sections persist; a failed transaction changes nothing", async (t) => {
+  const { db, directory } = await database(t);
+  const before = await readFile(db.path);
+  await assert.rejects(db.transaction((state) => { state.catalog.clubs.push({ id: "X" }); throw new Error("abort"); }), /abort/);
+  assert.deepEqual(await readFile(db.path), before);
+  assert.deepEqual(await db.read((state) => state.catalog), initial().catalog);
+  await db.transaction((state) => {
+    state.catalog = { clubs: [{ id: "NEW", name: "Novo" }] };
+    state.catalogImport = { source: "test" };
+    delete state.catalogMedia;
+  });
+  await db.close();
+  const reopened = await openLocalDatabase(directory, initial());
+  t.after(() => reopened.close().catch(() => undefined));
+  assert.deepEqual(await reopened.read((state) => state.catalog), { clubs: [{ id: "NEW", name: "Novo" }] });
+  assert.deepEqual(await reopened.read((state) => state.catalogImport), { source: "test" });
+  assert.equal(await reopened.read((state) => Object.hasOwn(state, "catalogMedia")), false);
+});
+
+test("copy-on-write: peek reads a section without copying it, then the operation's own copy", async (t) => {
+  const { db } = await database(t);
+  let committedRooms;
+  await db.read((state) => { committedRooms = state.rooms; });
+  await db.transaction((state, { peek }) => {
+    assert.equal(peek("rooms"), committedRooms, "untouched: the frozen committed section");
+    state.rooms = { ...peek("rooms"), rooms: [{ code: "BOLA-PEEK" }] };
+    assert.equal(peek("rooms"), state.rooms, "after a write: the operation's value");
+    assert.equal(peek("profile").uid, "local-db-test");
+  });
+  assert.deepEqual(await db.read((state) => state.rooms.rooms), [{ code: "BOLA-PEEK" }]);
+  assert.deepEqual(await db.read((state) => state.rooms.history), []);
+});
+
 test("S-10: rename retries transient Windows lock errors with bounded backoff", async () => {
   for (const code of ["EPERM", "EBUSY", "EACCES"]) {
     const waits = []; let calls = 0;

@@ -15,7 +15,7 @@ import { createLocalBrasfootImport } from "./localBrasfootImport.mjs";
 import { catalogCounts } from "./catalogImport.mjs";
 import { createDesktopSocialAi } from "./socialAi.mjs";
 
-export async function startLocalBackend({ directory, staticDirectory, logger = console, socialAiConfig, socialAiFetch, bundledCatalogPath = null } = {}) {
+export async function startLocalBackend({ directory, staticDirectory, logger = console, socialAiConfig, socialAiFetch, bundledCatalogPath = null, localAi = null } = {}) {
   if (staticDirectory) await access(join(staticDirectory, "index.html"));
   // A build with the real-club database starts new profiles with it; existing profiles keep
   // their catalog and can switch from Editor da Base (same validated import + backup flow).
@@ -31,7 +31,7 @@ export async function startLocalBackend({ directory, staticDirectory, logger = c
   let server;
   try {
     const profile = await database.read((state) => state.profile);
-    const socialAi = createDesktopSocialAi({ config: socialAiConfig, fetchImpl: socialAiFetch, logger });
+    const socialAi = createDesktopSocialAi({ config: socialAiConfig, fetchImpl: socialAiFetch, logger, localAi });
     const authorizations = new Map();
     let origin = null;
     let peerMode = () => "offline";
@@ -102,6 +102,7 @@ export async function startLocalBackend({ directory, staticDirectory, logger = c
       socialAiStatus: () => socialAi.status(),
       configureSocialAi: (value) => { socialAi.configure(value); return socialAi.status(); },
       testSocialAi: () => socialAi.test(profile.uid),
+      setLocalAi: (client) => socialAi.setLocalAi(client),
       setEditorPeerMode(readMode) { peerMode = readMode; },
       grantPeer(identity) {
         const token = randomBytes(32).toString("base64url");

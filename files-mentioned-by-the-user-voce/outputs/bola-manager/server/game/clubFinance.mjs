@@ -465,6 +465,42 @@ function restoreRoom(room, snapshot) {
   Object.assign(room, snapshot);
 }
 
+// Everything the monthly close writes once the market state is canonical (version 1).
+const MONTHLY_FINANCE_FIELDS = Object.freeze([
+  "version",
+  "financeProfiles",
+  "financialAggregates",
+  "financialOriginArchive",
+  "financialOriginIndex",
+  "financialTransactions",
+  "lastFinancialPeriodByClub",
+]);
+
+/**
+ * Rollback point for one club's monthly close. Cloning the whole room per club made the
+ * month turn quadratic (16 MB room x 400 clubs); only the finance fields and the market
+ * state can change here, so only they are copied. Legacy rooms still get a full copy.
+ */
+function monthlyFinanceSnapshot(room) {
+  const career = room.clubCareerState;
+  const canonical = room.marketState?.version === 1 && Array.isArray(room.marketState.finances)
+    && career && typeof career === "object" && !Array.isArray(career);
+  if (!canonical) {
+    const before = clone(room);
+    return () => restoreRoom(room, before);
+  }
+  const fields = MONTHLY_FINANCE_FIELDS.map((field) => [field, Object.hasOwn(career, field), clone(career[field])]);
+  const marketState = clone(room.marketState);
+  return () => {
+    room.clubCareerState = career;
+    for (const [field, present, value] of fields) {
+      if (present) career[field] = value;
+      else delete career[field];
+    }
+    room.marketState = marketState;
+  };
+}
+
 function catalogClub(room, clubId) {
   const target = clubKey(clubId);
   for (const competition of room?.competitionCatalog ?? []) {
@@ -633,9 +669,13 @@ export function ensureClubFinanceState(room, now = new Date()) {
   return state;
 }
 
-export function ensureFinanceAccount(room, clubId, { openingBalance, now = new Date() } = {}) {
+/**
+ * financeStateReady: the caller ran ensureClubFinanceState for this room at this date just
+ * before (a per-club loop), so the full transaction/index normalization is not repeated.
+ */
+export function ensureFinanceAccount(room, clubId, { openingBalance, now = new Date(), financeStateReady = false } = {}) {
   const normalizedClubId = assertClubId(clubId);
-  const state = ensureClubFinanceState(room, now);
+  const state = financeStateReady ? room.clubCareerState : ensureClubFinanceState(room, now);
   let account = accountFromMarketState(room.marketState, normalizedClubId);
   if (!account) {
     account = {
@@ -654,7 +694,7 @@ export function ensureFinanceAccount(room, clubId, { openingBalance, now = new D
     .slice(-MAX_ACCOUNT_LEDGER);
   const limitsProfile = ensurePersistentFinanceLimits(room, account.clubId, {
     balance: account.balance,
-    currentPayroll: calculateClubMonthlyPayroll(room, account.clubId).amount,
+    currentPayroll: () => calculateClubMonthlyPayroll(room, account.clubId).amount,
   });
   const limitsIndex = state.financeProfiles.indexOf(limitsProfile);
   if (limitsIndex >= 0) {
@@ -750,7 +790,7 @@ export function postFinancialTransaction(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const occurredAt = timestamp(input.occurredAt ?? input.completedAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, occurredAt);
-  const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+  const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
   const previous = existingTransaction(state, account, clubId, originId);
   if (previous) {
     return { transaction: clone(previous), account, applied: false, duplicate: true };
@@ -821,7 +861,7 @@ export function mirrorSettledFinancialTransaction(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const occurredAt = timestamp(input.occurredAt ?? input.completedAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, occurredAt);
-  const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+  const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
   const previous = existingTransaction(state, account, clubId, originId);
   if (previous) return { transaction: clone(previous), account, applied: false, duplicate: true };
   const relatedClubId = identifier(input.relatedClubId ?? input.counterpartyClubId) || null;
@@ -885,7 +925,7 @@ export function reserveFinance(room, input = {}) {
   const amount = positiveMoney(input.amount);
   const createdAt = timestamp(input.createdAt ?? input.occurredAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, createdAt);
-  const account = ensureFinanceAccount(room, clubId, { now: createdAt });
+  const account = ensureFinanceAccount(room, clubId, { now: createdAt, financeStateReady: true });
   const profile = profileFor(state, clubId, true);
   const previous = profile.reservations.find((reservation) => reservation.id === reservationId);
   if (previous) {
@@ -922,7 +962,7 @@ export function releaseFinance(room, input = {}) {
   const reservationId = reservationIdFor(input);
   const releasedAt = timestamp(input.releasedAt ?? input.occurredAt ?? input.now ?? new Date());
   const state = ensureClubFinanceState(room, releasedAt);
-  const account = ensureFinanceAccount(room, clubId, { now: releasedAt });
+  const account = ensureFinanceAccount(room, clubId, { now: releasedAt, financeStateReady: true });
   const profile = profileFor(state, clubId, true);
   const reservation = profile.reservations.find((candidate) => candidate.id === reservationId);
   if (!reservation) {
@@ -1052,10 +1092,10 @@ export function processMonthlyClubFinance(room, input = {}) {
   const periodKey = identifier(input.periodKey);
   if (!periodKey) throw new ClubFinanceError("Periodo financeiro obrigatorio", "FINANCE_PERIOD_REQUIRED", 400);
   const occurredAt = timestamp(input.occurredAt ?? input.now ?? new Date());
-  const before = clone(room);
+  const rollback = monthlyFinanceSnapshot(room);
   try {
     const state = ensureClubFinanceState(room, occurredAt);
-    const account = ensureFinanceAccount(room, clubId, { now: occurredAt });
+    const account = ensureFinanceAccount(room, clubId, { now: occurredAt, financeStateReady: true });
     const profile = profileFor(state, clubId, true);
     const key = clubKey(clubId);
     if (identifier(state.lastFinancialPeriodByClub[key]) === periodKey) {
@@ -1200,7 +1240,7 @@ export function processMonthlyClubFinance(room, input = {}) {
       duplicate: false,
     };
   } catch (error) {
-    restoreRoom(room, before);
+    rollback();
     throw error;
   }
 }

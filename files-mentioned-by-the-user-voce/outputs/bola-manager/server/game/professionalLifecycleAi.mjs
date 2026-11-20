@@ -364,8 +364,22 @@ function coachAge(coach, now) {
  * tests and audit tools can explain why a departure was (or was not) pursued.
  */
 export function assessAiCoachLifecycle(roomValue, coachId, options = {}) {
+  if (options.lifecycleReady) {
+    // The AI tick already holds a migrated room for this date; assessing only reads it, so
+    // cloning the whole room once per coach (quadratic in clubs) is skipped.
+    const assessment = assessCoachOnMigratedRoom(roomValue, coachId, options);
+    return assessment == null ? assessment : structuredClone(assessment);
+  }
   const now = timestamp(options.now, new Date());
-  const room = ensureProfessionalLifecycleState(roomValue, { now, config: options.lifecycleConfig });
+  return assessCoachOnMigratedRoom(
+    ensureProfessionalLifecycleState(roomValue, { now, config: options.lifecycleConfig }),
+    coachId,
+    options,
+  );
+}
+
+function assessCoachOnMigratedRoom(room, coachId, options) {
+  const now = timestamp(options.now, new Date());
   const config = normalizeConfig(options.config);
   const coach = (room?.coachCareerState?.coaches ?? [])
     .find((candidate) => text(candidate?.id) === text(coachId));
@@ -986,7 +1000,7 @@ export function runAiProfessionalLifecycleTick(roomValue, asOf = new Date(), opt
     }
     if (!appointment || !contract) continue;
 
-    const assessment = assessAiCoachLifecycle(room, coach.id, { now, config });
+    const assessment = assessAiCoachLifecycle(room, coach.id, { now, config, lifecycleReady: true });
     if (!assessment) continue;
     const canFundExit = assessment.compensation.total === 0
       || assessment.clubBalance >= assessment.compensation.total;

@@ -693,3 +693,27 @@ test("avanco de temporada preserva clube, contrato e historico da transferencia"
   assert.deepEqual(after.contractHistory, before.contractHistory);
   assert.deepEqual(after.transferHistory, before.transferHistory);
 });
+
+test("vagas do elenco: primeiro registro por id (sem diferenciar maiusculas) e clube do registro de mercado", () => {
+  const room = createRoom();
+  room.maxSquadSize = 2;
+  registerCareerPlayer(room, createPlayer("squad-a", "BUY"));
+  // Same id in another case: the first career entry decides its club, so it is not counted twice.
+  room.careerState.players.push({ ...createPlayer("SQUAD-A", "RIV") });
+  const moved = registerCareerPlayer(room, createPlayer("squad-moved", "SELL"));
+  ensureMarketState(room, START).registrations.push({
+    playerId: moved.id, originalClubId: "SELL", permanentClubId: "BUY", currentClubId: "BUY",
+    playerSnapshot: null, transferHistory: [], competitionRegistrations: [], loan: null,
+  });
+  const target = registerCareerPlayer(room, createPlayer("squad-target", "SELL"));
+  const before = structuredClone(room);
+  // BUY already has squad-a and squad-moved (by its registration): the squad is full.
+  assert.throws(
+    () => executeAiTransfer(room, { requestId: "squad-full", toClubId: "BUY", amount: 10 * MILLION }, target, START),
+    (error) => error.code === "MARKET_SQUAD_FULL",
+  );
+  assert.deepEqual(room, before);
+  room.maxSquadSize = 3;
+  executeAiTransfer(room, { requestId: "squad-room", toClubId: "BUY", amount: 10 * MILLION }, target, at(1));
+  assert.equal(registrationForPlayer(room, target.id).currentClubId, "BUY");
+});

@@ -103,11 +103,14 @@ export function assertHistoryId(id) {
 
 export class MemoryMatchHistory {
   #records = new Map();
-  constructor(isActive = () => true, records = []) {
+  #shared = false;
+  // shared: records are immutable and owned by the caller (see MemoryRoomPersistence).
+  constructor(isActive = () => true, records = [], { shared = false } = {}) {
     this.isActive = isActive;
-    this.#records = new Map(structuredClone(records));
+    this.#shared = shared;
+    this.#records = new Map(shared ? records : structuredClone(records));
   }
-  exportState() { return structuredClone([...this.#records]); }
+  exportState() { return this.#shared ? [...this.#records] : structuredClone([...this.#records]); }
   async put(room, record) {
     if (!this.isActive(room.code)) throw historyError("ROOM_NOT_FOUND", "Sala nao encontrada", 404);
     const key = `${room.id ?? room.code}:${record.id}`;
@@ -196,11 +199,19 @@ export async function flushMatchHistory(persistence, room) {
   if (!pending.length) return 0;
   const acknowledged = new Map();
   let failure;
-  const batch = pending.slice(0, FLUSH_BATCH_SIZE);
+  // A store may take bigger batches (the desktop save writes a whole batch in one save).
+  const batchSize = Number.isInteger(persistence.matchHistory.batchSize) && persistence.matchHistory.batchSize > 0
+    ? persistence.matchHistory.batchSize
+    : FLUSH_BATCH_SIZE;
+  const batch = pending.slice(0, batchSize);
   if (persistence.matchHistory.putBatch) {
     try {
       for (const record of await persistence.matchHistory.putBatch(room, batch)) acknowledged.set(record.id, canonicalChecksum(record));
-    } catch (error) { failure = error; }
+    } catch (error) {
+      failure = error;
+      // A store that writes record by record reports the ones it kept before failing.
+      for (const record of error?.acknowledged ?? []) acknowledged.set(record.id, canonicalChecksum(record));
+    }
   } else {
     for (const record of batch) {
       try {

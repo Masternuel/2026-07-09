@@ -371,6 +371,9 @@ export function createSocialAiService({
   sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   now = () => Date.now(),
   idFactory = randomUUID,
+  // Optional non-Gemini engine (desktop local model): { source, model, generateBundle(input) }.
+  // It replaces the Gemini call only; cache, concurrency, validation and fallback stay the same.
+  provider = null,
 } = {}) {
   if (!["interactions", "generateContent"].includes(api)) throw new Error("Social AI API invalida");
   const normalizedKey = String(apiKey ?? "").trim();
@@ -395,6 +398,8 @@ export function createSocialAiService({
     : DEFAULT_MAX_CONCURRENT_REQUESTS;
   const cache = new Map();
   const inFlight = new Map();
+  const hasProvider = typeof provider?.generateBundle === "function";
+  const providerModel = hasProvider ? String(provider.model ?? "local") : null;
 
   async function callGemini(input, requestedModel) {
     const controller = new AbortController();
@@ -496,7 +501,7 @@ export function createSocialAiService({
       cached: false,
       ...normalizeBundle(fallbackBundle(input), input, idFactory),
     });
-    if (!normalizedKey || typeof fetchImpl !== "function") return fallback();
+    if (!hasProvider && (!normalizedKey || typeof fetchImpl !== "function")) return fallback();
 
     const key = cacheKey(input);
     const cached = cache.get(key);
@@ -504,13 +509,20 @@ export function createSocialAiService({
     if (inFlight.has(key)) return inFlight.get(key);
     if (inFlight.size >= concurrencyLimit) return fallback();
 
-    const units = candidateModels.length * (retryLimit + 1);
-    const invoke = () => callGeminiWithFallback(input);
+    const units = hasProvider ? 1 : candidateModels.length * (retryLimit + 1);
+    const invoke = hasProvider
+      ? async () => {
+        let bundle;
+        try { bundle = generatedBundleSchema.parse(await provider.generateBundle(input)); }
+        catch (error) { throw providerError({ code: error?.code ?? "INVALID_RESPONSE", model: providerModel }); }
+        return { bundle, model: providerModel };
+      }
+      : () => callGeminiWithFallback(input);
     const request = (usage ? usage.run(uid, operation, {
       units, leaseMs: Math.ceil(units * (timeoutMs + retryBaseDelay * (2 ** retryLimit) + 1_000) * 2),
     }, invoke) : invoke()).then(({ bundle, model: usedModel }) => {
       const value = {
-        source: "gemini",
+        source: hasProvider ? String(provider.source ?? "local") : "gemini",
         model: usedModel,
         cached: false,
         ...normalizeBundle(bundle, input, idFactory),
@@ -535,8 +547,8 @@ export function createSocialAiService({
   }
 
   return {
-    configured: Boolean(normalizedKey),
-    model: normalizedModel,
+    configured: hasProvider || Boolean(normalizedKey),
+    model: hasProvider ? providerModel : normalizedModel,
     fallbackModels: [...normalizedFallbackModels],
     generate,
     hasReusableResult(input) {

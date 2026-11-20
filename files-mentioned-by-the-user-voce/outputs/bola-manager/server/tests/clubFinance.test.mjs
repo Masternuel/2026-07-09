@@ -323,6 +323,41 @@ test("falha mensal reverte perfil, conta e historico por completo", () => {
   assert.deepEqual(room, before);
 });
 
+test("falha mensal restaura somente financas: o resto da sala nao e copiado", () => {
+  const room = roomFixture();
+  ensureClubFinanceState(room);
+  const catalog = room.competitionCatalog;
+  const players = room.careerState;
+  const facilities = room.clubCareerState.clubFacilities;
+  const before = structuredClone(room);
+
+  assert.throws(() => processMonthlyClubFinance(room, {
+    clubId: "SAN",
+    periodKey: "2026-07",
+    payroll: 200 * MILLION,
+    occurredAt: "2026-07-31T23:59:59.000Z",
+  }), (error) => error.code === "FINANCE_MONTHLY_BUDGET_INSUFFICIENT");
+
+  assert.deepEqual(room, before);
+  assert.equal(room.competitionCatalog, catalog);
+  assert.equal(room.careerState, players);
+  assert.equal(room.clubCareerState.clubFacilities, facilities);
+});
+
+test("falha mensal em sala antiga (sem mercado canonico) tambem reverte tudo", () => {
+  const room = roomFixture();
+  const before = structuredClone(room);
+
+  assert.throws(() => processMonthlyClubFinance(room, {
+    clubId: "SAN",
+    periodKey: "2026-07",
+    payroll: 200 * MILLION,
+    occurredAt: "2026-07-31T23:59:59.000Z",
+  }), (error) => error.code === "FINANCE_MONTHLY_BUDGET_INSUFFICIENT");
+
+  assert.deepEqual(room, before);
+});
+
 test("historico detalhado e ledger possuem limites seguros", () => {
   const room = roomFixture();
   for (let index = 0; index < 520; index += 1) {
